@@ -1,0 +1,20 @@
+[package]
+name = "aurora-repl"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "wind_repl"
+path = "src/main.rs"
+
+# 无需 TSF/UI 的候选 REPL：加载 data/ + 方案，读编码→打印候选，用于在 Linux 上
+# 快速验证引擎/词典/store 的输入逻辑（平台无关）。
+[dependencies]
+aurora-config = { path = "../../crates/aurora-config" }
+aurora-engine = { path = "../../crates/aurora-engine" }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

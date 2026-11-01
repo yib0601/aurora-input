@@ -1,0 +1,519 @@
+//! 菜单协议：工具栏动作、候选词条操作、功能主菜单命令与菜单项规格。
+//!
+//! `MenuKind::to_menu_id`/`from_menu_id` 是稳定 id 空间的双向映射（macOS `.app`
+//! 经 `NSMenuItem.tag` 往返；Android 长按菜单可复用同一套 id）。
+
+/// 工具栏单元格动作
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolbarAction {
+    /// 中/英切换（合并方案显示）
+    ToggleMode,
+    /// 切换到下一个输入方案（`cycle_schema`）。
+    ///
+    /// **没有自己的格子**——它由中英格的**中键**产出（0.120 起），以及外部调用。
+    /// 故它不会出现在任何 `ToolbarItem` 的展开结果里，但仍是一个合法的
+    /// `ToolbarAction`：`mouse_toolbar` 与 `build_toolbar_cell_menu` 都要认得它。
+    SwitchEngine,
+    /// 中/英标点切换
+    TogglePunct,
+    /// 全/半角切换
+    ToggleWidth,
+    /// 简/繁转换切换（简入繁出）
+    ToggleS2t,
+    /// 繁/简转换切换（繁入简出）。与 [`Self::ToggleS2t`] 互斥，由协调器保证。
+    ToggleT2s,
+    /// 开关软键盘面板
+    ToggleSoftKeyboard,
+    /// 打开设置
+    OpenSettings,
+    /// 自定义按钮：执行 `ui.toolbar.buttons[i]` 的 cmdbar 表达式。
+    ///
+    /// 载荷是**下标**而不是 id 字符串，因为 `ToolbarAction` 必须保持 `Copy`——
+    /// `Toolbar` 的命中表 `Vec<(ToolbarAction, Rect)>` 与 `cell_at` / `hover_at`
+    /// 全建立在这个前提上，带 `String` 会让整条命中链路改签名。
+    ///
+    /// 下标失配（配置重载与 UI 侧 spec 之间的一瞬）最坏是执行了相邻按钮的动作，
+    /// 非破坏性；协调器侧按下标取不到就忽略。
+    Custom(u8),
+}
+
+/// 候选词条操作（右键菜单）；复制由 UI 侧直接处理，不在此列。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateOp {
+    /// 置顶
+    MoveTop,
+    /// 前移
+    MoveUp,
+    /// 后移
+    MoveDown,
+    /// 删除（屏蔽）
+    Delete,
+    /// 恢复默认
+    Reset,
+    /// 常用/生僻互切（**全局字级**，不限本方案本码）。
+    ///
+    /// 与上面五项不是一类：那些落在 shadow（键 = 方案 + 输入码），这个落在常用字覆盖表
+    /// （键 = 那个字）。菜单只给一项，文案按当前判定二选一——「设为生僻字」/「设为常用字」，
+    /// 故不需要两个变体。
+    ToggleCommon,
+}
+
+/// 功能主菜单命令（对齐 Go 统一菜单）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuCmd {
+    /// 切到英文模式
+    SchemaEnglish,
+    /// 选择第 N 个输入方案
+    SchemaSelect(usize),
+    /// 中/英标点切换
+    TogglePunct,
+    /// 全/半角切换
+    ToggleWidth,
+    /// 简繁转换开关
+    ToggleS2t,
+    /// 检索范围过滤（0 智能/1 常用字/2 全部字符）
+    FilterMode(usize),
+    /// 选择第 N 个主题
+    ThemeSelect(usize),
+    /// 主题明暗（0 跟随/1 亮/2 暗）
+    ThemeStyle(u8),
+    /// 显示/隐藏工具栏
+    ToggleToolbar,
+    /// 开关软键盘面板
+    ToggleSoftKeyboard,
+    /// 打开软键盘并切到第 N 面
+    SoftKeyboardPage(usize),
+    /// 从工具栏的**分格快捷菜单**回到完整功能主菜单。
+    ///
+    /// 存在的理由是一条不变量：隐藏齿轮后，右键工具栏是主菜单仅剩的鼠标入口
+    /// （`toolbar-customization.md` §2.2 判据③）。分格右键把大部分格子的右键让给了
+    /// 精简菜单，只剩 12dp 的拖动柄还能弹主菜单——那是个要瞄准的目标。每份分格菜单
+    /// 末尾挂一条回主菜单的路，判据③就不再依赖那 12dp。
+    OpenMainMenu,
+    /// 重载配置
+    ReloadConfig,
+    /// 重启服务进程
+    RestartService,
+    /// 打开用户数据目录（配置/词库等用户数据所在目录）
+    OpenConfigDir,
+    /// 打开应用程序目录（exe 所在目录，高级菜单）
+    OpenAppDir,
+    /// 打开日志文件目录（高级菜单）
+    OpenLogDir,
+    /// 词库管理（暂兜底为打开配置目录）
+    OpenDictionary,
+    /// 设置（暂兜底为打开配置目录）
+    OpenSettings,
+    /// 关于（暂兜底）
+    OpenAbout,
+    /// 截图所有可见 UI 窗口到文件（高级菜单）
+    TakeScreenshot,
+    /// 截图候选窗口到剪贴板（高级菜单）
+    ScreenshotCandidateToClipboard,
+    /// 切换输入诊断 HUD 显隐（高级菜单）
+    ToggleInputDiagnostics,
+    /// 切换密码框强制英文（高级菜单，临时测试入口）
+    TogglePasswordSuppress,
+    /// 状态提示气泡：切换常驻显示（display_mode always/temp）
+    StatusToggleAlways,
+    /// 状态提示气泡：切换「焦点切换时显示」（ui.status.show_on_focus）
+    StatusToggleShowOnFocus,
+    /// 状态提示气泡：恢复默认位置（position_mode=follow_caret）
+    StatusResetPosition,
+    /// 状态提示气泡：截图此窗口
+    StatusScreenshot,
+    /// 输入诊断 HUD：复制全部内容（所见即所得，含分区隐藏后的结果）
+    InputDiagCopy,
+    /// 输入诊断 HUD：切换分区显示。参数为分区序号，见 [`crate::diag::DiagSections::label`]
+    InputDiagToggleSection(u8),
+    /// 输入诊断 HUD：停止/恢复刷新（冻结当前快照，便于切走观察时不被新焦点刷掉）
+    InputDiagToggleFreeze,
+    /// 输入诊断 HUD：切换窗口置顶（关掉可让 HUD 沉到被观察窗口之下）
+    InputDiagToggleTopmost,
+    /// 悬停提示：复制全部（取原始行，未截断、未折行）
+    TooltipCopy,
+    /// 悬停提示：复制右键点中的那一段（原始行，不含段名）
+    TooltipCopySection,
+    /// 悬停提示：上屏右键点中的那一段
+    TooltipCommitSection,
+    /// 悬停提示：复制右键点中的那一行（仅逐字段）
+    TooltipCopyLine,
+    /// 悬停提示：上屏右键点中的那一行（仅逐字段）
+    TooltipCommitLine,
+    /// 悬停提示（编码反查气泡）：截图此窗口
+    TooltipScreenshot,
+    /// 状态提示气泡：切换固定位置（position_mode fixed/follow_caret）
+    StatusTogglePinned,
+    /// 为当前焦点应用设置候选窗首显策略（compat.toml 的 first_show_mode）。
+    /// 参数：0=跟随全局（清除规则）1=fast 2=wait 3=instant。三档互斥，UI 上呈现为子菜单单选。
+    FirstShowMode(u8),
+    /// 启用 / 禁用当前焦点应用的**整条**兼容规则（compat.toml 的 `disabled`）。
+    /// 参数：0=禁用 1=启用。与设置端「应用兼容」里的「禁用 / 启用」同一件事：字段都留着，
+    /// 只是整条不生效，方便排查「是不是兼容规则导致的」。
+    CompatRuleEnabled(u8),
+    /// 为当前焦点应用设置初始中英状态（compat.toml 的 initial_mode）。
+    /// 参数：0=跟随全局（清除规则）1=英文 2=中文。
+    InitialMode(u8),
+    /// 为当前焦点应用设置初始中英标点（compat.toml 的 initial_punct）。
+    /// 参数同 [`MenuCmd::InitialMode`]。
+    InitialPunct(u8),
+    /// 为当前焦点应用设置符号自动配对开关（compat.toml 的 auto_pair）。
+    /// 参数：0=跟随全局（清除规则）1=启用 2=禁用。
+    ///
+    /// 「禁用」主要给表格类宿主用：Excel / WPS 表格在「输入态」下把方向键解释成
+    /// 「确认单元格并移动」，配对后的光标回退无法实现（TSF 路线已实测失败）。
+    AutoPairRule(u8),
+    /// 为当前焦点应用设置候选窗定位方式（compat.toml 的 candidate_position_mode）。
+    /// 参数：0=跟随全局（清除规则）1=跟随光标 2=固定位置。
+    ///
+    /// 「固定位置」给那些 caret 坐标本就报不准的宿主（自绘控件、坐标系错、多进程窗口
+    /// 偏移）：位置由用户拖一次定下，存在该应用**自己**的规则里，不与别的应用共用。
+    CandidatePositionRule(u8),
+    /// 为当前焦点应用设置「忽略宿主关闭输入法」（compat.toml 的 ignore_host_ime_close）。
+    /// 参数：0=跟随默认（清除规则）1=忽略 2=不忽略。
+    ///
+    /// 给 WinForms `ImeMode.Disable` / WPF `IsInputMethodEnabled=False` 这类宿主：它们在
+    /// 焦点落到按钮等控件时关掉的是**全局**中英状态，于是「点一下按钮就变成英文」。
+    IgnoreHostImeCloseRule(u8),
+    /// 为当前焦点应用设置「密码框强制英文」（compat.toml 的 password_force_english）。
+    /// 参数：0=跟随全局（清除规则）1=开 2=关。
+    ///
+    /// 给「宿主把普通输入框误报成密码框」的应用单独关掉，全局仍保护真密码框（A2-37）。
+    PasswordForceEnglishRule(u8),
+    /// 为当前焦点应用设置输入方案（compat.toml 的 schema，C0-7 / GH#80）。
+    /// 参数：0=跟随全局（清除规则）1=记住上次（`@remember`）2+i=固定为可用方案表第 i 个。
+    ///
+    /// 下标而非 id：菜单 id 是整数（macOS 经 `NSMenuItem.tag` 回传），与 `SchemaSelect` 同理。
+    AppSchemaRule(u16),
+    /// 为当前焦点应用设置状态气泡定位（compat.toml 的 status_position_mode，C2-33 / GH#148）。
+    /// 参数：0=跟随全局（清除规则）1=跟随光标 2=固定（取气泡当前位置）3+i=锚点表第 i 个
+    /// （`aurora_config::app_compat::StatusAnchor::ALL` 的顺序）。
+    StatusPositionRule(u8),
+    /// 为当前焦点应用设置「坐标不可用时」气泡放哪（compat.toml 的 status_fallback_position）。
+    /// 参数：0=跟随全局（清除规则）1=上次位置 2=不显示 3+i=锚点表第 i 个。
+    StatusFallbackRule(u8),
+    /// 语言栏图标：角标总开关。参数为 `aurora_ui::langbar_icon::BadgeStyle::ALL` 的下标。
+    ///
+    /// 只有「不显示 / 角标」两档——具体画哪些状态、什么颜色、在哪个角，是
+    /// `[ui.langbar.badges]` 那张规则表的事，由设置页编辑，菜单不重复一遍。
+    IconBadgeStyle(u8),
+    /// 语言栏图标（Dev 调试）：在各尺寸档位图左上角烧尺寸标记，
+    /// 用于真机确认系统实际取用了哪一档、有没有被二次缩放。
+    IconToggleSizeMarks,
+    /// 语言栏图标（Dev 调试）：外圈跑马灯演示动画。
+    ///
+    /// 与上面两项不同，它**不持久化**——那两项是「图标长什么样」的偏好，它是一段持续
+    /// 占用 CPU 与 IPC 的演示，重启后自己关掉才是对的默认。
+    IconToggleDemoAnim,
+    /// 切换候选窗定位调试浮窗（仅 Dev 变体的菜单里出现）。
+    ToggleCaretOverlay,
+}
+
+/// 菜单项的动作类型（右键候选菜单 + 功能主菜单共用）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuKind {
+    /// 词条操作（置顶/移动/删除/恢复）
+    Op(CandidateOp),
+    /// 复制候选文本（UI 侧写剪贴板）
+    Copy,
+    /// 功能主菜单命令
+    Command(MenuCmd),
+    /// 子菜单父项（点击/回车进入 children）
+    Submenu,
+    /// 分隔线（不可点击）
+    Separator,
+    /// 纯展示的文本行（不可点击，不画分隔线）。用于在子菜单顶部显示上下文信息
+    /// （如当前焦点进程名），型别本身保证它永远不会触发任何动作——`enabled` 恒
+    /// 由构造函数按 false 写死已经能挡住 `selectable()` 那道闸门，这里在
+    /// `to_menu_id`/`menu_action` 两处再补一道静态保证，双保险防的是「万一以后
+    /// 有人手滑把 enabled 传成 true」。
+    Label,
+}
+
+impl MenuKind {
+    /// 稳定菜单 id：macOS `.app` 把它写进 `NSMenuItem.tag`，选中后经 `CmdMenuAction`
+    /// 原样回传，Rust 据此还原动作。构建菜单树（下发）与处理回传（还原）共用此映射，
+    /// 二者必须一致。`Submenu`/`Separator`/`Label` 不回传，恒为 0。
+    /// id 区间：1 复制｜10-19 词条操作｜100-199 固定命令｜1000+ 方案｜2000+ 主题｜3000+ 过滤｜
+    /// 4000+ 明暗｜5000+ 候选窗首显｜6000+ 初始中英｜7000+ 初始标点｜8000+ 诊断 HUD 分区｜
+    /// 9000+ 自动配对｜10000+ 语言栏图标角标形状｜11000+ 软键盘面｜12000+ 候选窗定位｜
+    /// 13000+ 忽略宿主关闭输入法｜14000+ 密码框强制英文｜15000+ 按应用方案｜
+    /// 16000+ 按应用状态气泡定位｜17000+ 按应用状态气泡兜底位置｜18000+ 按应用整条规则启用 / 禁用。
+    pub fn to_menu_id(self) -> i32 {
+        match self {
+            MenuKind::Separator | MenuKind::Submenu | MenuKind::Label => 0,
+            MenuKind::Copy => 1,
+            MenuKind::Op(op) => match op {
+                CandidateOp::MoveTop => 10,
+                CandidateOp::MoveUp => 11,
+                CandidateOp::MoveDown => 12,
+                CandidateOp::Delete => 13,
+                CandidateOp::Reset => 14,
+                CandidateOp::ToggleCommon => 15,
+            },
+            MenuKind::Command(cmd) => match cmd {
+                MenuCmd::SchemaEnglish => 100,
+                MenuCmd::TogglePunct => 101,
+                MenuCmd::ToggleWidth => 102,
+                MenuCmd::ToggleS2t => 103,
+                MenuCmd::ToggleToolbar => 104,
+                MenuCmd::ReloadConfig => 105,
+                MenuCmd::RestartService => 106,
+                MenuCmd::OpenConfigDir => 107,
+                MenuCmd::OpenDictionary => 108,
+                MenuCmd::OpenSettings => 109,
+                MenuCmd::OpenAbout => 110,
+                MenuCmd::TakeScreenshot => 111,
+                MenuCmd::ScreenshotCandidateToClipboard => 112,
+                MenuCmd::OpenAppDir => 113,
+                MenuCmd::OpenLogDir => 114,
+                MenuCmd::StatusToggleAlways => 115,
+                MenuCmd::StatusResetPosition => 116,
+                MenuCmd::StatusScreenshot => 117,
+                MenuCmd::TooltipCopy => 118,
+                MenuCmd::TooltipScreenshot => 119,
+                MenuCmd::StatusTogglePinned => 122,
+                MenuCmd::StatusToggleShowOnFocus => 123,
+                MenuCmd::ToggleInputDiagnostics => 120,
+                MenuCmd::TogglePasswordSuppress => 121,
+                MenuCmd::InputDiagCopy => 124,
+                MenuCmd::InputDiagToggleFreeze => 125,
+                MenuCmd::InputDiagToggleTopmost => 126,
+                MenuCmd::IconToggleSizeMarks => 128,
+                MenuCmd::IconToggleDemoAnim => 129,
+                MenuCmd::ToggleCaretOverlay => 130,
+                MenuCmd::ToggleSoftKeyboard => 131,
+                MenuCmd::OpenMainMenu => 132,
+                MenuCmd::TooltipCopySection => 133,
+                MenuCmd::TooltipCommitSection => 134,
+                MenuCmd::TooltipCopyLine => 135,
+                MenuCmd::TooltipCommitLine => 136,
+                MenuCmd::IconBadgeStyle(i) => 10000 + i as i32,
+                MenuCmd::SoftKeyboardPage(i) => 11000 + i as i32,
+                MenuCmd::InputDiagToggleSection(i) => 8000 + i as i32,
+                MenuCmd::FirstShowMode(m) => 5000 + m as i32,
+                MenuCmd::InitialMode(m) => 6000 + m as i32,
+                MenuCmd::InitialPunct(m) => 7000 + m as i32,
+                MenuCmd::AutoPairRule(m) => 9000 + m as i32,
+                MenuCmd::CandidatePositionRule(m) => 12000 + m as i32,
+                MenuCmd::IgnoreHostImeCloseRule(m) => 13000 + m as i32,
+                MenuCmd::PasswordForceEnglishRule(m) => 14000 + m as i32,
+                MenuCmd::AppSchemaRule(m) => 15000 + m as i32,
+                MenuCmd::StatusPositionRule(m) => 16000 + m as i32,
+                MenuCmd::StatusFallbackRule(m) => 17000 + m as i32,
+                MenuCmd::CompatRuleEnabled(m) => 18000 + m as i32,
+                MenuCmd::SchemaSelect(i) => 1000 + i as i32,
+                MenuCmd::ThemeSelect(i) => 2000 + i as i32,
+                MenuCmd::FilterMode(i) => 3000 + i as i32,
+                MenuCmd::ThemeStyle(s) => 4000 + s as i32,
+            },
+        }
+    }
+
+    /// 由回传的菜单 id 还原动作；未知 id / 不可点击项返回 None。
+    pub fn from_menu_id(id: i32) -> Option<MenuKind> {
+        let cmd = match id {
+            1 => return Some(MenuKind::Copy),
+            10 => return Some(MenuKind::Op(CandidateOp::MoveTop)),
+            11 => return Some(MenuKind::Op(CandidateOp::MoveUp)),
+            12 => return Some(MenuKind::Op(CandidateOp::MoveDown)),
+            13 => return Some(MenuKind::Op(CandidateOp::Delete)),
+            14 => return Some(MenuKind::Op(CandidateOp::Reset)),
+            15 => return Some(MenuKind::Op(CandidateOp::ToggleCommon)),
+            100 => MenuCmd::SchemaEnglish,
+            101 => MenuCmd::TogglePunct,
+            102 => MenuCmd::ToggleWidth,
+            103 => MenuCmd::ToggleS2t,
+            104 => MenuCmd::ToggleToolbar,
+            105 => MenuCmd::ReloadConfig,
+            106 => MenuCmd::RestartService,
+            107 => MenuCmd::OpenConfigDir,
+            108 => MenuCmd::OpenDictionary,
+            109 => MenuCmd::OpenSettings,
+            110 => MenuCmd::OpenAbout,
+            111 => MenuCmd::TakeScreenshot,
+            112 => MenuCmd::ScreenshotCandidateToClipboard,
+            113 => MenuCmd::OpenAppDir,
+            114 => MenuCmd::OpenLogDir,
+            115 => MenuCmd::StatusToggleAlways,
+            116 => MenuCmd::StatusResetPosition,
+            117 => MenuCmd::StatusScreenshot,
+            118 => MenuCmd::TooltipCopy,
+            119 => MenuCmd::TooltipScreenshot,
+            122 => MenuCmd::StatusTogglePinned,
+            123 => MenuCmd::StatusToggleShowOnFocus,
+
+            120 => MenuCmd::ToggleInputDiagnostics,
+            121 => MenuCmd::TogglePasswordSuppress,
+            124 => MenuCmd::InputDiagCopy,
+            125 => MenuCmd::InputDiagToggleFreeze,
+            126 => MenuCmd::InputDiagToggleTopmost,
+            128 => MenuCmd::IconToggleSizeMarks,
+            129 => MenuCmd::IconToggleDemoAnim,
+            130 => MenuCmd::ToggleCaretOverlay,
+            131 => MenuCmd::ToggleSoftKeyboard,
+            132 => MenuCmd::OpenMainMenu,
+            133 => MenuCmd::TooltipCopySection,
+            134 => MenuCmd::TooltipCommitSection,
+            135 => MenuCmd::TooltipCopyLine,
+            136 => MenuCmd::TooltipCommitLine,
+            10000..=10099 => MenuCmd::IconBadgeStyle((id - 10000) as u8),
+            11000..=11999 => MenuCmd::SoftKeyboardPage((id - 11000) as usize),
+            8000..=8999 => MenuCmd::InputDiagToggleSection((id - 8000) as u8),
+            1000..=1999 => MenuCmd::SchemaSelect((id - 1000) as usize),
+            2000..=2999 => MenuCmd::ThemeSelect((id - 2000) as usize),
+            3000..=3999 => MenuCmd::FilterMode((id - 3000) as usize),
+            4000..=4999 => MenuCmd::ThemeStyle((id - 4000) as u8),
+            5000..=5999 => MenuCmd::FirstShowMode((id - 5000) as u8),
+            6000..=6999 => MenuCmd::InitialMode((id - 6000) as u8),
+            7000..=7999 => MenuCmd::InitialPunct((id - 7000) as u8),
+            9000..=9999 => MenuCmd::AutoPairRule((id - 9000) as u8),
+            12000..=12999 => MenuCmd::CandidatePositionRule((id - 12000) as u8),
+            13000..=13999 => MenuCmd::IgnoreHostImeCloseRule((id - 13000) as u8),
+            14000..=14255 => MenuCmd::PasswordForceEnglishRule((id - 14000) as u8),
+            15000..=15999 => MenuCmd::AppSchemaRule((id - 15000) as u16),
+            16000..=16255 => MenuCmd::StatusPositionRule((id - 16000) as u8),
+            17000..=17255 => MenuCmd::StatusFallbackRule((id - 17000) as u8),
+            18000..=18001 => MenuCmd::CompatRuleEnabled((id - 18000) as u8),
+            _ => return None,
+        };
+        Some(MenuKind::Command(cmd))
+    }
+}
+
+/// 菜单相对锚点的展开方向。
+///
+/// 取代早先的 `above: bool`——加入侧向后就是三态，布尔位表达不了，硬塞会变成
+/// `above`/`side` 两个互斥布尔而类型不作担保。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuPlacement {
+    /// 顶边贴锚点顶边向下展开（光标处右键：候选/状态泡/Tooltip/诊断 HUD）。
+    Below,
+    /// 底边贴锚点顶边向上展开；上方装不下则翻到锚点底边之下。
+    /// 横向工具栏用，避免菜单压住工具栏本身。
+    Above,
+    /// 贴锚点侧边展开：右侧装得下走右侧，否则走左侧。
+    /// 纵向工具栏用——竖条上仍向上弹会让菜单飘到条顶之上老远。
+    Side,
+}
+
+/// 菜单锚点：屏幕坐标矩形 + 展开方向。
+///
+/// 聚合成一个类型而非散落的 `x/y/right/bottom/placement` 五个参数：**哪些边参与定位是
+/// 由 `placement` 决定的**（`Below` 只看左上、`Above` 还要下边、`Side` 还要右边），
+/// 这份知识只有收在一处才不会在某个调用点被漏填成 0 而静默错位。
+#[derive(Debug, Clone, Copy)]
+pub struct MenuAnchor {
+    /// 锚点左边（`i32::MIN` = 由 UI 取当前光标位，此时其余边同样退化为该点）。
+    pub x: i32,
+    /// 锚点上边。
+    pub y: i32,
+    /// 锚点右边（仅 `Side` 使用）。
+    pub right: i32,
+    /// 锚点下边（仅 `Above` 的翻转回退使用）。
+    pub bottom: i32,
+    pub placement: MenuPlacement,
+}
+
+impl MenuAnchor {
+    /// 点状锚点，向下展开。`i32::MIN` 表示取光标位。
+    pub fn at_point(x: i32, y: i32) -> Self {
+        Self {
+            x,
+            y,
+            right: x,
+            bottom: y,
+            placement: MenuPlacement::Below,
+        }
+    }
+
+    /// 矩形锚点，向上展开（横向工具栏）。
+    pub fn above_rect(x: i32, y: i32, bottom: i32) -> Self {
+        Self {
+            x,
+            y,
+            right: x,
+            bottom,
+            placement: MenuPlacement::Above,
+        }
+    }
+
+    /// 矩形锚点，侧向展开（纵向工具栏）。
+    pub fn beside_rect(x: i32, y: i32, right: i32, bottom: i32) -> Self {
+        Self {
+            x,
+            y,
+            right,
+            bottom,
+            placement: MenuPlacement::Side,
+        }
+    }
+}
+
+/// 外部宿主报上来的菜单指针事件（Linux addon 的 X11 指针抓取，见 `UiCommand::MenuPointer`）。
+///
+/// 只分出菜单关心的四种：Windows 进程内菜单对这四种的处置（`popup_menu` 的 wnd_proc 与菜单外
+/// 按下轮询）就是全部语义——移动跟手高亮；左键点条目；右键任何位置都只关菜单；中键只在菜单外
+/// 才关（菜单内忽略）。滚轮 Windows 菜单不处理，宿主不报。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuPointerEvent {
+    Move,
+    LeftPress,
+    RightPress,
+    OtherPress,
+}
+
+/// 菜单项规格（由协调器构建）。支持勾选态与子菜单。
+///
+/// `PartialEq` 供弹出菜单的增量重绘用：`popup_menu::reconcile`（aurora-ui）靠它判断
+/// 某一层的内容是否真的变了，没变就不重绘、更不重排 z 序。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MenuItemSpec {
+    pub label: String,
+    pub kind: MenuKind,
+    pub enabled: bool,
+    /// 勾选标记（当前方案/主题/开关态）
+    pub checked: bool,
+    /// 子菜单项（kind=Submenu 时有效）
+    pub children: Vec<MenuItemSpec>,
+}
+
+impl MenuItemSpec {
+    pub fn leaf(label: impl Into<String>, kind: MenuKind, enabled: bool, checked: bool) -> Self {
+        Self {
+            label: label.into(),
+            kind,
+            enabled,
+            checked,
+            children: Vec::new(),
+        }
+    }
+    pub fn separator() -> Self {
+        Self {
+            label: String::new(),
+            kind: MenuKind::Separator,
+            enabled: false,
+            checked: false,
+            children: Vec::new(),
+        }
+    }
+    /// 纯展示的文本行，用作子菜单顶部的上下文标题（如「当前应用：xxx.exe」）。
+    pub fn label(text: impl Into<String>) -> Self {
+        Self {
+            label: text.into(),
+            kind: MenuKind::Label,
+            enabled: false,
+            checked: false,
+            children: Vec::new(),
+        }
+    }
+    pub fn submenu(label: impl Into<String>, children: Vec<MenuItemSpec>) -> Self {
+        Self {
+            label: label.into(),
+            kind: MenuKind::Submenu,
+            enabled: true,
+            checked: false,
+            children,
+        }
+    }
+}

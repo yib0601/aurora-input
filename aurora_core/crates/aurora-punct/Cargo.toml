@@ -1,0 +1,15 @@
+[package]
+name = "aurora-punct"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-config = { path = "../aurora-config" }
+aurora-transform = { path = "../aurora-transform" }
+
+[lints]
+workspace = true
+[dev-dependencies]
+# 跨端真值表（testdata/cross_platform_policy_vectors.json）的读取：
+# 同一份 JSON 也被 TSF / macOS / Linux 三端单测读，故只能用最通用的格式。
+serde_json = { workspace = true }

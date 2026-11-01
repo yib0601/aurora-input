@@ -1,0 +1,3 @@
+# 本目录是独立的测试工程，不属于上层 workspace
+[build]
+target-dir = "target"

@@ -1,0 +1,196 @@
+[schema]
+id = "shuangpin"
+name = "双拼"
+icon_label = "双"
+version = "1.0"
+author = "内置"
+description = "双拼输入方案"
+
+[engine]
+type = "pinyin"
+
+[engine.pinyin]
+scheme = "shuangpin"
+
+[engine.pinyin.shuangpin]
+layout = "xiaohe"
+
+# 辅助码：拼音候选的字形二次筛选（小鹤拆分码）。路径相对 schemas 目录。
+# 词组逐字首码匹配为固定语义（第 i 位命中第 i 字任一码的首字符；短于词字数 = 前缀态保留）。
+#
+# ⚠️ 本段只声明「双拼推荐哪张辅助码表」，**不代表功能开启**。
+# 总开关是 config.toml 的 [schema.pinyin.aux_code].enabled（出厂 false）；
+# 用户要单独在双拼开启，写 %APPDATA%\WindInput\schema_overrides\shuangpin.toml：
+#     [engine.aux_code]
+#     enabled = true
+# 行为字段（enabled / max_phrase_len / direct）在此留空 = 回落全局，见 schema-config-layering.md §4。
+#
+# 直接辅助码（不按引导键，末 1～2 位自动当辅码：uidu + p → 「释读」）同样出厂关，开启写：
+#     [engine.aux_code]
+#     enabled = true
+#     direct = true
+# 引导键（下方反引号）与直接辅助码并存：直接辅助的结果上仍可按反引号进筛选。
+[engine.aux_code]
+# files 也可写 "schema:<码表方案 id>"，取该方案系统词库 + 用户词库里的编码，如
+# files = ["schema:wubi86"]。
+files = ["aux_code/flypy_full.txt"]
+
+# 反引号进辅助码（组码中有效；空缓冲时落普通标点）。覆盖全局 backtick = "temp_pinyin"
+# 的默认绑定——temp_pinyin_target 对拼音方案本就不成立，反引号在此是自由键。
+# 绑定本身不激活功能：enabled = false 时门卫拒绝进入，该键照常落普通标点。
+#
+# 分隔符臂在按键裁决里排在 key_actions 之前，本可以把这个键夺走（双拼已支持手动分隔符，
+# 见 docs/design/shuangpin-separator.md）。夺不走是因为 separator 的 auto 模式会**避让
+# 本段已绑的键**：双拼下 `'` 被选词键占、反引号被这里占，auto 于是两个都不选。
+# 想在双拼用分隔符，显式写上方 [engine.pinyin] separator = "quote"（那时反引号仍归辅助码）。
+[key_actions]
+backtick = "aux_code"
+
+[[dictionaries]]
+id = "pinyin_main"
+path = "pinyin/rime_frost.dict.yaml"
+type = "rime_pinyin"
+default = true
+base_order = 0
+
+# 扩展词库（细胞词库）：放在主词库所在目录的 ext/ 下（schemas/pinyin/ext/），引擎自动识别、
+# 出现在「方案设置 → 扩展词库」里（出厂不勾选），不用在这里声明（拼音 / 码表方案没写
+# [[dictionary_dirs]] 时都兜底这个目录）。下面逐张登记的是随包附带的 16 张——rime-frost
+# cn_dicts_cell 里体积小、开了对主库排序几乎无影响的那些——只为给出中文名称。
+# 大库（composite / food / game / medication 等）不随包，用户自己放进 ext/ 即可，
+# 取舍见 docs/design/schema-dict-discovery.md §8。文件清单与 scripts/dev.sh 的 FROST_CELLS 同步。
+[[dictionaries]]
+id = "cell_exthot"
+label = "网络热词"
+description = "近年流行语与网络热词"
+path = "pinyin/ext/exthot.dict.yaml"
+type = "rime_pinyin"
+base_order = 1
+
+[[dictionaries]]
+id = "cell_idiom"
+label = "成语"
+description = "成语、俗语与古诗文名句"
+path = "pinyin/ext/idiom.dict.yaml"
+type = "rime_pinyin"
+base_order = 2
+
+[[dictionaries]]
+id = "cell_place"
+label = "地名"
+description = "地名与地铁站名"
+path = "pinyin/ext/place.dict.yaml"
+type = "rime_pinyin"
+base_order = 3
+
+[[dictionaries]]
+id = "cell_history"
+label = "历史"
+description = "历史人物、年号与事件"
+path = "pinyin/ext/history.dict.yaml"
+type = "rime_pinyin"
+base_order = 4
+
+[[dictionaries]]
+id = "cell_name"
+label = "人名"
+description = "常见人名"
+path = "pinyin/ext/name.dict.yaml"
+type = "rime_pinyin"
+base_order = 5
+
+[[dictionaries]]
+id = "cell_name2"
+label = "动漫人名"
+description = "动漫、影视角色与外国人名"
+path = "pinyin/ext/name2.dict.yaml"
+type = "rime_pinyin"
+base_order = 6
+
+[[dictionaries]]
+id = "cell_sport"
+label = "体育"
+description = "球类等运动术语与体育明星"
+path = "pinyin/ext/sport.dict.yaml"
+type = "rime_pinyin"
+base_order = 7
+
+[[dictionaries]]
+id = "cell_geography"
+label = "地理"
+description = "地理、地质术语"
+path = "pinyin/ext/geography.dict.yaml"
+type = "rime_pinyin"
+base_order = 8
+
+[[dictionaries]]
+id = "cell_animal"
+label = "动物"
+description = "动物名称、犬种等"
+path = "pinyin/ext/animal.dict.yaml"
+type = "rime_pinyin"
+base_order = 9
+
+[[dictionaries]]
+id = "cell_computer"
+label = "计算机"
+description = "计算机与互联网术语"
+path = "pinyin/ext/computer.dict.yaml"
+type = "rime_pinyin"
+base_order = 10
+
+[[dictionaries]]
+id = "cell_music"
+label = "音乐"
+description = "乐理与演奏术语"
+path = "pinyin/ext/music.dict.yaml"
+type = "rime_pinyin"
+base_order = 11
+
+[[dictionaries]]
+id = "cell_media"
+label = "自媒体"
+description = "网文与自媒体用语"
+path = "pinyin/ext/media.dict.yaml"
+type = "rime_pinyin"
+base_order = 12
+
+[[dictionaries]]
+id = "cell_industry_product"
+label = "行业产品"
+description = "行业与产品名称"
+path = "pinyin/ext/industry_product.dict.yaml"
+type = "rime_pinyin"
+base_order = 13
+
+[[dictionaries]]
+id = "cell_inputmethod"
+label = "输入法"
+description = "输入法相关术语"
+path = "pinyin/ext/inputmethod.dict.yaml"
+type = "rime_pinyin"
+base_order = 14
+
+[[dictionaries]]
+id = "cell_chess"
+label = "象棋"
+description = "象棋术语"
+path = "pinyin/ext/chess.dict.yaml"
+type = "rime_pinyin"
+base_order = 15
+
+[[dictionaries]]
+id = "cell_chess2"
+label = "象棋棋谱"
+description = "象棋着法记录，如「炮二平五」"
+path = "pinyin/ext/chess2.dict.yaml"
+type = "rime_pinyin"
+base_order = 16
+
+# 权重不归一化——这是刻意的，勿加 [weight_spec]：
+#   1. 拼音权重刻意在与码表不同的轴上（max 1537 万），其与码表的先后由协调器
+#      source_tier 的档位隔离决定，不靠比 weight；
+#   2. pinyin/mod.rs 的 COMPLETION_FAR_WEIGHT_FLOOR(100) 与
+#      SENTENCE_YIELD_WEIGHT_FLOOR(50) 是**按原始权重分布标定的绝对阈值**（该处
+#      代码注释亦有明示）。拼音 p50 仅 20，归一化后人人过线，两道闸门会静默失效。
+# 本库分布（供设计者查阅）：median≈200 max≈1926 万 —— 亦是上述 FLOOR 取值的依据。

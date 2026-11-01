@@ -1,0 +1,61 @@
+{
+  "_comment": [
+    "跨端纯判据真值表——同一组输入，三个前端必须给出同一组输出。",
+    "",
+    "为什么需要它：TSF（C++）、.app（Swift）、addon（C++）各自实现了一批**语义相同**的",
+    "宿主层判据（吃键、数字后智能标点、点选时机……）。它们各自的单测都在跑，但测的是",
+    "**各自的理解**——三条实现同时漂到同一个错误答案上，测试全绿而行为已错。",
+    "源文件里的「对位 XX 那边」是注释，不是断言。本文件把「那边」变成会失败的测试。",
+    "",
+    "为什么是 JSON 而不是让三端都调 Rust：跨语言 FFI 每次按键都过一次边界不值得；",
+    "这些判据都是一行布尔运算，复制比绑定便宜。共享的是**答案**，不是实现。",
+    "",
+    "新增一条判据时：在此加一个 case 组，三端各加一个读表循环。缺任何一端，那一端就",
+    "没有闸门——不是「暂时不用」，是会静默漂。"
+  ],
+  "cases": [
+    {
+      "id": "smart_punct_after_digit",
+      "description": "数字后智能标点：prev_char 是 ASCII 数字才降级为半角标点。",
+      "source_of_truth": "aurora_core/crates/aurora-punct/src/lib.rs::is_smart_punct_after_digit",
+      "note": [
+        "真值表的 prev_char 是 UTF-16 码元（协议字段就是 u16），不是字符码点。",
+        "三端消费方：TSF SmartPunctPrevChar.h（记账后喂服务端）、",
+        "macOS SmartPunctDigitTracker.swift、Linux ResponseRouter 的 PrevCharTracker。",
+        "★ 三端都只负责「记账并上报」，最终判定在 Rust。这张表钉的是**记账语义**——",
+        "三端对「什么时候报数字、什么时候报 0」必须一致，否则同一个用户操作在三平台",
+        "出不同标点。"
+      ],
+      "vectors": [
+        { "prev_char": 48, "is_digit": true,  "why": "'0' 的 UTF-16 码元" },
+        { "prev_char": 53, "is_digit": true,  "why": "'5'" },
+        { "prev_char": 57, "is_digit": true,  "why": "'9' — 上界含" },
+        { "prev_char": 47, "is_digit": false, "why": "'/' — 下界外一口" },
+        { "prev_char": 58, "is_digit": false, "why": "':' — 上界外一口" },
+        { "prev_char": 65, "is_digit": false, "why": "'A'" },
+        { "prev_char": 0,  "is_digit": false, "why": "0 = 「不可用」，不是数字" },
+        { "prev_char": 65297, "is_digit": false, "why": "'３' 全角数字 — 不是 ASCII，不算" }
+      ]
+    },
+    {
+      "id": "number_key_eat",
+      "description": "数字类键该不该吃（转发服务端）。三端同一条判据。",
+      "source_of_truth": "aurora_tsf/include/NumberKeyPolicy.h::ShouldEatNumberKey",
+      "note": [
+        "有会话一律吃（选词/翻页/顶屏）；中文+全角吃（服务端出全角数字）；其余放行让宿主出字。",
+        "吃掉却不产出是丢键（严格 TSF 宿主）；产出两次是 PIN 框一键两个字。两个方向都踩过。",
+        "Linux/macOS 没有 OnTestKeyDown 前置闸门，判据仍用于决定是否转发——语义相同。"
+      ],
+      "vectors": [
+        { "has_input_session": true,  "chinese_mode": true,  "full_width": true,  "eat": true,  "why": "有会话 + 中文全角：顶码" },
+        { "has_input_session": true,  "chinese_mode": true,  "full_width": false, "eat": true,  "why": "有会话 + 中文半角：选词/翻页" },
+        { "has_input_session": true,  "chinese_mode": false, "full_width": true,  "eat": true,  "why": "有会话 + 英文全角：会话优先" },
+        { "has_input_session": true,  "chinese_mode": false, "full_width": false, "eat": true,  "why": "有会话 + 英文半角：会话优先" },
+        { "has_input_session": false, "chinese_mode": true,  "full_width": true,  "eat": true,  "why": "中文全角空闲：服务端出全角数字" },
+        { "has_input_session": false, "chinese_mode": true,  "full_width": false, "eat": false, "why": "中文半角空闲：宿主出字" },
+        { "has_input_session": false, "chinese_mode": false, "full_width": true,  "eat": false, "why": "英文全角不由本判据处理（另有 english_fullwidth 分支）" },
+        { "has_input_session": false, "chinese_mode": false, "full_width": false, "eat": false, "why": "英文半角：宿主出字" }
+      ]
+    }
+  ]
+}

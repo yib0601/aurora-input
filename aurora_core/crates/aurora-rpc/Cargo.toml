@@ -1,0 +1,26 @@
+[package]
+name = "aurora-rpc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-ipc = { path = "../aurora-ipc" }
+aurora-config = { path = "../aurora-config" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+
+[dev-dependencies]
+# 集成测试（tests/*.rs 各占一个进程，OnceLock 才隔离得开）看不到本 crate 的普通依赖。
+aurora-ipc = { path = "../aurora-ipc" }
+aurora-config = { path = "../aurora-config" }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

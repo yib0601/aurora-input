@@ -1,0 +1,11 @@
+//! 码表引擎
+//!
+//! 与 Go 版本 `aurora_core/internal/engine/codetable/` 对齐。
+
+pub mod disabled_dicts;
+pub mod engine;
+pub mod sentence;
+
+pub use disabled_dicts::{DisabledDictLayers, DisabledDictSource};
+pub use engine::{BaseSort, CodeTableEngine, CommitOptions, SplitAltDisplay, SplitTrigger};
+pub use sentence::{CodeSentenceDecoder, SentenceResult, ShortCodeIndex};

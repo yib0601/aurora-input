@@ -1,0 +1,16 @@
+[package]
+name = "aurora-quick-input"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-ids = { path = "../aurora-ids" }
+chrono = "0.4"
+# 格式表 system.quick.toml 的解析与告警。仍不依赖任何 wind-* crate——
+# 本 crate 是 aurora-phrase / aurora-cmdbar / aurora-config 的下游，反向依赖会成环。
+serde = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

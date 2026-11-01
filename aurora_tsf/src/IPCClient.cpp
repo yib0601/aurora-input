@@ -1,0 +1,3021 @@
+#include "IPCClient.h"
+#include "FileLogger.h"
+#include "InstallPaths.h"
+#include "InstallerGuard.h"
+#include <sstream>
+#include <cstdarg>
+#include <cstring>
+#include <vector>
+#include <string>
+
+#pragma comment(lib, "advapi32.lib")
+
+// Static member initialization
+IPCLogLevel CIPCClient::s_logLevel = IPCLogLevel::Info;
+std::atomic<uint32_t> CIPCClient::s_instanceCounter{0};
+
+CIPCClient::CIPCClient()
+    : _hPipe(INVALID_HANDLE_VALUE)
+    , _hEvent(NULL)
+    , _serviceStartAttempted(FALSE)
+    , _needsStateSync(TRUE)
+    , _stateEstablished(FALSE)
+    , _pipeBusyExempt(FALSE)
+    , _pipeWritten(FALSE)
+    , _lastWriteError(ERROR_SUCCESS)
+    , _circuitState(CircuitState::Closed)
+    , _consecutiveFailures(0)
+    , _lastFailureTime(0)
+    , _clientToken(((uint64_t)GetCurrentProcessId() << 32) | (uint32_t)(++s_instanceCounter))
+    , _hAsyncThread(NULL)
+    , _hStopEvent(NULL)
+    , _hReadPipe(INVALID_HANDLE_VALUE)
+    , _asyncReaderRunning(FALSE)
+{
+    // Create event for overlapped I/O
+    _hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (_hEvent == NULL)
+    {
+        _LogError(L"Failed to create overlapped event: %d", GetLastError());
+    }
+
+    // Initialize critical section for async reader
+    InitializeCriticalSection(&_asyncLock);
+
+    // Create stop event for async reader thread
+    _hStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (_hStopEvent == NULL)
+    {
+        _LogError(L"Failed to create stop event: %d", GetLastError());
+    }
+}
+
+CIPCClient::~CIPCClient()
+{
+    StopAsyncReader();
+    Disconnect();
+
+    if (_hEvent != NULL)
+    {
+        CloseHandle(_hEvent);
+        _hEvent = NULL;
+    }
+
+    if (_hStopEvent != NULL)
+    {
+        CloseHandle(_hStopEvent);
+        _hStopEvent = NULL;
+    }
+
+    DeleteCriticalSection(&_asyncLock);
+}
+
+// ============================================================================
+// Logging helpers
+// All levels are now controlled at runtime via FileLogger config.
+// IPCClient logs are routed through AURORA_LOG_* macros for unified output.
+// ============================================================================
+
+void CIPCClient::_Log(IPCLogLevel level, const wchar_t* format, ...)
+{
+    // Map IPCLogLevel to AURORA_LOG level: Error=1, Info=3, Debug=4
+    int windLevel = (level == IPCLogLevel::Error) ? 1 : (level == IPCLogLevel::Info) ? 3 : 4;
+    if (!CFileLogger::Instance().IsEnabled(static_cast<CFileLogger::LogLevel>(windLevel)))
+        return;
+
+    wchar_t buffer[1024];
+    va_list args;
+    va_start(args, format);
+    _vsnwprintf_s(buffer, _countof(buffer), _TRUNCATE, format, args);
+    va_end(args);
+
+    CFileLogger::Instance().Write(static_cast<CFileLogger::LogLevel>(windLevel), buffer);
+}
+
+void CIPCClient::_LogError(const wchar_t* format, ...)
+{
+    if (!CFileLogger::Instance().IsEnabled(CFileLogger::LogLevel::Error))
+        return;
+
+    wchar_t msgBuffer[1024];
+    va_list args;
+    va_start(args, format);
+    _vsnwprintf_s(msgBuffer, _countof(msgBuffer), _TRUNCATE, format, args);
+    va_end(args);
+
+    CFileLogger::Instance().Write(CFileLogger::LogLevel::Error, msgBuffer);
+}
+
+void CIPCClient::_LogInfo(const wchar_t* format, ...)
+{
+    if (!CFileLogger::Instance().IsEnabled(CFileLogger::LogLevel::Info))
+        return;
+
+    wchar_t msgBuffer[1024];
+    va_list args;
+    va_start(args, format);
+    _vsnwprintf_s(msgBuffer, _countof(msgBuffer), _TRUNCATE, format, args);
+    va_end(args);
+
+    CFileLogger::Instance().Write(CFileLogger::LogLevel::Info, msgBuffer);
+}
+
+void CIPCClient::_LogDebug(const wchar_t* format, ...)
+{
+    if (!CFileLogger::Instance().IsEnabled(CFileLogger::LogLevel::Debug))
+        return;
+
+    wchar_t msgBuffer[1024];
+    va_list args;
+    va_start(args, format);
+    _vsnwprintf_s(msgBuffer, _countof(msgBuffer), _TRUNCATE, format, args);
+    va_end(args);
+
+    CFileLogger::Instance().Write(CFileLogger::LogLevel::Debug, msgBuffer);
+}
+
+// ============================================================================
+// Encoding helpers
+// ============================================================================
+
+std::wstring CIPCClient::_Utf8ToWide(const char* utf8, size_t length)
+{
+    if (length == 0) return L"";
+
+    int wideSize = MultiByteToWideChar(CP_UTF8, 0, utf8, (int)length, nullptr, 0);
+    if (wideSize <= 0) return L"";
+
+    std::wstring result(wideSize, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8, (int)length, &result[0], wideSize);
+    return result;
+}
+
+std::string CIPCClient::_WideToUtf8(const std::wstring& wide)
+{
+    if (wide.empty()) return "";
+
+    int utf8Size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.length(), nullptr, 0, nullptr, nullptr);
+    if (utf8Size <= 0) return "";
+
+    std::string result(utf8Size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.length(), &result[0], utf8Size, nullptr, nullptr);
+    return result;
+}
+
+// ============================================================================
+// Circuit Breaker
+// ============================================================================
+
+void CIPCClient::_RecordSuccess()
+{
+    _consecutiveFailures = 0;
+    if (_circuitState != CircuitState::Closed)
+    {
+        _LogInfo(L"Circuit breaker closed (service recovered)");
+        _circuitState = CircuitState::Closed;
+    }
+}
+
+void CIPCClient::_RecordFailure()
+{
+    _consecutiveFailures++;
+    _lastFailureTime = GetTickCount();
+
+    if (_consecutiveFailures >= IPCConfig::MAX_CONSECUTIVE_FAILURES)
+    {
+        if (_circuitState != CircuitState::Open)
+        {
+            _LogError(L"Circuit breaker OPEN after %d consecutive failures", _consecutiveFailures);
+            _circuitState = CircuitState::Open;
+        }
+    }
+}
+
+BOOL CIPCClient::_ShouldAttemptOperation()
+{
+    if (_circuitState == CircuitState::Closed)
+    {
+        return TRUE;
+    }
+
+    if (_circuitState == CircuitState::Open)
+    {
+        DWORD elapsed = GetTickCount() - _lastFailureTime;
+        if (elapsed >= IPCConfig::CIRCUIT_RESET_INTERVAL_MS)
+        {
+            _LogInfo(L"Circuit breaker half-open, attempting reconnection...");
+            _circuitState = CircuitState::HalfOpen;
+            _serviceStartAttempted = FALSE;  // 允许重新尝试拉起服务
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+void CIPCClient::ResetCircuitBreaker()
+{
+    _consecutiveFailures = 0;
+    _circuitState = CircuitState::Closed;
+    _serviceStartAttempted = FALSE;  // 允许重新尝试拉起服务
+    _LogInfo(L"Circuit breaker manually reset");
+}
+
+BOOL CIPCClient::IsServiceAvailable()
+{
+    return _ShouldAttemptOperation() && (IsConnected() || Connect());
+}
+
+// ============================================================================
+// Overlapped I/O helpers
+// ============================================================================
+
+BOOL CIPCClient::_WriteWithTimeout(const void* data, DWORD size, DWORD timeoutMs)
+{
+    if (_hPipe == INVALID_HANDLE_VALUE || _hEvent == NULL)
+        return FALSE;
+
+    OVERLAPPED overlapped = {};
+    overlapped.hEvent = _hEvent;
+    ResetEvent(_hEvent);
+
+    DWORD bytesWritten = 0;
+    _lastWriteError = ERROR_SUCCESS;
+    BOOL result = WriteFile(_hPipe, data, size, &bytesWritten, &overlapped);
+
+    if (result)
+    {
+        return bytesWritten == size;
+    }
+
+    DWORD error = GetLastError();
+    if (error != ERROR_IO_PENDING)
+    {
+        _lastWriteError = error;
+        _LogError(L"WriteFile failed immediately: %d", error);
+        return FALSE;
+    }
+
+    DWORD waitResult = WaitForSingleObject(_hEvent, timeoutMs);
+
+    if (waitResult == WAIT_TIMEOUT)
+    {
+        _lastWriteError = ERROR_TIMEOUT;
+        _LogError(L"Write operation timed out after %dms", timeoutMs);
+        CancelIo(_hPipe);
+        return FALSE;
+    }
+
+    if (waitResult != WAIT_OBJECT_0)
+    {
+        _lastWriteError = GetLastError();
+        _LogError(L"WaitForSingleObject failed: %d", _lastWriteError);
+        CancelIo(_hPipe);
+        return FALSE;
+    }
+
+    if (!GetOverlappedResult(_hPipe, &overlapped, &bytesWritten, FALSE))
+    {
+        _lastWriteError = GetLastError();
+        _LogError(L"GetOverlappedResult failed: %d", _lastWriteError);
+        return FALSE;
+    }
+
+    return bytesWritten == size;
+}
+
+BOOL CIPCClient::_ReadWithTimeout(void* buffer, DWORD size, DWORD* bytesRead, DWORD timeoutMs)
+{
+    if (_hPipe == INVALID_HANDLE_VALUE || _hEvent == NULL)
+        return FALSE;
+
+    OVERLAPPED overlapped = {};
+    overlapped.hEvent = _hEvent;
+    ResetEvent(_hEvent);
+
+    *bytesRead = 0;
+    BOOL result = ReadFile(_hPipe, buffer, size, bytesRead, &overlapped);
+
+    if (result)
+    {
+        return TRUE;
+    }
+
+    DWORD error = GetLastError();
+    if (error != ERROR_IO_PENDING)
+    {
+        _LogDebug(L"ReadFile failed immediately: %d", error);
+        return FALSE;
+    }
+
+    DWORD waitResult = WaitForSingleObject(_hEvent, timeoutMs);
+
+    if (waitResult == WAIT_TIMEOUT)
+    {
+        _LogError(L"Read operation timed out after %dms", timeoutMs);
+        CancelIo(_hPipe);
+        return FALSE;
+    }
+
+    if (waitResult != WAIT_OBJECT_0)
+    {
+        _LogError(L"WaitForSingleObject failed: %d", GetLastError());
+        CancelIo(_hPipe);
+        return FALSE;
+    }
+
+    if (!GetOverlappedResult(_hPipe, &overlapped, bytesRead, FALSE))
+    {
+        _LogError(L"GetOverlappedResult failed: %d", GetLastError());
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+// ============================================================================
+// Service management
+// ============================================================================
+
+// 解析应用安装目录（返回值末尾不带反斜杠）。
+//
+// 实现已下沉到 `InstallPaths.cpp`：`CFileLogger::_BuildPaths` 也要判同一件事
+// （便携部署的日志得落在便携目录内），两处各写一份就会漂移出「服务从便携目录拉起、
+// 日志却写进 %LOCALAPPDATA%」这种半便携形态。理由与约束见 InstallPaths.h。
+static inline BOOL _ResolveAppBaseDir(WCHAR* outDir, DWORD cchOutDir)
+{
+    return WindResolveInstallRoot(outDir, cchOutDir);
+}
+
+namespace
+{
+
+uint64_t FiletimeToU64(const FILETIME& ft)
+{
+    return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+}
+
+/// 立 `InstallerRunning` 的那个进程是否仍在运行。
+///
+/// 「拿不准就当它活着」是本函数一以贯之的取向：误判成死，会让闸门在真正的安装期间
+/// 失效——那正是它要防的事；误判成活，最多让用户多等到兜底生效。两种错的代价
+/// 不对称，所以每个取不到答案的分支都返回 true。
+///
+/// ⚠️ 正因为这些分支答的是「活着」，调用方**必须**另配一条与本函数无关的年龄硬兜底
+/// （`InstallerGuard::IsOwnerHardStale`）：跨用户、受保护进程、PID 被系统进程复用时
+/// 这里会永远答「活着」，只靠本函数的话那就是个没有出口的状态机。
+bool IsOwnerAlive(const InstallerGuard::Owner& owner)
+{
+    // PROCESS_QUERY_LIMITED_INFORMATION 是够用的最小权限：本 DLL 常跑在低权限宿主里，
+    // 而安装器是提权进程，要 PROCESS_QUERY_INFORMATION 会被直接拒。
+    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, owner.pid);
+    if (hProc == NULL)
+    {
+        // 进程确实不存在时是 ERROR_INVALID_PARAMETER；其余错误（尤以 ERROR_ACCESS_DENIED
+        // 为常见）只说明我们看不到它，不说明它没了。
+        return GetLastError() != ERROR_INVALID_PARAMETER;
+    }
+
+    FILETIME create{}, exitTime{}, kernelTime{}, userTime{};
+    const BOOL gotTimes = GetProcessTimes(hProc, &create, &exitTime, &kernelTime, &userTime);
+    DWORD exitCode = 0;
+    const BOOL gotCode = GetExitCodeProcess(hProc, &exitCode);
+    CloseHandle(hProc);
+
+    if (gotCode && exitCode != STILL_ACTIVE)
+    {
+        return false; // 句柄还开着，但进程已经退出
+    }
+    if (!gotTimes)
+    {
+        return true;
+    }
+    // 这一步才是 PID 复用的解药：PID 还在，但已经是别的进程了，创建时间对不上。
+    return FiletimeToU64(create) == owner.createTime;
+}
+
+} // namespace
+
+bool CIPCClient::_InstallerGuardBlocks()
+{
+    HKEY hKey = NULL;
+    // KEY_WOW64_64KEY 理由同 InstallPaths.cpp：安装器是 64 位、只写得进 64 位视图，
+    // 32 位这侧不加标志就读不到这个标记，安装/卸载期间会把服务重新拉起来。
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, AURORA_APP_REGKEY, 0, KEY_READ | KEY_WOW64_64KEY,
+                      &hKey) != ERROR_SUCCESS)
+    {
+        return false;
+    }
+
+    // ⚠️ 缓冲仍是 8 个 WCHAR，且这个值的内容**必须**保持 "1" —— 旧版 DLL 用的正是这个
+    // 定长缓冲，值一长就读成 ERROR_MORE_DATA、把「标记存在」看成「不存在」。
+    // 身份信息因此另放 InstallerRunningOwner，详见 InstallerGuard.h。
+    WCHAR flag[8] = {};
+    DWORD flagSize = sizeof(flag);
+    DWORD flagType = REG_SZ;
+    const LSTATUS flagStatus = RegQueryValueExW(hKey, L"InstallerRunning", nullptr, &flagType,
+                                                reinterpret_cast<LPBYTE>(flag), &flagSize);
+    // ERROR_MORE_DATA 也算「标记存在」：值超长时这里一个字节都拿不到，但「有这个值」本身
+    // 已经是答案。旧读端在这一支上把标记看成了不存在（闸门静默失效），新读端不继承那个
+    // 脆弱性——取向仍是「拿不准就当装着」。
+    const bool hasFlag = (flagStatus == ERROR_SUCCESS && flag[0] == L'1') ||
+                         flagStatus == ERROR_MORE_DATA;
+
+    InstallerGuard::Owner owner;
+    bool hasOwner = false;
+    uint64_t keyWriteFt = 0;
+    if (hasFlag)
+    {
+        WCHAR ownerBuf[64] = {};
+        DWORD ownerSize = sizeof(ownerBuf) - sizeof(WCHAR); // 给终止符留位
+        DWORD ownerType = REG_SZ;
+        if (RegQueryValueExW(hKey, L"InstallerRunningOwner", nullptr, &ownerType,
+                             reinterpret_cast<LPBYTE>(ownerBuf), &ownerSize) == ERROR_SUCCESS)
+        {
+            // 注册表里的字符串不保证带终止符。上面的零初始化与 ownerSize 留位已经保证了
+            // 这里必有终止符，这一行是多余的保险，不是在补一个真实存在的洞。
+            ownerBuf[ARRAYSIZE(ownerBuf) - 1] = L'\0';
+            hasOwner = InstallerGuard::ParseOwner(ownerBuf, &owner);
+        }
+        if (!hasOwner)
+        {
+            // 没有身份可查（旧安装器写的标记）时才需要年龄兜底。
+            FILETIME ftWrite{};
+            if (RegQueryInfoKeyW(hKey, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                 nullptr, nullptr, nullptr, nullptr, &ftWrite) == ERROR_SUCCESS)
+            {
+                keyWriteFt = FiletimeToU64(ftWrite);
+            }
+        }
+    }
+    RegCloseKey(hKey);
+
+    if (!hasFlag)
+    {
+        return false;
+    }
+
+    FILETIME nowRaw{};
+    GetSystemTimeAsFileTime(&nowRaw);
+    const uint64_t nowFt = FiletimeToU64(nowRaw);
+
+    bool ownerAlive = false;
+    bool staleByAge = false;
+    bool ownerHardStale = false;
+    if (hasOwner)
+    {
+        ownerHardStale = InstallerGuard::IsOwnerHardStale(owner.createTime, nowFt);
+        ownerAlive = IsOwnerAlive(owner);
+        if (ownerHardStale)
+        {
+            _LogInfo(L"InstallerRunning 的主人进程 %u 启动至今已超过 %llu 小时，"
+                     L"无论是否仍可见都按陈旧标记处理，照常启动服务",
+                     owner.pid,
+                     static_cast<unsigned long long>(InstallerGuard::kOwnerHardStaleMs / 3600000ull));
+        }
+        else if (!ownerAlive)
+        {
+            _LogInfo(L"InstallerRunning 的主人进程 %u 已不在，按陈旧标记处理，照常启动服务",
+                     owner.pid);
+        }
+    }
+    else
+    {
+        // keyWriteFt 取不到时保持 false（即按「还新鲜」处理）：宁可多等，不可误放。
+        staleByAge = keyWriteFt != 0 && InstallerGuard::IsStaleByAge(keyWriteFt, nowFt);
+        if (staleByAge)
+        {
+            _LogInfo(L"InstallerRunning 无 Owner 且已超过 %llu 分钟未更新，按陈旧标记处理",
+                     static_cast<unsigned long long>(InstallerGuard::kStaleAfterMs / 60000ull));
+        }
+    }
+
+    return InstallerGuard::ShouldBlockStart(true, hasOwner, ownerAlive, staleByAge, ownerHardStale);
+}
+
+BOOL CIPCClient::_StartService()
+{
+    _LogInfo(L"Attempting to start service...");
+
+    // Guard: installer running flag — 安装器在杀进程前立、装完清，防止本 DLL 在安装
+    // 期间把主程序重新拉起来。判定逻辑（含「立标记的进程是否还活着」这条兜底）在
+    // InstallerGuard.h，那里有完整的来龙去脉与 issue #120 的实测记录。
+    if (_InstallerGuardBlocks())
+    {
+        _LogInfo(L"InstallerRunning flag set, not starting service");
+        return FALSE;
+    }
+
+    WCHAR baseDir[MAX_PATH];
+
+    if (!_ResolveAppBaseDir(baseDir, ARRAYSIZE(baseDir)))
+    {
+        _LogError(L"Failed to resolve app base dir");
+        return FALSE;
+    }
+
+    // Guard: check portable mode marker file for stopped flag.
+    // 标记名以 portable_mode 为准（与安装器清单 config/app.toml 的 [app] portable_marker
+    // 及 aurora-config variant.rs 的 PORTABLE_MARKER_NAME 一致）；wind_portable_mode 是旧名，
+    // 仅为存量便携包保留读取兼容，新写入不再使用。三处必须同步。
+    //
+    // ⚠️ 标记在**安装/便携目录**下，不在 DLL 所在目录——系统目录部署后两者已不是同一处。
+    {
+        static const WCHAR* const kMarkerNames[] = { L"portable_mode", L"wind_portable_mode" };
+
+        for (size_t i = 0; i < ARRAYSIZE(kMarkerNames); ++i)
+        {
+            WCHAR markerPath[MAX_PATH];
+            wcscpy_s(markerPath, MAX_PATH, baseDir);
+            wcscat_s(markerPath, MAX_PATH, L"\\");
+            wcscat_s(markerPath, MAX_PATH, kMarkerNames[i]);
+
+            HANDLE hFile = CreateFileW(
+                markerPath,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr);
+
+            if (hFile == INVALID_HANDLE_VALUE)
+            {
+                continue;
+            }
+
+            char buf[256] = {};
+            DWORD bytesRead = 0;
+            ReadFile(hFile, buf, sizeof(buf) - 1, &bytesRead, nullptr);
+            CloseHandle(hFile);
+            buf[bytesRead] = '\0';
+
+            if (strstr(buf, "stopped=1") != nullptr)
+            {
+                _LogInfo(L"Portable mode stopped flag detected, not starting service");
+                return FALSE;
+            }
+            // 标记文件已找到并读完：新名存在时不再回看旧名，否则一个陈旧的
+            // wind_portable_mode 会盖过新名里刚被清掉的 stopped 标志。
+            break;
+        }
+    }
+
+    WCHAR exePath[MAX_PATH];
+    wcscpy_s(exePath, MAX_PATH, baseDir);
+    wcscat_s(exePath, MAX_PATH, L"\\");
+    wcscat_s(exePath, MAX_PATH, AURORA_SERVICE_EXE);
+
+    _LogDebug(L"Starting service: %s", exePath);
+
+    STARTUPINFOW si = { sizeof(STARTUPINFOW) };
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    PROCESS_INFORMATION pi = {};
+
+    // CREATE_NEW_CONSOLE: 独立控制台，不继承宿主进程的控制台
+    // CREATE_BREAKAWAY_FROM_JOB: 脱离宿主进程的 Job 对象（如 UWP 沙盒）
+    // CREATE_DEFAULT_ERROR_MODE: 使用系统默认错误模式
+    DWORD flags = CREATE_NEW_CONSOLE | CREATE_DEFAULT_ERROR_MODE;
+
+    // 尝试脱离 Job 对象（某些宿主进程可能不允许，失败后回退）
+    if (!CreateProcessW(exePath, nullptr, nullptr, nullptr, FALSE,
+        flags | CREATE_BREAKAWAY_FROM_JOB, nullptr, nullptr, &si, &pi))
+    {
+        // 回退：不使用 BREAKAWAY（部分进程可能限制此标志）
+        if (!CreateProcessW(exePath, nullptr, nullptr, nullptr, FALSE,
+            flags, nullptr, nullptr, &si, &pi))
+        {
+            _LogError(L"Failed to start service: error=%d", GetLastError());
+            return FALSE;
+        }
+    }
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    _LogInfo(L"Service started successfully");
+    return TRUE;
+}
+
+// ============================================================================
+// Connection management
+// ============================================================================
+
+BOOL CIPCClient::Connect()
+{
+    if (_hPipe != INVALID_HANDLE_VALUE)
+    {
+        _LogDebug(L"Already connected to pipe");
+        return TRUE;
+    }
+
+    if (!_ShouldAttemptOperation())
+    {
+        _LogDebug(L"Circuit breaker open, skipping connection attempt");
+        return FALSE;
+    }
+
+    _LogDebug(L"Connecting to Service (binary protocol)...");
+
+    DWORD lastError = ERROR_SUCCESS;
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+        if (!WaitNamedPipeW(PIPE_NAME, IPCConfig::CONNECT_TIMEOUT_MS))
+        {
+            DWORD error = GetLastError();
+            lastError = error;
+            if (error == ERROR_FILE_NOT_FOUND)
+            {
+                if (!_serviceStartAttempted)
+                {
+                    _serviceStartAttempted = TRUE;
+                    if (_StartService())
+                    {
+                        Sleep(500);
+                        continue;
+                    }
+                }
+                _LogDebug(L"Pipe not found, service not available");
+                break;
+            }
+            else if (error == ERROR_SEM_TIMEOUT)
+            {
+                _LogDebug(L"WaitNamedPipe timed out, attempt %d", attempt + 1);
+                continue;
+            }
+        }
+
+        _hPipe = CreateFileW(
+            PIPE_NAME,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED,
+            nullptr);
+
+        if (_hPipe != INVALID_HANDLE_VALUE)
+        {
+            // Use MESSAGE mode like Weasel for reliable message boundaries
+            DWORD mode = PIPE_READMODE_MESSAGE;
+            SetNamedPipeHandleState(_hPipe, &mode, nullptr, nullptr);
+
+            _LogInfo(L"Connected to Service (binary protocol v%d.%d)",
+                     PROTOCOL_VERSION >> 12, PROTOCOL_VERSION & 0xFFF);
+            _RecordSuccess();
+            _needsStateSync = TRUE;
+            _stateEstablished = FALSE;
+            _pipeWritten = FALSE;
+
+            return TRUE;
+        }
+
+        DWORD error = GetLastError();
+        lastError = error;
+        _LogDebug(L"Connection attempt %d failed: error=%d", attempt + 1, error);
+        if (error == ERROR_ACCESS_DENIED)
+        {
+            WindHostProcessInfo currentHost;
+            if (WindQueryCurrentProcessInfo(&currentHost))
+                WindLogHostProcessInfo(4, L"compat.ipc_connect_access_denied.current_host", currentHost);
+            WindLogForegroundProcessInfo(4, L"compat.ipc_connect_access_denied.foreground_host");
+        }
+
+        if (error == ERROR_PIPE_BUSY)
+        {
+            Sleep(50);
+            continue;
+        }
+
+        break;
+    }
+
+    // 管道忙在服务就绪时是 N 个宿主 × 多次重试的常态，不按 ERROR 刷屏。
+    if (lastError == ERROR_PIPE_BUSY)
+        _LogInfo(L"Failed to connect to Service: pipe busy (pipe=%s)", PIPE_NAME);
+    else
+        _LogError(L"Failed to connect to Service (pipe=%s, lastErr=%d)", PIPE_NAME, GetLastError());
+    {
+        WindHostProcessInfo currentHost;
+        if (WindQueryCurrentProcessInfo(&currentHost))
+            WindLogHostProcessInfo(4, L"compat.ipc_connect_failed.current_host", currentHost);
+        WindLogForegroundProcessInfo(4, L"compat.ipc_connect_failed.foreground_host");
+    }
+    // SERVICE_READY 同步期间管道忙说明服务活着、只是监听实例被别的宿主抢走，
+    // 计入熔断会让重试在熔断窗口里全部空转。其余路径照旧计数。
+    if (!(_pipeBusyExempt && lastError == ERROR_PIPE_BUSY))
+        _RecordFailure();
+    return FALSE;
+}
+
+void CIPCClient::Disconnect()
+{
+    if (_hPipe != INVALID_HANDLE_VALUE)
+    {
+        CancelIo(_hPipe);
+        CloseHandle(_hPipe);
+        _hPipe = INVALID_HANDLE_VALUE;
+        _stateEstablished = FALSE;
+        _LogDebug(L"Disconnected from Service");
+    }
+}
+
+BOOL CIPCClient::DiscardStaleConnection()
+{
+    if (_hPipe == INVALID_HANDLE_VALUE)
+        return FALSE;
+    // 对端进程退出后客户端句柄不会自己失效，只有读写才暴露；Peek 不消费数据，活连接上恒成功。
+    DWORD avail = 0;
+    if (PeekNamedPipe(_hPipe, nullptr, 0, nullptr, &avail, nullptr))
+        return FALSE;
+    _LogInfo(L"Main pipe stale (peek err=%d), dropping old connection", GetLastError());
+    Disconnect();
+    return TRUE;
+}
+
+// ============================================================================
+// Binary message sending
+// ============================================================================
+
+void CIPCClient::_DrainStaleData()
+{
+    if (_hPipe == INVALID_HANDLE_VALUE)
+        return;
+
+    DWORD avail = 0;
+    if (!PeekNamedPipe(_hPipe, nullptr, 0, nullptr, &avail, nullptr) || avail == 0)
+        return;
+
+    // Stale bytes = a late response from a previous timed-out request. If left in
+    // the pipe, the next ReceiveResponse would consume it as the reply to the NEW
+    // request, shifting every subsequent response off by one (symptom: space needs
+    // a second press to commit, persisting until the connection is rebuilt).
+    _LogError(L"Stale response data in pipe before send (%d bytes), draining", avail);
+
+    for (int drained = 0; drained < 16; drained++)
+    {
+        std::vector<uint8_t> discard(IPCConfig::PIPE_BUFFER_SIZE);
+        DWORD bytesRead = 0;
+        if (!_ReadWithTimeout(discard.data(), static_cast<DWORD>(discard.size()), &bytesRead, 50))
+        {
+            _LogError(L"Drain read failed, disconnecting to reset pipe");
+            Disconnect();
+            return;
+        }
+
+        if (!PeekNamedPipe(_hPipe, nullptr, 0, nullptr, &avail, nullptr))
+        {
+            Disconnect();
+            return;
+        }
+        if (avail == 0)
+        {
+            _LogInfo(L"Drained %d stale message(s) from pipe", drained + 1);
+            return;
+        }
+    }
+
+    // Still data after the drain cap: pathological state, hard-reset the connection.
+    _LogError(L"Pipe still has %d stale bytes after drain cap, disconnecting", avail);
+    Disconnect();
+}
+
+// 写管道失败的错误码是否表示对端已关闭（服务进程退出 / 重启）。232 是服务端句柄已关、
+// 客户端句柄仍开着时 WriteFile 的典型返回。
+static bool _IsPeerGoneError(DWORD error)
+{
+    return error == ERROR_NO_DATA || error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED;
+}
+
+BOOL CIPCClient::_SendBinaryMessage(uint16_t command, const void* payload, uint32_t payloadSize, bool async)
+{
+    // A late response from a previous timed-out request must never be paired with
+    // this new request — drain (or reset the connection) before sending.
+    _DrainStaleData();
+    if (_hPipe == INVALID_HANDLE_VALUE && !Connect())
+    {
+        return FALSE;
+    }
+
+    // Build header
+    IpcHeader header;
+    header.version = async ? (PROTOCOL_VERSION | ASYNC_FLAG) : PROTOCOL_VERSION;
+    header.command = command;
+    header.length = payloadSize;
+
+    // In MESSAGE mode, we must write header + payload as a single message
+    // Combine into a single buffer for atomic write
+    std::vector<uint8_t> buffer(sizeof(header) + payloadSize);
+    memcpy(buffer.data(), &header, sizeof(header));
+    if (payloadSize > 0 && payload != nullptr)
+    {
+        memcpy(buffer.data() + sizeof(header), payload, payloadSize);
+    }
+
+    // Write complete message in one call
+    const BOOL reusedPipe = _pipeWritten;
+    BOOL written = _WriteWithTimeout(buffer.data(), static_cast<DWORD>(buffer.size()), IPCConfig::WRITE_TIMEOUT_MS);
+
+    // 用过的连接写失败且对端已断：多半是服务端重启留下的陈旧句柄。消息一个字节都没进管道，
+    // 重连后重写一次是安全的（同步请求的回包也只会来自新连接）。这次失败不代表服务不可用，
+    // 不计入熔断；重连失败由 Connect 自己计数。
+    if (!written && reusedPipe && _IsPeerGoneError(_lastWriteError))
+    {
+        const DWORD staleError = _lastWriteError;
+        Disconnect();
+        if (!Connect())
+        {
+            AURORA_LOG_WARN_FMT(L"Stale pipe (err=%lu), reconnect failed cmd=0x%04X", staleError, command);
+            return FALSE;
+        }
+        written = _WriteWithTimeout(buffer.data(), static_cast<DWORD>(buffer.size()), IPCConfig::WRITE_TIMEOUT_MS);
+        if (written)
+            _LogInfo(L"Stale pipe (err=%lu), reconnected and resent cmd=0x%04X", staleError, command);
+        else
+            AURORA_LOG_WARN_FMT(L"Stale pipe (err=%lu), resend failed cmd=0x%04X", staleError, command);
+    }
+
+    if (!written)
+    {
+        _LogError(L"Failed to write message");
+        _RecordFailure();
+        Disconnect();
+        return FALSE;
+    }
+
+    _pipeWritten = TRUE;
+    _RecordSuccess();
+    return TRUE;
+}
+
+// ============================================================================
+// Message sending
+// ============================================================================
+
+BOOL CIPCClient::SendKeyEvent(uint32_t keyCode, uint32_t scanCode, uint32_t modifiers, uint8_t eventType,
+                              uint8_t toggles, uint16_t eventSeq, uint16_t prevChar)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        _LogDebug(L"Circuit open, skipping key event");
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    KeyPayload payload;
+    payload.keyCode = keyCode;
+    payload.scanCode = scanCode;
+    payload.modifiers = modifiers;
+    payload.eventType = eventType;
+    payload.toggles = toggles;
+    payload.eventSeq = eventSeq;
+    payload.prevChar = prevChar;
+
+    _LogDebug(L"Sending key event: keyCode=0x%X, mods=0x%X, type=%d, toggles=0x%X, seq=%d, prevChar=0x%X",
+              keyCode, modifiers, eventType, toggles, eventSeq, prevChar);
+
+    if (!_SendBinaryMessage(CMD_KEY_EVENT, &payload, sizeof(payload)))
+        return FALSE;
+    // 按键已在本连接往来（含陈旧句柄自愈后的新连接）：之后的过期重试不得再发 IME_ACTIVATED。
+    _stateEstablished = TRUE;
+    return TRUE;
+}
+
+BOOL CIPCClient::SendCommitRequest(const uint8_t* payload, uint32_t payloadSize)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        _LogDebug(L"Circuit open, skipping commit request");
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    _LogDebug(L"Sending commit request: payloadSize=%d", payloadSize);
+
+    return _SendBinaryMessage(CMD_COMMIT_REQUEST, payload, payloadSize);
+}
+
+BOOL CIPCClient::SendCaretUpdate(int x, int y, int height, int compositionStartX, int compositionStartY,
+                                 int source,
+                                 int compRectLeft, int compRectTop, int compRectRight, int compRectBottom)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    CaretPayloadV3 payload;
+    payload.caret.x = x;
+    payload.caret.y = y;
+    payload.caret.height = height;
+    payload.caret.compositionStartX = compositionStartX;
+    payload.caret.compositionStartY = compositionStartY;
+    payload.source = source;
+    payload.compRectLeft = compRectLeft;
+    payload.compRectTop = compRectTop;
+    payload.compRectRight = compRectRight;
+    payload.compRectBottom = compRectBottom;
+
+    // 组合矩形单独打一行：它是探针阶段的观察对象，与 caret 混在一行会被 caret 的高频刷屏淹没。
+    // 四值全 0 时不打——那只表示本帧没有组合（或没取到），不是异常。
+    if (compRectLeft != 0 || compRectTop != 0 || compRectRight != 0 || compRectBottom != 0)
+    {
+        _LogDebug(L"  compRect=(%d,%d,%d,%d) w=%d h=%d", compRectLeft, compRectTop, compRectRight,
+                  compRectBottom, compRectRight - compRectLeft, compRectBottom - compRectTop);
+    }
+
+    _LogDebug(L"Sending caret update (async): x=%d, y=%d, h=%d, compStart=(%d,%d) src=%d", x, y, height,
+              compositionStartX, compositionStartY, source);
+
+    // Send async - no response needed for caret updates
+    return _SendBinaryMessage(CMD_CARET_UPDATE, &payload, sizeof(payload), true /* async */);
+}
+
+BOOL CIPCClient::SendSelectionChanged(uint16_t prevChar)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    SelectionChangedPayload payload;
+    payload.prevChar = prevChar;
+    payload.reserved = 0;
+
+    _LogDebug(L"Sending selection changed (async): prevChar=0x%X", prevChar);
+
+    return _SendBinaryMessage(CMD_SELECTION_CHANGED, &payload, sizeof(payload), true /* async */);
+}
+
+BOOL CIPCClient::SendFocusLost(uint8_t reason)
+{
+    if (!IsConnected())
+    {
+        return FALSE;
+    }
+
+    // Carry the client token: the service discards a focus_lost whose token is no longer the
+    // active one. Without it, this message — which OnKillThreadFocus emits ~100ms after the
+    // DocMgr-level focus loss — lands after the *next* host's focus_gained and clears the
+    // activation that host just established (toolbar flashes on, then hides).
+    //
+    // reason 决定服务端清哪些状态：THREAD 清激活态、DOC_CHANGED 只清输入态、
+    // CTX_LOST 只隐工具栏（详见 BinaryProtocol.h 的 FOCUS_LOST_REASON_* 注释）。
+    FocusLostPayload payload;
+    payload.clientToken = _clientToken;
+    payload.reason = reason;
+
+    _LogDebug(L"Sending focus_lost (async): token=0x%016llX reason=%u",
+              (unsigned long long)_clientToken, (unsigned)reason);
+    // Send async - no response needed for focus lost
+    return _SendBinaryMessage(CMD_FOCUS_LOST, &payload, sizeof(payload), true /* async */);
+}
+
+BOOL CIPCClient::SendCaretPending()
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    _LogDebug(L"Sending caret_pending (async): composition just started, awaiting reflow");
+    return _SendBinaryMessage(CMD_CARET_PENDING, nullptr, 0, true /* async */);
+}
+
+BOOL CIPCClient::SendCaretProbe(int x, int y, int height, int compositionStartX, int compositionStartY,
+                                int source)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    CaretPayloadV2 payload;
+    payload.caret.x = x;
+    payload.caret.y = y;
+    payload.caret.height = height;
+    payload.caret.compositionStartX = compositionStartX;
+    payload.caret.compositionStartY = compositionStartY;
+    payload.source = source;
+
+    _LogDebug(L"Sending caret probe (async): x=%d, y=%d, h=%d, compStart=(%d,%d) src=%d",
+              x, y, height, compositionStartX, compositionStartY, source);
+    return _SendBinaryMessage(CMD_CARET_PROBE, &payload, sizeof(payload), true /* async */);
+}
+
+BOOL CIPCClient::SendCompositionTerminated()
+{
+    if (!IsConnected())
+    {
+        return FALSE;
+    }
+
+    _LogDebug(L"Sending composition_terminated (async)");
+    // Send async - no response needed for composition terminated
+    return _SendBinaryMessage(CMD_COMPOSITION_TERMINATED, nullptr, 0, true /* async */);
+}
+
+// 把一个宽字符串作为「u32 长度 + UTF-8」变长段追加到 frame（nullptr / 空 = len 0）。
+static void _AppendUtf8Section(std::vector<uint8_t>& frame, const wchar_t* text)
+{
+    std::string utf8;
+    if (text != nullptr && text[0] != L'\0')
+    {
+        int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+        if (n > 1) // n 含结尾 NUL
+        {
+            utf8.resize((size_t)(n - 1));
+            WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8.data(), n, nullptr, nullptr);
+        }
+    }
+    const uint32_t len = (uint32_t)utf8.size();
+    frame.insert(frame.end(), (const uint8_t*)&len, (const uint8_t*)&len + sizeof(len));
+    frame.insert(frame.end(), utf8.begin(), utf8.end());
+}
+
+BOOL CIPCClient::SendFocusGained(int caretX, int caretY, int caretHeight, UINT64 inputScopeMask,
+                                  bool disabled, uint8_t reason, int caretSource,
+                                  const wchar_t* windowClass, const wchar_t* windowTitle)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    _LogDebug(L"Sending focus_gained (sync) with caret: x=%d, y=%d, h=%d, src=%d, inputScope=0x%016llX, token=0x%016llX, disabled=%d, reason=%u",
+              caretX, caretY, caretHeight, caretSource, (unsigned long long)inputScopeMask,
+              (unsigned long long)_clientToken, disabled ? 1 : 0, (unsigned)reason);
+
+    FocusGainedPayload payload = {};
+    payload.caret.x = caretX;
+    payload.caret.y = caretY;
+    payload.caret.height = caretHeight;
+    payload.clientToken = _clientToken;
+    payload.inputScopeMask = inputScopeMask;
+    payload.disabled = disabled ? 1 : 0;
+    payload.reason = reason;
+    // CARET_SRC_* 值域 0~7，压进 1 字节。越界值（不该出现）钳到 UNKNOWN 而不是截断，
+    // 免得高位被切掉后恰好落在某个**有效**来源上，把「未知」伪装成「可信」。
+    // ⚠ 上界跟着枚举走：写死成某个中间值，新增来源就会被这里静默钳成 UNKNOWN。
+    payload.caretSource = (caretSource >= 0 && caretSource <= CARET_SRC_PRE_REFLOW)
+                              ? (uint8_t)caretSource
+                              : (uint8_t)CARET_SRC_UNKNOWN;
+
+    // 同步发送（首次按键模式竞态根治，见 server_handler.go::CmdFocusGained 注释）：
+    // Go 端在响应里回传权威模式（仅读内存两字段，无等待 / 无回调进本进程 → 无死锁可能），
+    // 本调用在 OnSetFocus 内同步拿到模式并立即写入 _bChineseMode/_bFullWidth，使首个
+    // OnTestKeyDown 之前模式必然就绪，消除"切过来首键上屏英文"。
+    // 重型 HandleFocusGained 仍由 Go 在写响应之后异步执行，宿主 UI 线程不为重活阻塞。
+    // 拼上三个变长段：[定长 39][bundleIdLen=0][windowClassLen][windowClass][windowTitleLen][windowTitle]。
+    // bundleIdLen 的 0 是**必须发的占位**，不是冗余：服务端按顺序走段，少了它窗口类段
+    // 的偏移就与 macOS 不一致，而逐段兼容的解码不会报错、只会解出垃圾。
+    // 标题段同理恒发（未推开采集时 len=0）；旧服务端不认第三段，按长度兼容直接忽略。
+    std::vector<uint8_t> frame(sizeof(payload));
+    memcpy(frame.data(), &payload, sizeof(payload));
+    const uint32_t kNoBundleId = 0;
+    frame.insert(frame.end(), (const uint8_t*)&kNoBundleId,
+                 (const uint8_t*)&kNoBundleId + sizeof(kNoBundleId));
+    _AppendUtf8Section(frame, windowClass);
+    _AppendUtf8Section(frame, windowTitle);
+
+    if (!_SendBinaryMessage(CMD_FOCUS_GAINED, frame.data(), (uint32_t)frame.size(), false /* sync */))
+    {
+        return FALSE;
+    }
+    _stateEstablished = TRUE;
+
+    ServiceResponse response;
+    if (ReceiveResponse(response))
+    {
+        // 响应载荷为 CMD_MODE_PUSH（4 字节 flags），_ParseResponse 已填好 chineseMode/statusFlags。
+        // 复用模式回调（仅 InterlockedExchange 两个标志位，无 COM 访问），在 TSF 线程调用安全。
+        EnterCriticalSection(&_asyncLock);
+        ModePushCallback mpCallback = _modePushCallback;
+        LeaveCriticalSection(&_asyncLock);
+        if (mpCallback)
+        {
+            mpCallback(response.IsChineseMode(), response.IsFullWidth(), response.IsChinesePunct());
+        }
+    }
+    return TRUE;
+}
+
+BOOL CIPCClient::SendInputStateReport(uint32_t pid, bool disabled, uint8_t reason, uint64_t inputScopeMask)
+{
+    if (!IsConnected())
+    {
+        return FALSE;
+    }
+
+    _LogDebug(L"Sending input_state_report (async): pid=%u disabled=%d reason=%u inputScope=0x%016llX",
+              pid, disabled ? 1 : 0, (unsigned)reason, (unsigned long long)inputScopeMask);
+
+    InputStateReportPayload payload = {};
+    payload.pid = pid;
+    payload.disabled = disabled ? 1 : 0;
+    payload.reason = reason;
+    payload.inputScopeMask = inputScopeMask;
+
+    // Async fire-and-forget push, mirroring SendCompositionTerminated/SendIMEDeactivated:
+    // this is a diagnostics-only notification, no response expected.
+    return _SendBinaryMessage(CMD_INPUT_STATE_REPORT, &payload, sizeof(payload), true /* async */);
+}
+
+// UTF-16 → UTF-8，用于诊断快照的变长类名段。失败/空串一律产出空段（诊断数据缺一格
+// 也要能发出去，见 Rust 侧 DiagSnapshotPayload::from_bytes 对截断的容忍）。
+static std::string _Utf16ToUtf8(const std::wstring& w)
+{
+    if (w.empty())
+        return std::string();
+    int need = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    if (need <= 0)
+        return std::string();
+    std::string out((size_t)need, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), out.data(), need, nullptr, nullptr);
+    return out;
+}
+
+BOOL CIPCClient::SendDiagSnapshot(const DiagSnapshotHeader& head,
+                                  const std::wstring& focusClass,
+                                  const std::wstring& rootClass,
+                                  const std::wstring& fgClass)
+{
+    if (!IsConnected())
+    {
+        return FALSE;
+    }
+
+    // 定长头 + 三段 `len u16 LE + UTF-8`。手写拼包（含变长区，无法用单个 struct 表达），
+    // 字段布局以 DiagSnapshotHeader 的 static_assert 与 Rust 的布局冻结测试为准。
+    std::vector<uint8_t> buf;
+    buf.resize(sizeof(DiagSnapshotHeader));
+    memcpy(buf.data(), &head, sizeof(DiagSnapshotHeader));
+
+    const std::wstring* classes[3] = { &focusClass, &rootClass, &fgClass };
+    for (const std::wstring* w : classes)
+    {
+        std::string utf8 = _Utf16ToUtf8(*w);
+        if (utf8.size() > 0xFFFF)
+            utf8.resize(0xFFFF); // 长度前缀是 u16；类名不可能到这个量级，纯防御
+        uint16_t len = (uint16_t)utf8.size();
+        buf.push_back((uint8_t)(len & 0xFF));
+        buf.push_back((uint8_t)(len >> 8));
+        buf.insert(buf.end(), utf8.begin(), utf8.end());
+    }
+
+    // 纯观测数据，异步 fire-and-forget（对齐 SendInputStateReport）：不等响应，
+    // 也绝不能让它出现在任何同步等待路径上。
+    return _SendBinaryMessage(CMD_DIAG_SNAPSHOT, buf.data(), (DWORD)buf.size(), true /* async */);
+}
+
+BOOL CIPCClient::SendIMEDeactivated()
+{
+    if (!IsConnected())
+    {
+        return FALSE;
+    }
+
+    // Token carried for the same ordering reason as SendFocusLost (both are fire-and-forget).
+    ClientTokenPayload payload;
+    payload.clientToken = _clientToken;
+
+    _LogInfo(L"Sending ime_deactivated (async): token=0x%016llX", (unsigned long long)_clientToken);
+    // Send async - no response needed for IME deactivated
+    return _SendBinaryMessage(CMD_IME_DEACTIVATED, &payload, sizeof(payload), true /* async */);
+}
+
+BOOL CIPCClient::SendIMEActivated()
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    IMEActivatedPayload payload = {};
+    payload.clientToken = _clientToken;
+    _LogInfo(L"Sending ime_activated (async): token=0x%016llX", (unsigned long long)_clientToken);
+    // 异步化（见 BinaryProtocol.h::CMD_ACTIVATION_STATUS_PUSH 注释）：
+    // Go 端 server.go::handleClient 收到 IME_ACTIVATED 立即回 Ack，HandleIMEActivated
+    // 在 Ack 之后才执行，结果通过 push pipe 回送 CMD_ACTIVATION_STATUS_PUSH。
+    if (!_SendBinaryMessage(CMD_IME_ACTIVATED, &payload, sizeof(payload), true /* async */))
+        return FALSE;
+    _stateEstablished = TRUE;
+    return TRUE;
+}
+
+BOOL CIPCClient::SendHostRenderRequest(ServiceResponse& response)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected())
+    {
+        return FALSE;
+    }
+
+    _LogInfo(L"Sending host_render_request");
+    if (!_SendBinaryMessage(CMD_HOST_RENDER_REQUEST, nullptr, 0))
+    {
+        return FALSE;
+    }
+
+    return ReceiveResponse(response);
+}
+
+BOOL CIPCClient::SendModeNotify(bool chineseMode, bool clearInput)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    // Build status flags
+    uint32_t flags = 0;
+    if (chineseMode) flags |= STATUS_CHINESE_MODE;
+    if (clearInput) flags |= STATUS_MODE_CHANGED; // Reuse this flag to indicate input should be cleared
+
+    _LogInfo(L"Sending mode_notify (async): chineseMode=%d, clearInput=%d", chineseMode, clearInput);
+
+    // Send async - no response needed for mode notification
+    return _SendBinaryMessage(CMD_MODE_NOTIFY, &flags, sizeof(flags), true /* async */);
+}
+
+BOOL CIPCClient::SendSystemModeSwitch(bool chineseMode, ModeSwitchSource source, bool ctrlHeld,
+                                      ServiceResponse& response)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    // Build status flags (same format as ModeNotify)，高 4 位带来源，仅供服务端日志。
+    uint32_t flags = 0;
+    if (chineseMode) flags |= STATUS_CHINESE_MODE;
+    flags |= static_cast<uint32_t>(source) << MODE_SWITCH_SOURCE_SHIFT;
+    if (ctrlHeld) flags |= MODE_SWITCH_CTRL_HELD;
+
+    _LogInfo(L"Sending system_mode_switch (sync): chineseMode=%d, source=%u, ctrlHeld=%d",
+             chineseMode, static_cast<uint32_t>(source), ctrlHeld ? 1 : 0);
+
+    // Send sync - wait for response (CommitText or StatusUpdate)
+    if (!_SendBinaryMessage(CMD_SYSTEM_MODE_SWITCH, &flags, sizeof(flags)))
+    {
+        return FALSE;
+    }
+
+    return ReceiveResponse(response);
+}
+
+BOOL CIPCClient::SendToggleMode(ServiceResponse& response)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    _LogInfo(L"Sending toggle_mode (sync)");
+
+    // Send sync - wait for StatusUpdate response (carries full state + iconLabel)
+    if (!_SendBinaryMessage(CMD_TOGGLE_MODE, nullptr, 0))
+    {
+        return FALSE;
+    }
+
+    // Receive response
+    return ReceiveResponse(response);
+}
+
+// ============================================================================
+// Message receiving
+// ============================================================================
+
+BOOL CIPCClient::_ReceiveBinaryMessage(IpcHeader& header, std::vector<uint8_t>& payload)
+{
+    // In MESSAGE mode, read the complete message at once
+    std::vector<uint8_t> messageBuffer(IPCConfig::PIPE_BUFFER_SIZE);
+    DWORD bytesRead;
+
+    if (!_ReadWithTimeout(messageBuffer.data(), static_cast<DWORD>(messageBuffer.size()), &bytesRead, IPCConfig::READ_TIMEOUT_MS))
+    {
+        _LogError(L"Failed to read message");
+        _RecordFailure();
+        Disconnect();
+        return FALSE;
+    }
+
+    // Check if we have enough data for a header
+    if (bytesRead < sizeof(IpcHeader))
+    {
+        _LogError(L"Message too short: got %d bytes", bytesRead);
+        _RecordFailure();
+        Disconnect();
+        return FALSE;
+    }
+
+    // Parse header from the message buffer
+    memcpy(&header, messageBuffer.data(), sizeof(IpcHeader));
+
+    // Validate header
+    if ((header.version >> 12) != (PROTOCOL_VERSION >> 12))
+    {
+        _LogError(L"Protocol version mismatch: got 0x%04X, expected 0x%04X", header.version, PROTOCOL_VERSION);
+        _RecordFailure();
+        Disconnect(); // stream is untrustworthy — reset so no misaligned data survives
+        return FALSE;
+    }
+
+    if (header.length > IPCConfig::MAX_MESSAGE_SIZE)
+    {
+        _LogError(L"Invalid payload length: %d", header.length);
+        _RecordFailure();
+        Disconnect(); // stream is untrustworthy — reset so no misaligned data survives
+        return FALSE;
+    }
+
+    _LogDebug(L"Received header: cmd=0x%04X, len=%d", header.command, header.length);
+
+    // Check if the message contains the expected payload
+    DWORD expectedSize = sizeof(IpcHeader) + header.length;
+    if (bytesRead < expectedSize)
+    {
+        _LogError(L"Incomplete message: got %d bytes, expected %d", bytesRead, expectedSize);
+        _RecordFailure();
+        Disconnect();
+        return FALSE;
+    }
+
+    // Extract payload from the message buffer
+    if (header.length > 0)
+    {
+        payload.assign(messageBuffer.begin() + sizeof(IpcHeader),
+                      messageBuffer.begin() + sizeof(IpcHeader) + header.length);
+    }
+    else
+    {
+        payload.clear();
+    }
+
+    _RecordSuccess();
+    return TRUE;
+}
+
+BOOL CIPCClient::ReceiveResponse(ServiceResponse& response)
+{
+    IpcHeader header;
+    std::vector<uint8_t> payload;
+
+    if (!_ReceiveBinaryMessage(header, payload))
+    {
+        return FALSE;
+    }
+
+    return _ParseResponse(header, payload, response);
+}
+
+BOOL CIPCClient::_ParseResponse(const IpcHeader& header, const std::vector<uint8_t>& payload, ServiceResponse& response)
+{
+    // Reset response
+    response = ServiceResponse();
+
+    switch (header.command)
+    {
+    case CMD_ACK:
+        response.type = ResponseType::Ack;
+        _LogDebug(L"Response: Ack");
+        break;
+
+    case CMD_MODE_PUSH:
+        // FOCUS_GAINED 同步响应：4 字节 flags（STATUS_CHINESE_MODE=bit0, STATUS_FULL_WIDTH=bit1）。
+        // 携带权威中英/全半角模式，供 SendFocusGained 在 OnSetFocus 内立即写入 _bChineseMode。
+        response.type = ResponseType::StatusUpdate;
+        if (payload.size() >= 4)
+        {
+            uint32_t flags = static_cast<uint32_t>(payload[0])
+                           | (static_cast<uint32_t>(payload[1]) << 8)
+                           | (static_cast<uint32_t>(payload[2]) << 16)
+                           | (static_cast<uint32_t>(payload[3]) << 24);
+            response.statusFlags = flags;
+            response.chineseMode = (flags & STATUS_CHINESE_MODE) != 0;
+        }
+        _LogDebug(L"Response: ModePush (focus sync) flags=0x%X chineseMode=%d",
+                  response.statusFlags, response.IsChineseMode());
+        break;
+
+    case CMD_PASS_THROUGH:
+        response.type = ResponseType::PassThrough;
+        _LogDebug(L"Response: PassThrough (key not handled)");
+        break;
+
+    case CMD_CONSUMED:
+        response.type = ResponseType::Consumed;
+        _LogDebug(L"Response: Consumed");
+        break;
+
+    case CMD_CLEAR_COMPOSITION:
+        response.type = ResponseType::ClearComposition;
+        _LogDebug(L"Response: ClearComposition");
+        break;
+
+    case CMD_CLEAR_THEN_PASS_THROUGH:
+        response.type = ResponseType::ClearCompositionThenPassThrough;
+        _LogDebug(L"Response: ClearCompositionThenPassThrough");
+        break;
+
+    case CMD_UIELEMENT_PAGE:
+        {
+            response.type = ResponseType::UiElementPage;
+            // 线上格式见 BinaryProtocol.h UIELEMENT_PAGE_HEADER_SIZE 处注释。
+            if (payload.size() < UIELEMENT_PAGE_HEADER_SIZE)
+            {
+                _LogError(L"UiElementPage payload too short (%zu)", payload.size());
+                return FALSE;
+            }
+            uint32_t count = 0;
+            memcpy(&response.uiSelected, payload.data() + 0, 4);
+            memcpy(&response.uiPageSize, payload.data() + 4, 4);
+            memcpy(&response.uiCurrentPage, payload.data() + 8, 4);
+            memcpy(&count, payload.data() + 12, 4);
+            if (response.uiPageSize == 0) response.uiPageSize = 1;
+            size_t offset = UIELEMENT_PAGE_HEADER_SIZE;
+            response.uiCandidates.reserve(count < 1024 ? count : 1024);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                if (payload.size() - offset < 2)
+                {
+                    _LogError(L"UiElementPage entry %u truncated", i);
+                    return FALSE;
+                }
+                uint16_t len = 0;
+                memcpy(&len, payload.data() + offset, 2);
+                offset += 2;
+                // 减法形式防 32 位加法回绕（同 CMD_COMMIT_TEXT 注释）。
+                if (len > payload.size() - offset)
+                {
+                    _LogError(L"UiElementPage entry %u text truncated", i);
+                    return FALSE;
+                }
+                response.uiCandidates.push_back(
+                    len > 0 ? _Utf8ToWide(reinterpret_cast<const char*>(payload.data() + offset), len)
+                            : std::wstring());
+                offset += len;
+            }
+            _LogDebug(L"Response: UiElementPage count=%u selected=%u pageSize=%u page=%u",
+                      count, response.uiSelected, response.uiPageSize, response.uiCurrentPage);
+        }
+        break;
+
+    case CMD_COMMIT_TEXT:
+        {
+            response.type = ResponseType::CommitText;
+
+            if (payload.size() < sizeof(CommitTextHeader))
+            {
+                _LogError(L"CommitText payload too short");
+                return FALSE;
+            }
+
+            const CommitTextHeader* commitHeader = reinterpret_cast<const CommitTextHeader*>(payload.data());
+            response.modeChanged = (commitHeader->flags & COMMIT_FLAG_MODE_CHANGED) != 0;
+            response.chineseMode = (commitHeader->flags & COMMIT_FLAG_CHINESE_MODE) != 0;
+            response.replacingHeld = (commitHeader->flags & COMMIT_FLAG_REPLACING_HELD) != 0;
+
+            // Extract text
+            // 边界检查统一用减法形式（len <= size - offset）：textLength 是对端可控的
+            // uint32，32 位构建下 offset + len 的加法会回绕绕过检查导致越界读。
+            // 前提 offset <= payload.size() 由上方 sizeof(CommitTextHeader) 守卫保证。
+            if (commitHeader->textLength > 0)
+            {
+                size_t textOffset = sizeof(CommitTextHeader);
+                if (commitHeader->textLength <= payload.size() - textOffset)
+                {
+                    response.text = _Utf8ToWide(
+                        reinterpret_cast<const char*>(payload.data() + textOffset),
+                        commitHeader->textLength);
+                }
+            }
+
+            // Extract new composition text (only if compositionLength > 0)
+            if ((commitHeader->flags & COMMIT_FLAG_HAS_NEW_COMPOSITION) && commitHeader->compositionLength > 0)
+            {
+                // 先验证 textLength 在界内再推进 offset——直接算
+                // sizeof(header) + textLength 的加法本身就可能回绕。
+                size_t compOffset = sizeof(CommitTextHeader);
+                if (commitHeader->textLength <= payload.size() - compOffset)
+                {
+                    compOffset += commitHeader->textLength;
+                    if (commitHeader->compositionLength <= payload.size() - compOffset)
+                    {
+                        response.newComposition = _Utf8ToWide(
+                            reinterpret_cast<const char*>(payload.data() + compOffset),
+                            commitHeader->compositionLength);
+                    }
+                }
+            }
+            // restartComposition = flag set, regardless of compositionLength
+            // (non-inline preedit sends flag=true + empty composition → placeholder restart)
+            response.restartComposition = (commitHeader->flags & COMMIT_FLAG_HAS_NEW_COMPOSITION) != 0;
+
+            _LogDebug(L"Response: CommitText textLen=%zu, modeChanged=%d, restartComp=%d, newCompLen=%zu",
+                      response.text.length(), response.modeChanged, response.restartComposition, response.newComposition.length());
+        }
+        break;
+
+    case CMD_UPDATE_COMPOSITION:
+        {
+            response.type = ResponseType::UpdateComposition;
+
+            if (payload.size() < sizeof(CompositionHeader))
+            {
+                _LogError(L"UpdateComposition payload too short");
+                return FALSE;
+            }
+
+            const CompositionHeader* compHeader = reinterpret_cast<const CompositionHeader*>(payload.data());
+            response.caretPos = compHeader->caretPos;
+
+            // Extract composition text
+            size_t textLength = payload.size() - sizeof(CompositionHeader);
+            if (textLength > 0)
+            {
+                response.composition = _Utf8ToWide(
+                    reinterpret_cast<const char*>(payload.data() + sizeof(CompositionHeader)),
+                    textLength);
+            }
+
+            _LogDebug(L"Response: UpdateComposition textLen=%zu, caret=%d",
+                      response.composition.length(), response.caretPos);
+        }
+        break;
+
+    case CMD_STATUS_UPDATE:
+        {
+            response.type = ResponseType::StatusUpdate;
+
+            if (payload.size() < sizeof(StatusHeader))
+            {
+                _LogError(L"StatusUpdate payload too short");
+                return FALSE;
+            }
+
+            const StatusHeader* statusHeader = reinterpret_cast<const StatusHeader*>(payload.data());
+            response.statusFlags = statusHeader->flags;
+            response.chineseMode = (statusHeader->flags & STATUS_CHINESE_MODE) != 0;
+
+            // Extract hotkeys
+            // 防溢出：keyDownCount+keyUpCount 用 uint64 累加（避免 uint32 加法回绕），
+            // 容量检查用除法形式（避免 count*4 在 32 位回绕）。hotkeysOffset<=size 由上方守卫保证。
+            size_t hotkeysOffset = sizeof(StatusHeader);
+            uint64_t totalHotkeys = (uint64_t)statusHeader->keyDownCount + statusHeader->keyUpCount;
+            bool hotkeysValid = totalHotkeys <= (payload.size() - hotkeysOffset) / sizeof(uint32_t);
+
+            if (hotkeysValid)
+            {
+                const uint32_t* hotkeys = reinterpret_cast<const uint32_t*>(payload.data() + hotkeysOffset);
+
+                for (uint32_t i = 0; i < statusHeader->keyDownCount; i++)
+                {
+                    response.keyDownHotkeys.push_back(hotkeys[i]);
+                }
+
+                for (uint32_t i = 0; i < statusHeader->keyUpCount; i++)
+                {
+                    response.keyUpHotkeys.push_back(hotkeys[statusHeader->keyDownCount + i]);
+                }
+            }
+
+            // Extract trailing icon label (UTF-8, after StatusHeader + hotkeys)
+            // hotkeys 无效时不解析尾部（structuredSize 取 size() 使下面的 > 判定为假）。
+            size_t structuredSize = hotkeysValid
+                ? hotkeysOffset + (size_t)totalHotkeys * sizeof(uint32_t)
+                : payload.size();
+            if (payload.size() > structuredSize)
+            {
+                std::string utf8Label(payload.begin() + structuredSize, payload.end());
+                int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8Label.c_str(), (int)utf8Label.size(), NULL, 0);
+                if (wideLen > 0)
+                {
+                    response.iconLabel.resize(wideLen);
+                    MultiByteToWideChar(CP_UTF8, 0, utf8Label.c_str(), (int)utf8Label.size(), &response.iconLabel[0], wideLen);
+                }
+            }
+
+            _LogDebug(L"Response: StatusUpdate mode=%d, width=%d, punct=%d, toolbar=%d, keyDown=%d, keyUp=%d, label=%ls",
+                      response.IsChineseMode(), response.IsFullWidth(), response.IsChinesePunct(),
+                      response.IsToolbarVisible(), (int)response.keyDownHotkeys.size(), (int)response.keyUpHotkeys.size(),
+                      response.iconLabel.empty() ? L"(none)" : response.iconLabel.c_str());
+        }
+        break;
+
+    // 注：CMD_SYNC_HOTKEYS（0x0301）曾在这里有一个与 CMD_STATUS_UPDATE 同形的分支。
+    // 它是 Go 时代的死码——Rust 侧从未有过发送点；而它的码位 0x0301 与上行
+    // CMD_CARET_UPDATE 相同，只是靠方向区分撑住。热键白名单现在由
+    // CMD_STATUS_UPDATE / CMD_ACTIVATION_STATUS_PUSH 两条完整承载，本分支已删除，
+    // 常量一并从 BinaryProtocol.h 移除。
+
+    case CMD_ACTIVATION_STATUS_PUSH:
+        {
+            // Activation status push: IMEActivated / FocusGained 异步化后的状态回包,
+            // 载荷格式与 CMD_STATUS_UPDATE 一致(含 hotkeys + hostRenderAvail + iconLabel)。
+            response.type = ResponseType::StatusUpdate;
+
+            if (payload.size() < sizeof(StatusHeader))
+            {
+                _LogError(L"ActivationStatusPush payload too short");
+                return FALSE;
+            }
+
+            const StatusHeader* statusHeader = reinterpret_cast<const StatusHeader*>(payload.data());
+            response.statusFlags = statusHeader->flags;
+            response.chineseMode = (statusHeader->flags & STATUS_CHINESE_MODE) != 0;
+
+            // Extract hotkeys（防溢出，同 CMD_STATUS_UPDATE 注释）
+            size_t hotkeysOffset = sizeof(StatusHeader);
+            uint64_t totalHotkeys = (uint64_t)statusHeader->keyDownCount + statusHeader->keyUpCount;
+            bool hotkeysValid = totalHotkeys <= (payload.size() - hotkeysOffset) / sizeof(uint32_t);
+
+            if (hotkeysValid)
+            {
+                const uint32_t* hotkeys = reinterpret_cast<const uint32_t*>(payload.data() + hotkeysOffset);
+
+                for (uint32_t i = 0; i < statusHeader->keyDownCount; i++)
+                {
+                    response.keyDownHotkeys.push_back(hotkeys[i]);
+                }
+
+                for (uint32_t i = 0; i < statusHeader->keyUpCount; i++)
+                {
+                    response.keyUpHotkeys.push_back(hotkeys[statusHeader->keyDownCount + i]);
+                }
+            }
+
+            // Extract trailing icon label (UTF-8, after StatusHeader + hotkeys)
+            size_t structuredSize = hotkeysValid
+                ? hotkeysOffset + (size_t)totalHotkeys * sizeof(uint32_t)
+                : payload.size();
+            if (payload.size() > structuredSize)
+            {
+                std::string utf8Label(payload.begin() + structuredSize, payload.end());
+                int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8Label.c_str(), (int)utf8Label.size(), NULL, 0);
+                if (wideLen > 0)
+                {
+                    response.iconLabel.resize(wideLen);
+                    MultiByteToWideChar(CP_UTF8, 0, utf8Label.c_str(), (int)utf8Label.size(), &response.iconLabel[0], wideLen);
+                }
+            }
+
+            _LogInfo(L"Response: ActivationStatusPush mode=%d, width=%d, punct=%d, toolbar=%d, hostRender=%d, keyDown=%d, keyUp=%d, label=%ls",
+                     response.IsChineseMode(), response.IsFullWidth(), response.IsChinesePunct(),
+                     response.IsToolbarVisible(), response.IsHostRenderAvailable(),
+                     (int)response.keyDownHotkeys.size(), (int)response.keyUpHotkeys.size(),
+                     response.iconLabel.empty() ? L"(none)" : response.iconLabel.c_str());
+        }
+        break;
+
+    case CMD_STATE_PUSH:
+        {
+            // State push from Go service (proactive state broadcast)
+            // Format is same as StatusUpdate
+            response.type = ResponseType::StatusUpdate;
+
+            if (payload.size() < sizeof(StatusHeader))
+            {
+                _LogError(L"StatePush payload too short");
+                return FALSE;
+            }
+
+            const StatusHeader* statusHeader = reinterpret_cast<const StatusHeader*>(payload.data());
+            response.statusFlags = statusHeader->flags;
+            response.chineseMode = (statusHeader->flags & STATUS_CHINESE_MODE) != 0;
+
+            // Extract trailing icon label (UTF-8, after StatusHeader)
+            size_t structuredSize = sizeof(StatusHeader) +
+                (statusHeader->keyDownCount + statusHeader->keyUpCount) * sizeof(uint32_t);
+            if (payload.size() > structuredSize)
+            {
+                std::string utf8Label(payload.begin() + structuredSize, payload.end());
+                int wideLen = MultiByteToWideChar(CP_UTF8, 0, utf8Label.c_str(), (int)utf8Label.size(), NULL, 0);
+                if (wideLen > 0)
+                {
+                    response.iconLabel.resize(wideLen);
+                    MultiByteToWideChar(CP_UTF8, 0, utf8Label.c_str(), (int)utf8Label.size(), &response.iconLabel[0], wideLen);
+                }
+            }
+
+            _LogInfo(L"Response: StatePush mode=%d, width=%d, punct=%d, toolbar=%d, caps=%d, label=%ls",
+                     response.IsChineseMode(), response.IsFullWidth(), response.IsChinesePunct(),
+                     response.IsToolbarVisible(), response.IsCapsLock(),
+                     response.iconLabel.empty() ? L"(none)" : response.iconLabel.c_str());
+        }
+        break;
+
+    case CMD_COMMIT_RESULT:
+        {
+            // CommitResult uses same format as CommitText, but includes barrierSeq
+            response.type = ResponseType::CommitText; // Treat as CommitText for handling
+
+            if (payload.size() < sizeof(CommitResultPayload))
+            {
+                _LogError(L"CommitResult payload too short");
+                return FALSE;
+            }
+
+            const CommitResultPayload* resultPayload = reinterpret_cast<const CommitResultPayload*>(payload.data());
+            response.modeChanged = (resultPayload->flags & COMMIT_FLAG_MODE_CHANGED) != 0;
+            response.chineseMode = (resultPayload->flags & COMMIT_FLAG_CHINESE_MODE) != 0;
+
+            // Extract text
+            // 减法形式防 32 位加法回绕（同 CMD_COMMIT_TEXT 注释）。
+            if (resultPayload->textLength > 0)
+            {
+                size_t textOffset = sizeof(CommitResultPayload);
+                if (resultPayload->textLength <= payload.size() - textOffset)
+                {
+                    response.text = _Utf8ToWide(
+                        reinterpret_cast<const char*>(payload.data() + textOffset),
+                        resultPayload->textLength);
+                }
+            }
+
+            // Extract new composition
+            if ((resultPayload->flags & COMMIT_FLAG_HAS_NEW_COMPOSITION) && resultPayload->compositionLength > 0)
+            {
+                size_t compOffset = sizeof(CommitResultPayload);
+                if (resultPayload->textLength <= payload.size() - compOffset)
+                {
+                    compOffset += resultPayload->textLength;
+                    if (resultPayload->compositionLength <= payload.size() - compOffset)
+                    {
+                        response.newComposition = _Utf8ToWide(
+                            reinterpret_cast<const char*>(payload.data() + compOffset),
+                            resultPayload->compositionLength);
+                    }
+                }
+            }
+
+            _LogDebug(L"Response: CommitResult barrierSeq=%d, textLen=%zu, modeChanged=%d",
+                      resultPayload->barrierSeq, response.text.length(), response.modeChanged);
+        }
+        break;
+
+    case CMD_COMMIT_TEXT_WITH_CURSOR:
+        {
+            response.type = ResponseType::InsertTextWithCursor;
+            if (payload.size() < sizeof(CommitTextWithCursorPayload))
+            {
+                _LogError(L"CommitTextWithCursor payload too short");
+                return FALSE;
+            }
+            const CommitTextWithCursorPayload* p = reinterpret_cast<const CommitTextWithCursorPayload*>(payload.data());
+            response.cursorOffset = (int)p->cursorOffset;
+            if (p->textLength > 0)
+            {
+                // 减法形式防 32 位加法回绕（同 CMD_COMMIT_TEXT 注释）。
+                size_t textOffset = sizeof(CommitTextWithCursorPayload);
+                if (p->textLength <= payload.size() - textOffset)
+                {
+                    response.text = _Utf8ToWide(
+                        reinterpret_cast<const char*>(payload.data() + textOffset),
+                        p->textLength);
+                }
+            }
+            _LogDebug(L"Response: InsertTextWithCursor textLen=%zu, cursorOffset=%d",
+                      response.text.length(), response.cursorOffset);
+        }
+        break;
+
+    case CMD_MOVE_CURSOR:
+        {
+            response.type = ResponseType::MoveCursorRight;
+            // payload 缺失/过短仍按 1 格处理：跳出少移一格是可见的小错，整个不动是功能失灵。
+            if (payload.size() >= sizeof(MoveCursorPayload))
+            {
+                const MoveCursorPayload* p =
+                    reinterpret_cast<const MoveCursorPayload*>(payload.data());
+                response.moveCount = p->count > 0 ? p->count : 1;
+            }
+            _LogDebug(L"Response: MoveCursorRight count=%u", response.moveCount);
+        }
+        break;
+
+    case CMD_DELETE_PAIR:
+        {
+            response.type = ResponseType::DeletePair;
+            _LogDebug(L"Response: DeletePair");
+        }
+        break;
+
+    case CMD_REPLACE_BACKWARD:
+        {
+            response.type = ResponseType::ReplaceBackward;
+            if (payload.size() < sizeof(ReplaceBackwardPayload))
+            {
+                _LogError(L"ReplaceBackward payload too short");
+                return FALSE;
+            }
+            const ReplaceBackwardPayload* p = reinterpret_cast<const ReplaceBackwardPayload*>(payload.data());
+            response.replaceCount = (int)p->count;
+            if (p->textLength > 0)
+            {
+                // 减法形式防 32 位加法回绕（同 CMD_COMMIT_TEXT 注释）。
+                size_t textOffset = sizeof(ReplaceBackwardPayload);
+                if (p->textLength <= payload.size() - textOffset)
+                {
+                    response.text = _Utf8ToWide(
+                        reinterpret_cast<const char*>(payload.data() + textOffset),
+                        p->textLength);
+                }
+            }
+            _LogDebug(L"Response: ReplaceBackward count=%d, textLen=%zu", response.replaceCount, response.text.length());
+        }
+        break;
+
+    case CMD_HOLD_COMPOSITION:
+        {
+            response.type = ResponseType::HoldComposition;
+            if (payload.size() < sizeof(HoldCompositionPayload))
+            {
+                _LogError(L"HoldComposition payload too short");
+                return FALSE;
+            }
+            const HoldCompositionPayload* p =
+                reinterpret_cast<const HoldCompositionPayload*>(payload.data());
+            response.holdTimeoutMs = p->timeoutMs;
+            if (p->textLength > 0)
+            {
+                // 减法形式防 32 位加法回绕（同 CMD_REPLACE_BACKWARD 注释）。
+                size_t textOffset = sizeof(HoldCompositionPayload);
+                if (p->textLength <= payload.size() - textOffset)
+                {
+                    response.text = _Utf8ToWide(
+                        reinterpret_cast<const char*>(payload.data() + textOffset),
+                        p->textLength);
+                }
+            }
+            _LogDebug(L"Response: HoldComposition timeoutMs=%u, textLen=%zu",
+                      response.holdTimeoutMs, response.text.length());
+        }
+        break;
+
+    case CMD_COMMIT_AND_HOLD:
+        {
+            response.type = ResponseType::CommitAndHold;
+            if (payload.size() < sizeof(CommitAndHoldPayload))
+            {
+                _LogError(L"CommitAndHold payload too short");
+                return FALSE;
+            }
+            const CommitAndHoldPayload* p =
+                reinterpret_cast<const CommitAndHoldPayload*>(payload.data());
+            response.holdTimeoutMs = p->timeoutMs;
+            size_t commitOffset = sizeof(CommitAndHoldPayload);
+            if (p->commitLength > 0 && p->commitLength <= payload.size() - commitOffset)
+            {
+                response.text = _Utf8ToWide(
+                    reinterpret_cast<const char*>(payload.data() + commitOffset),
+                    p->commitLength);
+            }
+            size_t holdOffset = commitOffset + p->commitLength;
+            if (p->holdLength > 0 && holdOffset <= payload.size()
+                && p->holdLength <= payload.size() - holdOffset)
+            {
+                response.newComposition = _Utf8ToWide(
+                    reinterpret_cast<const char*>(payload.data() + holdOffset),
+                    p->holdLength);
+            }
+            _LogDebug(L"Response: CommitAndHold timeoutMs=%u commitLen=%zu holdLen=%zu",
+                      response.holdTimeoutMs, response.text.length(),
+                      response.newComposition.length());
+        }
+        break;
+
+    case CMD_COMMIT_THEN_DEFER:
+        {
+            response.type = ResponseType::CommitThenDefer;
+            if (payload.size() < sizeof(CommitThenDeferPayload))
+            {
+                _LogError(L"CommitThenDefer payload too short");
+                return FALSE;
+            }
+            const CommitThenDeferPayload* p =
+                reinterpret_cast<const CommitThenDeferPayload*>(payload.data());
+            response.holdTimeoutMs = p->timeoutMs;
+            size_t commitOffset = sizeof(CommitThenDeferPayload);
+            if (p->commitLength > 0 && p->commitLength <= payload.size() - commitOffset)
+            {
+                response.text = _Utf8ToWide(
+                    reinterpret_cast<const char*>(payload.data() + commitOffset),
+                    p->commitLength);
+            }
+            size_t deferOffset = commitOffset + p->commitLength;
+            if (p->deferLength > 0 && deferOffset <= payload.size()
+                && p->deferLength <= payload.size() - deferOffset)
+            {
+                response.newComposition = _Utf8ToWide(
+                    reinterpret_cast<const char*>(payload.data() + deferOffset),
+                    p->deferLength);
+            }
+            _LogDebug(L"Response: CommitThenDefer timeoutMs=%u commitLen=%zu deferLen=%zu",
+                      response.holdTimeoutMs, response.text.length(),
+                      response.newComposition.length());
+        }
+        break;
+
+    case CMD_HOST_RENDER_SETUP:
+        {
+            response.type = ResponseType::HostRenderSetup;
+
+            // Wire: instanceId(4) + entryCount(4) + entryCount × { HostRenderSetupEntryHeader(16) + shmName + eventName }.
+            if (payload.size() < 8)
+            {
+                _LogError(L"HostRenderSetup payload too short");
+                return FALSE;
+            }
+            uint32_t instanceId = 0;
+            memcpy(&instanceId, payload.data(), 4);
+            response.hostRenderInstanceId = instanceId;
+            uint32_t entryCount = 0;
+            memcpy(&entryCount, payload.data() + 4, 4);
+            size_t offset = 8;
+
+            for (uint32_t i = 0; i < entryCount; ++i)
+            {
+                if (payload.size() - offset < sizeof(HostRenderSetupEntryHeader))
+                {
+                    _LogError(L"HostRenderSetup entry header truncated");
+                    return FALSE;
+                }
+                const HostRenderSetupEntryHeader* eh =
+                    reinterpret_cast<const HostRenderSetupEntryHeader*>(payload.data() + offset);
+                offset += sizeof(HostRenderSetupEntryHeader);
+
+                HostRenderSetupInfo info;
+                info.windowKind = eh->windowKind;
+                info.maxBufferSize = eh->maxBufferSize;
+                // 减法形式防 32 位加法回绕；offset <= payload.size() 由上方守卫保证。
+                if (eh->shmNameLen > 0 && eh->shmNameLen <= payload.size() - offset)
+                {
+                    info.shmName = _Utf8ToWide(
+                        reinterpret_cast<const char*>(payload.data() + offset), eh->shmNameLen);
+                    offset += eh->shmNameLen;
+                }
+                if (eh->eventNameLen > 0 && eh->eventNameLen <= payload.size() - offset)
+                {
+                    info.eventName = _Utf8ToWide(
+                        reinterpret_cast<const char*>(payload.data() + offset), eh->eventNameLen);
+                    offset += eh->eventNameLen;
+                }
+                response.hostRenderSetups.push_back(info);
+
+                // Mirror the candidate (kind 0) entry into the legacy single fields.
+                if (info.windowKind == HOST_WINDOW_CANDIDATE)
+                {
+                    response.shmName = info.shmName;
+                    response.eventName = info.eventName;
+                    response.maxBufferSize = info.maxBufferSize;
+                }
+            }
+
+            _LogInfo(L"Response: HostRenderSetup instance=%u entries=%u (candidate shm=%ls)",
+                     instanceId, entryCount, response.shmName.c_str());
+        }
+        break;
+
+    default:
+        _LogError(L"Unknown response command: 0x%04X", header.command);
+        response.type = ResponseType::Error;
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+// ============================================================================
+// Async and Batch support
+// ============================================================================
+
+BOOL CIPCClient::SendAsync(uint16_t command, const void* payload, uint32_t size)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    return _SendBinaryMessage(command, payload, size, true /* async */);
+}
+
+BOOL CIPCClient::SendSync(uint16_t command, const void* payload, uint32_t size, ServiceResponse& response)
+{
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    if (!_SendBinaryMessage(command, payload, size, false /* sync */))
+    {
+        return FALSE;
+    }
+
+    return ReceiveResponse(response);
+}
+
+void CIPCClient::BeginBatch()
+{
+    _batchBuffer.clear();
+    _batchNeedResponse.clear();
+    _batchCount = 0;
+
+    // Reserve space for BatchHeader (will be filled in SendBatch)
+    _batchBuffer.resize(sizeof(BatchHeader));
+}
+
+void CIPCClient::AddBatchEvent(uint16_t command, const void* payload, uint32_t size, bool needResponse)
+{
+    // Build event header
+    IpcHeader eventHeader;
+    eventHeader.version = needResponse ? PROTOCOL_VERSION : (PROTOCOL_VERSION | ASYNC_FLAG);
+    eventHeader.command = command;
+    eventHeader.length = size;
+
+    // Append header to buffer
+    size_t offset = _batchBuffer.size();
+    _batchBuffer.resize(offset + sizeof(IpcHeader) + size);
+
+    memcpy(_batchBuffer.data() + offset, &eventHeader, sizeof(IpcHeader));
+
+    // Append payload if any
+    if (size > 0 && payload != nullptr)
+    {
+        memcpy(_batchBuffer.data() + offset + sizeof(IpcHeader), payload, size);
+    }
+
+    _batchNeedResponse.push_back(needResponse);
+    _batchCount++;
+}
+
+BOOL CIPCClient::SendBatch(std::vector<ServiceResponse>& responses)
+{
+    if (_batchCount == 0)
+    {
+        return TRUE;
+    }
+
+    if (!_ShouldAttemptOperation())
+    {
+        return FALSE;
+    }
+
+    if (!IsConnected() && !Connect())
+    {
+        return FALSE;
+    }
+
+    // Fill in BatchHeader at the beginning of buffer
+    BatchHeader* batchHeader = reinterpret_cast<BatchHeader*>(_batchBuffer.data());
+    batchHeader->eventCount = _batchCount;
+    batchHeader->reserved = 0;
+
+    _LogDebug(L"Sending batch with %d events, size=%zu", _batchCount, _batchBuffer.size());
+
+    // Send the batch message
+    if (!_SendBinaryMessage(CMD_BATCH_EVENTS, _batchBuffer.data(), static_cast<uint32_t>(_batchBuffer.size()), false))
+    {
+        return FALSE;
+    }
+
+    // Count how many sync responses we expect
+    int syncCount = 0;
+    for (bool needResp : _batchNeedResponse)
+    {
+        if (needResp)
+        {
+            syncCount++;
+        }
+    }
+
+    // Receive batch response if there are sync events
+    if (syncCount > 0)
+    {
+        return ReceiveBatchResponse(responses, syncCount);
+    }
+
+    return TRUE;
+}
+
+BOOL CIPCClient::ReceiveBatchResponse(std::vector<ServiceResponse>& responses, int expectedCount)
+{
+    // Read batch response header
+    IpcHeader header;
+    std::vector<uint8_t> payload;
+
+    if (!_ReceiveBinaryMessage(header, payload))
+    {
+        return FALSE;
+    }
+
+    if (header.command != CMD_BATCH_RESPONSE)
+    {
+        _LogError(L"Expected batch response, got command 0x%04X", header.command);
+        return FALSE;
+    }
+
+    if (payload.size() < sizeof(BatchHeader))
+    {
+        _LogError(L"Batch response payload too short: %zu bytes", payload.size());
+        return FALSE;
+    }
+
+    // Parse batch response header
+    const BatchHeader* batchHeader = reinterpret_cast<const BatchHeader*>(payload.data());
+    uint16_t responseCount = batchHeader->eventCount; // eventCount holds response count in batch response
+
+    if (responseCount != expectedCount)
+    {
+        _LogError(L"Batch response count mismatch: expected %d, got %d", expectedCount, responseCount);
+        // Continue processing what we have
+    }
+
+    _LogDebug(L"Received batch response with %d responses", responseCount);
+
+    // Parse individual responses
+    size_t offset = sizeof(BatchHeader);
+    responses.clear();
+    responses.reserve(responseCount);
+
+    for (uint16_t i = 0; i < responseCount && offset < payload.size(); i++)
+    {
+        // Check if we have enough data for a header
+        // 减法形式防回绕：offset < payload.size() 由循环条件保证。
+        if (sizeof(IpcHeader) > payload.size() - offset)
+        {
+            _LogError(L"Batch response %d: incomplete header at offset %zu", i, offset);
+            break;
+        }
+
+        // Parse response header
+        const IpcHeader* respHeader = reinterpret_cast<const IpcHeader*>(payload.data() + offset);
+        offset += sizeof(IpcHeader);
+
+        // Check if we have enough data for the payload
+        // respHeader->length 是对端可控的 uint32，加法形式在 32 位下可回绕绕过检查。
+        if (respHeader->length > payload.size() - offset)
+        {
+            _LogError(L"Batch response %d: incomplete payload at offset %zu", i, offset);
+            break;
+        }
+
+        // Extract payload
+        std::vector<uint8_t> respPayload;
+        if (respHeader->length > 0)
+        {
+            respPayload.assign(payload.begin() + offset, payload.begin() + offset + respHeader->length);
+            offset += respHeader->length;
+        }
+
+        // Parse response
+        ServiceResponse response;
+        if (_ParseResponse(*respHeader, respPayload, response))
+        {
+            responses.push_back(std::move(response));
+        }
+        else
+        {
+            _LogError(L"Failed to parse batch response %d", i);
+            ServiceResponse errorResp;
+            errorResp.type = ResponseType::Error;
+            responses.push_back(std::move(errorResp));
+        }
+    }
+
+    return TRUE;
+}
+
+// ============================================================================
+// Async Reader Thread Implementation
+// ============================================================================
+
+void CIPCClient::SetStatePushCallback(StatePushCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _statePushCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetActivationPushCallback(ActivationPushCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _activationPushCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetReplaceBackwardCallback(ReplaceBackwardCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _replaceBackwardCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetPairCommitCallback(PairCommitCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _pairCommitCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetCommitTextCallback(CommitTextCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _commitTextCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetClearCompositionCallback(ClearCompositionCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _clearCompositionCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetUpdateCompositionCallback(UpdateCompositionCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _updateCompositionCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetSyncConfigCallback(SyncConfigCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _syncConfigCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetServiceReadyCallback(ServiceReadyCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _serviceReadyCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetModePushCallback(ModePushCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _modePushCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetRefreshIconCallback(RefreshIconCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _refreshIconCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+void CIPCClient::SetShellExecCallback(ShellExecCallback callback)
+{
+    EnterCriticalSection(&_asyncLock);
+    _shellExecCallback = callback;
+    LeaveCriticalSection(&_asyncLock);
+}
+
+BOOL CIPCClient::StartAsyncReader()
+{
+    if (_asyncReaderRunning)
+    {
+        _LogDebug(L"Async reader already running");
+        return TRUE;
+    }
+
+    // Reset stop event
+    ResetEvent(_hStopEvent);
+
+    // Connect to push pipe
+    _LogInfo(L"Connecting to push pipe...");
+
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+        if (!WaitNamedPipeW(PUSH_PIPE_NAME, IPCConfig::CONNECT_TIMEOUT_MS))
+        {
+            DWORD error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND)
+            {
+                _LogDebug(L"Push pipe not found, attempt %d", attempt + 1);
+                Sleep(200);
+                continue;
+            }
+            else if (error == ERROR_SEM_TIMEOUT)
+            {
+                _LogDebug(L"WaitNamedPipe timed out for push pipe, attempt %d", attempt + 1);
+                continue;
+            }
+        }
+
+        _hReadPipe = CreateFileW(
+            PUSH_PIPE_NAME,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED,
+            nullptr);
+
+        if (_hReadPipe != INVALID_HANDLE_VALUE)
+        {
+            DWORD mode = PIPE_READMODE_MESSAGE;
+            SetNamedPipeHandleState(_hReadPipe, &mode, nullptr, nullptr);
+
+            // Send token handshake so Go can map this push handle to our instance
+            {
+                uint8_t tokenBuf[8] = {
+                    (uint8_t)(_clientToken & 0xFF),
+                    (uint8_t)((_clientToken >> 8) & 0xFF),
+                    (uint8_t)((_clientToken >> 16) & 0xFF),
+                    (uint8_t)((_clientToken >> 24) & 0xFF),
+                    (uint8_t)((_clientToken >> 32) & 0xFF),
+                    (uint8_t)((_clientToken >> 40) & 0xFF),
+                    (uint8_t)((_clientToken >> 48) & 0xFF),
+                    (uint8_t)((_clientToken >> 56) & 0xFF)
+                };
+                HANDLE hEv = CreateEventW(NULL, TRUE, FALSE, NULL);
+                if (hEv != NULL)
+                {
+                    OVERLAPPED ov = {};
+                    ov.hEvent = hEv;
+                    DWORD written = 0;
+                    if (!WriteFile(_hReadPipe, tokenBuf, 8, &written, &ov) && GetLastError() == ERROR_IO_PENDING)
+                    {
+                        WaitForSingleObject(hEv, 500);
+                        GetOverlappedResult(_hReadPipe, &ov, &written, FALSE);
+                    }
+                    CloseHandle(hEv);
+                }
+                _LogInfo(L"Connected to push pipe, sent token 0x%016llX", (unsigned long long)_clientToken);
+            }
+            break;
+        }
+
+        DWORD error = GetLastError();
+        _LogDebug(L"Push pipe connection attempt %d failed: error=%d", attempt + 1, error);
+        if (error == ERROR_ACCESS_DENIED)
+        {
+            WindHostProcessInfo currentHost;
+            if (WindQueryCurrentProcessInfo(&currentHost))
+                WindLogHostProcessInfo(4, L"compat.push_connect_access_denied.current_host", currentHost);
+            WindLogForegroundProcessInfo(4, L"compat.push_connect_access_denied.foreground_host");
+        }
+
+        if (error == ERROR_PIPE_BUSY)
+        {
+            Sleep(50);
+            continue;
+        }
+    }
+
+    // 首连失败**绝不能在此 return**：重连逻辑活在下面这个 async reader 线程内部
+    // （_AsyncReaderLoop 每轮开头见 _hReadPipe == INVALID_HANDLE_VALUE 即重试，
+    // 失败则 continue 无限重试）。旧代码在这里 return FALSE，线程压根不创建，
+    // 于是「一次失手 = 终身失联」——连服务重启都感知不到，push 通道永久缺失。
+    // 对 host-render 白名单宿主（SearchHost）的后果是 HostRender 再不激活，
+    // 开始菜单候选窗永久压在菜单后方（2026-07-21 实测定位：SearchHost 自
+    // 某次首连失败起，跨三次服务重启 0/3 重连，而同期 23 个宿主每次都正常）。
+    //
+    // 首连之所以易失手：服务端 accept 循环原先把握手（写 SERVICE_READY + 读 token，
+    // 均为无超时阻塞）做在循环体内，握手期间管道名下零监听实例，开机/服务重启时
+    // 20+ 宿主 DLL 在数十毫秒内齐冲，必有输家。服务侧已并行修复（握手移出 accept
+    // 循环，见 aurora-bridge/src/push.rs `serve_push_client`）。
+    // 两侧都修：服务端降低失手概率，DLL 侧保证失手可恢复——后者才是根治，
+    // 因为服务端再怎么改也无法保证客户端永不失手。
+    if (_hReadPipe == INVALID_HANDLE_VALUE)
+    {
+        _LogError(L"Failed to connect to push pipe on first attempt; "
+                  L"starting async reader anyway, it will keep retrying");
+    }
+
+    // Create async reader thread
+    _hAsyncThread = CreateThread(
+        NULL,
+        0,
+        _AsyncReaderThread,
+        this,
+        0,
+        NULL);
+
+    if (_hAsyncThread == NULL)
+    {
+        _LogError(L"Failed to create async reader thread: %d", GetLastError());
+        // 首连允许失败后（见上），此处句柄可能本就无效——不可无条件 CloseHandle
+        if (_hReadPipe != INVALID_HANDLE_VALUE)
+        {
+            CloseHandle(_hReadPipe);
+            _hReadPipe = INVALID_HANDLE_VALUE;
+        }
+        return FALSE;
+    }
+
+    _asyncReaderRunning = TRUE;
+    _LogInfo(L"Async reader thread started");
+    return TRUE;
+}
+
+void CIPCClient::StopAsyncReader()
+{
+    if (!_asyncReaderRunning)
+    {
+        return;
+    }
+
+    _LogInfo(L"Stopping async reader thread...");
+
+    // Signal thread to stop
+    SetEvent(_hStopEvent);
+
+    // Wait for thread to exit (with timeout)
+    if (_hAsyncThread != NULL)
+    {
+        DWORD waitResult = WaitForSingleObject(_hAsyncThread, 2000);
+        if (waitResult == WAIT_TIMEOUT)
+        {
+            _LogError(L"Async reader thread did not exit in time, terminating");
+            TerminateThread(_hAsyncThread, 0);
+        }
+        CloseHandle(_hAsyncThread);
+        _hAsyncThread = NULL;
+    }
+
+    // Close push pipe
+    if (_hReadPipe != INVALID_HANDLE_VALUE)
+    {
+        CancelIo(_hReadPipe);
+        CloseHandle(_hReadPipe);
+        _hReadPipe = INVALID_HANDLE_VALUE;
+    }
+
+    _asyncReaderRunning = FALSE;
+    _LogInfo(L"Async reader thread stopped");
+}
+
+BOOL CIPCClient::IsAsyncReaderRunning() const
+{
+    return _asyncReaderRunning;
+}
+
+DWORD WINAPI CIPCClient::_AsyncReaderThread(LPVOID lpParam)
+{
+    CIPCClient* pThis = static_cast<CIPCClient*>(lpParam);
+    pThis->_AsyncReaderLoop();
+    return 0;
+}
+
+void CIPCClient::_AsyncReaderLoop()
+{
+    _LogInfo(L"Async reader loop started");
+
+    HANDLE hReadEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (hReadEvent == NULL)
+    {
+        _LogError(L"Failed to create read event for async reader: %d", GetLastError());
+        return;
+    }
+
+    std::vector<uint8_t> buffer(IPCConfig::PIPE_BUFFER_SIZE);
+    HANDLE waitHandles[2] = { _hStopEvent, hReadEvent };
+
+    while (true)
+    {
+        // Check if we need to reconnect to push pipe
+        if (_hReadPipe == INVALID_HANDLE_VALUE)
+        {
+            _LogInfo(L"Async reader: attempting to reconnect to push pipe...");
+
+            // Wait a bit before reconnecting
+            DWORD waitResult = WaitForSingleObject(_hStopEvent, 1000);
+            if (waitResult == WAIT_OBJECT_0)
+            {
+                _LogInfo(L"Async reader: stop event received during reconnect wait");
+                break;
+            }
+
+            // Try to reconnect
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                if (WaitForSingleObject(_hStopEvent, 0) == WAIT_OBJECT_0)
+                {
+                    break; // Stop requested
+                }
+
+                if (WaitNamedPipeW(PUSH_PIPE_NAME, 500))
+                {
+                    _hReadPipe = CreateFileW(
+                        PUSH_PIPE_NAME,
+                        GENERIC_READ | GENERIC_WRITE,
+                        0,
+                        nullptr,
+                        OPEN_EXISTING,
+                        FILE_FLAG_OVERLAPPED,
+                        nullptr);
+
+                    if (_hReadPipe != INVALID_HANDLE_VALUE)
+                    {
+                        DWORD mode = PIPE_READMODE_MESSAGE;
+                        SetNamedPipeHandleState(_hReadPipe, &mode, nullptr, nullptr);
+
+                        // Re-send token handshake after reconnect
+                        {
+                            uint8_t tokenBuf[8] = {
+                                (uint8_t)(_clientToken & 0xFF),
+                                (uint8_t)((_clientToken >> 8) & 0xFF),
+                                (uint8_t)((_clientToken >> 16) & 0xFF),
+                                (uint8_t)((_clientToken >> 24) & 0xFF),
+                                (uint8_t)((_clientToken >> 32) & 0xFF),
+                                (uint8_t)((_clientToken >> 40) & 0xFF),
+                                (uint8_t)((_clientToken >> 48) & 0xFF),
+                                (uint8_t)((_clientToken >> 56) & 0xFF)
+                            };
+                            HANDLE hEv = CreateEventW(NULL, TRUE, FALSE, NULL);
+                            if (hEv != NULL)
+                            {
+                                OVERLAPPED ov = {};
+                                ov.hEvent = hEv;
+                                DWORD written = 0;
+                                if (!WriteFile(_hReadPipe, tokenBuf, 8, &written, &ov) && GetLastError() == ERROR_IO_PENDING)
+                                {
+                                    WaitForSingleObject(hEv, 500);
+                                    GetOverlappedResult(_hReadPipe, &ov, &written, FALSE);
+                                }
+                                CloseHandle(hEv);
+                            }
+                        }
+                        _LogInfo(L"Async reader: reconnected to push pipe, sent token 0x%016llX", (unsigned long long)_clientToken);
+                        break;
+                    }
+                }
+                Sleep(200);
+            }
+
+            if (_hReadPipe == INVALID_HANDLE_VALUE)
+            {
+                _LogError(L"Async reader: failed to reconnect to push pipe, will retry...");
+                continue;
+            }
+        }
+
+        // Start overlapped read
+        OVERLAPPED overlapped = {};
+        overlapped.hEvent = hReadEvent;
+        ResetEvent(hReadEvent);
+
+        DWORD bytesRead = 0;
+        BOOL result = ReadFile(_hReadPipe, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, &overlapped);
+
+        if (!result)
+        {
+            DWORD error = GetLastError();
+            if (error != ERROR_IO_PENDING)
+            {
+                _LogError(L"Async reader: ReadFile failed: %d", error);
+                // Close handle and try to reconnect
+                CloseHandle(_hReadPipe);
+                _hReadPipe = INVALID_HANDLE_VALUE;
+                continue;
+            }
+
+            // Wait for either stop event or read completion
+            DWORD waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
+
+            if (waitResult == WAIT_OBJECT_0)
+            {
+                // Stop event signaled
+                _LogInfo(L"Async reader: stop event received");
+                CancelIo(_hReadPipe);
+                break;
+            }
+            else if (waitResult == WAIT_OBJECT_0 + 1)
+            {
+                // Read completed
+                if (!GetOverlappedResult(_hReadPipe, &overlapped, &bytesRead, FALSE))
+                {
+                    // 名字不能再叫 error：外层 ReadFile 的错误码还在作用域里，同名会遮蔽它，
+                    // 读日志时分不清报的是哪一步失败。
+                    DWORD ovlError = GetLastError();
+                    if (ovlError == ERROR_BROKEN_PIPE || ovlError == ERROR_PIPE_NOT_CONNECTED)
+                    {
+                        _LogInfo(L"Async reader: pipe disconnected, will reconnect...");
+                        CloseHandle(_hReadPipe);
+                        _hReadPipe = INVALID_HANDLE_VALUE;
+                        continue;
+                    }
+                    _LogError(L"Async reader: GetOverlappedResult failed: %d", ovlError);
+                    continue;
+                }
+            }
+            else
+            {
+                _LogError(L"Async reader: WaitForMultipleObjects failed: %d", GetLastError());
+                // Close handle and try to reconnect
+                CloseHandle(_hReadPipe);
+                _hReadPipe = INVALID_HANDLE_VALUE;
+                continue;
+            }
+        }
+
+        // Process received message
+        if (bytesRead >= sizeof(IpcHeader))
+        {
+            IpcHeader header;
+            memcpy(&header, buffer.data(), sizeof(IpcHeader));
+
+            _LogDebug(L"Async reader: received message cmd=0x%04X, len=%d", header.command, header.length);
+
+            if (header.command == CMD_STATE_PUSH)
+            {
+                // Parse state push
+                std::vector<uint8_t> payload;
+                if (header.length > 0 && bytesRead >= sizeof(IpcHeader) + header.length)
+                {
+                    payload.assign(buffer.begin() + sizeof(IpcHeader),
+                                   buffer.begin() + sizeof(IpcHeader) + header.length);
+                }
+
+                ServiceResponse response;
+                if (_ParseResponse(header, payload, response))
+                {
+                    _LogInfo(L"Async reader: state push received - mode=%d, fullWidth=%d",
+                             response.IsChineseMode(), response.IsFullWidth());
+
+                    // Call callback
+                    EnterCriticalSection(&_asyncLock);
+                    StatePushCallback callback = _statePushCallback;
+                    LeaveCriticalSection(&_asyncLock);
+
+                    if (callback)
+                    {
+                        callback(response);
+                    }
+                }
+            }
+            else if (header.command == CMD_ACTIVATION_STATUS_PUSH)
+            {
+                // Activation status push: IMEActivated / FocusGained 异步化后的回包，
+                // 载荷与 CMD_STATUS_UPDATE 同格式，含 hotkeys + hostRenderAvail。
+                // TextService 在回调里 Post 到 TSF 线程做 _SyncStateFromResponse + _EnsureHostRenderSetup。
+                std::vector<uint8_t> payload;
+                if (header.length > 0 && bytesRead >= sizeof(IpcHeader) + header.length)
+                {
+                    payload.assign(buffer.begin() + sizeof(IpcHeader),
+                                   buffer.begin() + sizeof(IpcHeader) + header.length);
+                }
+
+                ServiceResponse response;
+                if (_ParseResponse(header, payload, response))
+                {
+                    _LogInfo(L"Async reader: activation status push received - mode=%d, hostRender=%d",
+                             response.IsChineseMode(), response.IsHostRenderAvailable());
+
+                    EnterCriticalSection(&_asyncLock);
+                    ActivationPushCallback callback = _activationPushCallback;
+                    LeaveCriticalSection(&_asyncLock);
+
+                    if (callback)
+                    {
+                        callback(response);
+                    }
+                }
+            }
+            else if (header.command == CMD_MODE_PUSH)
+            {
+                // 轻量模式预推送（FocusGained 竞态优化）：仅更新 _bChineseMode/_bFullWidth。
+                // 载荷：4 字节 flags（STATUS_CHINESE_MODE=bit0, STATUS_FULL_WIDTH=bit1）。
+                // 不调用 _SyncStateFromResponse，不影响热键白名单。
+                if (header.length >= 4 && bytesRead >= sizeof(IpcHeader) + 4)
+                {
+                    const uint8_t* p = buffer.data() + sizeof(IpcHeader);
+                    uint32_t flags = static_cast<uint32_t>(p[0])
+                                   | (static_cast<uint32_t>(p[1]) << 8)
+                                   | (static_cast<uint32_t>(p[2]) << 16)
+                                   | (static_cast<uint32_t>(p[3]) << 24);
+                    bool chineseMode = (flags & STATUS_CHINESE_MODE) != 0;
+                    bool fullWidth   = (flags & STATUS_FULL_WIDTH) != 0;
+                    bool chinesePunct = (flags & STATUS_CHINESE_PUNCT) != 0;
+                    _LogDebug(L"Async reader: CMD_MODE_PUSH received - chineseMode=%d fullWidth=%d punct=%d",
+                              chineseMode, fullWidth, chinesePunct);
+                    EnterCriticalSection(&_asyncLock);
+                    ModePushCallback mpCallback = _modePushCallback;
+                    LeaveCriticalSection(&_asyncLock);
+                    if (mpCallback)
+                    {
+                        mpCallback(chineseMode, fullWidth, chinesePunct);
+                    }
+                }
+            }
+            else if (header.command == CMD_REFRESH_ICON)
+            {
+                // 无载荷：只是「共享内存里的图换了，去重取一次」。载荷长度一律不校验，
+                // 将来若给它加了字段，旧 DLL 也应当照常刷新而不是丢掉整条消息。
+                _LogDebug(L"Async reader: CMD_REFRESH_ICON received");
+                EnterCriticalSection(&_asyncLock);
+                RefreshIconCallback riCallback = _refreshIconCallback;
+                LeaveCriticalSection(&_asyncLock);
+                if (riCallback)
+                    riCallback();
+            }
+            else if (header.command == CMD_SHELL_EXEC)
+            {
+                // TSF 侧在前台应用进程执行 ShellExecuteW（打开 URL / 启动程序）。
+                // 载荷：5 个 len(u32 LE)+bytes(UTF-8) 段，依次为
+                //     target / params / dir / verb / show
+                // dir 及其后的段都是后加的：**缺失即按空串处理**，不能因为读不到就
+                // 丢掉整条消息，否则新 DLL 配旧服务会让 proc.run / open 全部失效。
+                const uint8_t* p = buffer.data() + sizeof(IpcHeader);
+                // 以 header.length 为权威边界，防止 bytesRead 与声明长度不一致。
+                size_t avail = (header.length <= bytesRead - sizeof(IpcHeader))
+                             ? header.length : bytesRead - sizeof(IpcHeader);
+                // 逐段读取；读不到就保持空串并停止（不影响已读到的前几段）。
+                auto readSeg = [&p, &avail](std::string& out) -> bool {
+                    if (avail < 4) return false;
+                    uint32_t n = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8)
+                               | (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+                    p += 4; avail -= 4;
+                    if (n > avail) return false;  // 截断载荷
+                    out.assign(reinterpret_cast<const char*>(p), n);
+                    p += n; avail -= n;
+                    return true;
+                };
+                std::string targetUtf8, paramsUtf8, dirUtf8, verbUtf8, showUtf8;
+                readSeg(targetUtf8) && readSeg(paramsUtf8) && readSeg(dirUtf8)
+                    && readSeg(verbUtf8) && readSeg(showUtf8);
+
+                if (!targetUtf8.empty())
+                {
+                    auto toW = [](const std::string& s) -> std::wstring {
+                        int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+                        std::wstring w(n > 0 ? n - 1 : 0, L'\0');
+                        if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+                        return w;
+                    };
+                    std::wstring targetW = toW(targetUtf8);
+                    std::wstring paramsW = toW(paramsUtf8);
+                    std::wstring dirW    = toW(dirUtf8);
+                    std::wstring verbW   = toW(verbUtf8);
+                    std::wstring showW   = toW(showUtf8);
+                    // 新增字段一律记日志：新服务 + 旧 DLL 时它们会被静默忽略，
+                    // 「设了不生效」的排查全靠对比两侧日志有没有这些字段。
+                    _LogInfo(L"Async reader: CMD_SHELL_EXEC target=%s params=%s dir=%s verb=%s show=%s",
+                             targetW.c_str(), paramsW.c_str(), dirW.c_str(), verbW.c_str(), showW.c_str());
+                    EnterCriticalSection(&_asyncLock);
+                    ShellExecCallback seCallback = _shellExecCallback;
+                    LeaveCriticalSection(&_asyncLock);
+                    if (seCallback) seCallback(targetW, paramsW, dirW, verbW, showW);
+                }
+                else
+                {
+                    _LogError(L"Async reader: CMD_SHELL_EXEC 载荷截断或 target 为空，已跳过");
+                }
+            }
+            else if (header.command == CMD_SERVICE_READY)
+            {
+                // Go service connected push pipe — fire callback so TextService
+                // posts to LangBarItemButton's message window and calls
+                // _DoFullStateSync() on the TSF thread.
+                _LogInfo(L"Async reader: CMD_SERVICE_READY received");
+                EnterCriticalSection(&_asyncLock);
+                ServiceReadyCallback srCallback = _serviceReadyCallback;
+                LeaveCriticalSection(&_asyncLock);
+                if (srCallback)
+                    srCallback();
+            }
+            else if (header.command == CMD_COMMIT_TEXT)
+            {
+                // Parse commit text (from Go - mouse click on candidate)
+                std::vector<uint8_t> payload;
+                if (header.length > 0 && bytesRead >= sizeof(IpcHeader) + header.length)
+                {
+                    payload.assign(buffer.begin() + sizeof(IpcHeader),
+                                   buffer.begin() + sizeof(IpcHeader) + header.length);
+                }
+
+                ServiceResponse response;
+                if (_ParseResponse(header, payload, response))
+                {
+                    _LogDebug(L"Async reader: commit text received, textLen=%zu", response.text.length());
+
+                    // Call callback
+                    EnterCriticalSection(&_asyncLock);
+                    CommitTextCallback callback = _commitTextCallback;
+                    LeaveCriticalSection(&_asyncLock);
+
+                    if (callback && !response.text.empty())
+                    {
+                        callback(response.text);
+                    }
+                }
+            }
+            else if (header.command == CMD_REPLACE_BACKWARD)
+            {
+                // Replace-backward push (undo commit): delete N chars before caret
+                // then insert text. Payload layout identical to the key-response
+                // form, so _ParseResponse fills replaceCount/text for us.
+                std::vector<uint8_t> payload;
+                if (header.length > 0 && bytesRead >= sizeof(IpcHeader) + header.length)
+                {
+                    payload.assign(buffer.begin() + sizeof(IpcHeader),
+                                   buffer.begin() + sizeof(IpcHeader) + header.length);
+                }
+
+                ServiceResponse response;
+                if (_ParseResponse(header, payload, response))
+                {
+                    _LogInfo(L"Async reader: replace backward received, count=%d, textLen=%zu",
+                             response.replaceCount, response.text.length());
+
+                    EnterCriticalSection(&_asyncLock);
+                    ReplaceBackwardCallback callback = _replaceBackwardCallback;
+                    LeaveCriticalSection(&_asyncLock);
+
+                    if (callback && response.replaceCount > 0)
+                    {
+                        callback(response.replaceCount, response.text);
+                    }
+                }
+            }
+            else if (header.command == CMD_COMMIT_TEXT_WITH_CURSOR)
+            {
+                // Pair-commit push (直通 ime.pair)：上屏文本后把光标退回右段之前，并记一层
+                // 待跳出深度。载荷布局与按键响应形态一致，_ParseResponse 已填好
+                // text/cursorOffset。
+                //
+                // 这条 if/else 链是**逐命令**的：新推送命令不在此显式加分支就被静默丢弃，
+                // 症状是「词条执行了但屏幕上什么也没有」。
+                std::vector<uint8_t> payload;
+                if (header.length > 0 && bytesRead >= sizeof(IpcHeader) + header.length)
+                {
+                    payload.assign(buffer.begin() + sizeof(IpcHeader),
+                                   buffer.begin() + sizeof(IpcHeader) + header.length);
+                }
+
+                ServiceResponse response;
+                if (_ParseResponse(header, payload, response))
+                {
+                    _LogInfo(L"Async reader: pair commit received, textLen=%zu, cursorOffset=%d",
+                             response.text.length(), response.cursorOffset);
+
+                    EnterCriticalSection(&_asyncLock);
+                    PairCommitCallback callback = _pairCommitCallback;
+                    LeaveCriticalSection(&_asyncLock);
+
+                    if (callback && !response.text.empty())
+                    {
+                        callback(response.text,
+                                 response.cursorOffset > 0 ? (uint32_t)response.cursorOffset : 0);
+                    }
+                }
+            }
+            else if (header.command == CMD_CLEAR_COMPOSITION)
+            {
+                _LogInfo(L"Async reader: clear composition received from service");
+
+                // Call callback
+                EnterCriticalSection(&_asyncLock);
+                ClearCompositionCallback callback = _clearCompositionCallback;
+                LeaveCriticalSection(&_asyncLock);
+
+                if (callback)
+                {
+                    callback();
+                }
+            }
+            else if (header.command == CMD_UPDATE_COMPOSITION)
+            {
+                // Parse update composition (from Go - mouse click partial confirm)
+                std::vector<uint8_t> payload;
+                if (header.length > 0 && bytesRead >= sizeof(IpcHeader) + header.length)
+                {
+                    payload.assign(buffer.begin() + sizeof(IpcHeader),
+                                   buffer.begin() + sizeof(IpcHeader) + header.length);
+                }
+
+                ServiceResponse response;
+                if (_ParseResponse(header, payload, response))
+                {
+                    _LogDebug(L"Async reader: update composition received, textLen=%zu, caret=%d",
+                              response.composition.length(), response.caretPos);
+
+                    // Call callback
+                    EnterCriticalSection(&_asyncLock);
+                    UpdateCompositionCallback callback = _updateCompositionCallback;
+                    LeaveCriticalSection(&_asyncLock);
+
+                    if (callback)
+                    {
+                        callback(response.composition, response.caretPos);
+                    }
+                }
+            }
+            else if (header.command == CMD_SYNC_CONFIG)
+            {
+                // Parse config sync: keyLen(2, LE) + valueLen(4, LE) + key(UTF-8) + value(bytes)
+                std::vector<uint8_t> payload;
+                if (header.length > 0 && bytesRead >= sizeof(IpcHeader) + header.length)
+                {
+                    payload.assign(buffer.begin() + sizeof(IpcHeader),
+                                   buffer.begin() + sizeof(IpcHeader) + header.length);
+                }
+
+                if (payload.size() >= 6)
+                {
+                    uint16_t keyLen = *reinterpret_cast<const uint16_t*>(payload.data());
+                    uint32_t valueLen = *reinterpret_cast<const uint32_t*>(payload.data() + 2);
+
+                    // 减法形式防回绕：valueLen 是对端可控的 uint32，
+                    // 6 + keyLen + valueLen 在 32 位下可回绕绕过检查。
+                    // payload.size() >= 6 由外层 if 保证；先验 keyLen 再验 valueLen 防二次回绕。
+                    if (keyLen <= payload.size() - 6 && valueLen <= payload.size() - 6 - keyLen)
+                    {
+                        std::string key(reinterpret_cast<const char*>(payload.data() + 6), keyLen);
+                        std::vector<uint8_t> value(payload.data() + 6 + keyLen, payload.data() + 6 + keyLen + valueLen);
+
+                        _LogInfo(L"Async reader: config sync received key=%hs valueLen=%u", key.c_str(), valueLen);
+
+                        EnterCriticalSection(&_asyncLock);
+                        SyncConfigCallback configCallback = _syncConfigCallback;
+                        LeaveCriticalSection(&_asyncLock);
+
+                        if (configCallback)
+                        {
+                            configCallback(key, value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    CloseHandle(hReadEvent);
+    _LogInfo(L"Async reader loop exited");
+}

@@ -1,0 +1,333 @@
+---
+# 内置 Unicode 区块类 —— **本文件由 `gen_block_charsets` 生成，改动会被下次生成覆盖。**
+#
+# 这些类**一个判定字段都不表态**：它们存在的理由只是给 `schema.frequency.exclude_blocks`
+# 与 `input.rare_char.include_blocks` 里那些名字一个落点，并给设置页的类型列一个标签。
+# 任何一个表了态，都会在用户什么都没配的情况下改变候选的常用性判定。
+#
+# 要给某一块加属性（比如让「表情符号」块免词频），**不要改本文件**：去设置页
+# 「字符集分类」改那一行，或写一个只含 `key: 表情符号` 加你要的字段的 .yaml，在
+# 「外部编辑」对话框里「选择其它文件…」加载——覆盖按 key 匹配、字段级合并，块的
+# ranges 会保留。
+
+- key: ASCII
+  ranges: [U+0020-U+007F]
+  order: 900
+
+- key: 拉丁文补充
+  ranges: [U+00A0-U+024F]
+  order: 900
+
+- key: 希腊字母
+  ranges: [U+0370-U+03FF]
+  order: 900
+
+- key: 西里尔字母
+  ranges: [U+0400-U+04FF]
+  order: 900
+
+- key: 通用标点
+  ranges: [U+2000-U+206F]
+  order: 900
+
+- key: 上标与下标
+  ranges: [U+2070-U+209F]
+  order: 900
+
+- key: 货币符号
+  ranges: [U+20A0-U+20CF]
+  order: 900
+
+- key: 字母式符号
+  ranges: [U+2100-U+214F]
+  order: 900
+
+- key: 数字形式
+  ranges: [U+2150-U+218F]
+  order: 900
+
+- key: 箭头
+  ranges: [U+2190-U+21FF]
+  order: 900
+
+- key: 数学运算符
+  ranges: [U+2200-U+22FF]
+  order: 900
+
+- key: 杂项技术符号
+  ranges: [U+2300-U+23FF]
+  order: 900
+
+- key: 带圈字母数字
+  ranges: [U+2460-U+24FF]
+  order: 900
+
+- key: 制表符
+  ranges: [U+2500-U+257F]
+  order: 900
+
+- key: 方块元素
+  ranges: [U+2580-U+259F]
+  order: 900
+
+- key: 几何图形
+  ranges: [U+25A0-U+25FF]
+  order: 900
+
+- key: 杂项符号
+  ranges: [U+2600-U+26FF]
+  order: 900
+
+- key: 装饰符号
+  ranges: [U+2700-U+27BF]
+  order: 900
+
+- key: CJK 部首补充
+  ranges: [U+2E80-U+2EFF]
+  order: 900
+
+- key: 康熙部首
+  ranges: [U+2F00-U+2FDF]
+  order: 900
+
+- key: 表意文字描述符
+  ranges: [U+2FF0-U+2FFF]
+  order: 900
+
+- key: CJK 符号和标点
+  ranges: [U+3000-U+303F]
+  order: 900
+
+- key: 平假名
+  ranges: [U+3040-U+309F]
+  order: 900
+
+- key: 片假名
+  ranges: [U+30A0-U+30FF]
+  order: 900
+
+- key: 注音符号
+  ranges: [U+3100-U+312F]
+  order: 900
+
+- key: 谚文兼容字母
+  ranges: [U+3130-U+318F]
+  order: 900
+
+- key: 汉文标注
+  ranges: [U+3190-U+319F]
+  order: 900
+
+- key: 注音符号扩展
+  ranges: [U+31A0-U+31BF]
+  order: 900
+
+- key: CJK 笔画
+  ranges: [U+31C0-U+31EF]
+  order: 900
+
+- key: 片假名语音扩展
+  ranges: [U+31F0-U+31FF]
+  order: 900
+
+- key: 带圈 CJK 字母及月份
+  ranges: [U+3200-U+32FF]
+  order: 900
+
+- key: CJK 兼容符号
+  ranges: [U+3300-U+33FF]
+  order: 900
+
+- key: 扩展 A
+  ranges: [U+3400-U+4DBF]
+  order: 900
+
+- key: 基本汉字
+  ranges: [U+4E00-U+9FFF]
+  order: 900
+
+- key: 私用区
+  ranges: [U+E000-U+F8FF]
+  order: 900
+
+- key: 兼容汉字
+  ranges: [U+F900-U+FAFF]
+  order: 900
+
+- key: CJK 兼容形式
+  ranges: [U+FE30-U+FE4F]
+  order: 900
+
+- key: 半角及全角形式
+  ranges: [U+FF00-U+FFEF]
+  order: 900
+
+- key: 区域指示符
+  ranges: [U+1F1E6-U+1F1FF]
+  order: 900
+
+- key: 表情符号
+  ranges: [U+1F300-U+1FAFF]
+  order: 900
+
+- key: 扩展 B
+  ranges: [U+20000-U+2A6DF]
+  order: 900
+
+- key: 扩展 C
+  ranges: [U+2A700-U+2B73F]
+  order: 900
+
+- key: 扩展 D
+  ranges: [U+2B740-U+2B81F]
+  order: 900
+
+- key: 扩展 E
+  ranges: [U+2B820-U+2CEAF]
+  order: 900
+
+- key: 扩展 F
+  ranges: [U+2CEB0-U+2EBEF]
+  order: 900
+
+- key: 扩展 I
+  ranges: [U+2EBF0-U+2EE5F]
+  order: 900
+
+- key: 兼容汉字补充
+  ranges: [U+2F800-U+2FA1F]
+  order: 900
+
+- key: 扩展 G
+  ranges: [U+30000-U+3134F]
+  order: 900
+
+- key: 扩展 H
+  ranges: [U+31350-U+323AF]
+  order: 900
+
+- key: 扩展 J
+  ranges: [U+323B0-U+3347F]
+  order: 900
+
+# 「其它」= 区块表**之外**的一切，即上面所有区间的补集。
+#
+# ★ 它存在的理由：区块表逐块列举一份仍在增长的 Unicode 区间，新版本的新块必然落进这里。
+# 对**准入**类消费者（生僻字模式）而言，漏一块 = 那批字打不出——不安全的方向。
+# 给出这一档，新块就落进一个用户控制得到的开关，而不是静默消失。
+- key: 其它
+  ranges:
+    - U+0000-U+001F
+    - U+0080-U+009F
+    - U+0250-U+036F
+    - U+0500-U+1FFF
+    - U+20D0-U+20FF
+    - U+2400-U+245F
+    - U+27C0-U+2E7F
+    - U+2FE0-U+2FEF
+    - U+4DC0-U+4DFF
+    - U+A000-U+DFFF
+    - U+FB00-U+FE2F
+    - U+FE50-U+FEFF
+    - U+FFF0-U+1F1E5
+    - U+1F200-U+1F2FF
+    - U+1FB00-U+1FFFF
+    - U+2A6E0-U+2A6FF
+    - U+2EE60-U+2F7FF
+    - U+2FA20-U+2FFFF
+    - U+33480-U+10FFFF
+  order: 900
+
+# 预设组「符号」—— 标点、数学、图形这一类**非 emoji** 的符号块的并集。
+#
+# ⚠️ 与 emoji 刻意不相交：勾「符号」不该顺带把 emoji 也放进来，否则界面上两个开关的
+# 关系说不清楚。emoji 不在这里——它由 charsets/emoji.yaml 那份按 UTS #51 生成的精确
+# 字表给出（「五个块并集」的老口径两个方向都不准，见设计文档 §5.5）。
+# 「杂项技术符号」「杂项符号」「装饰符号」三块 emoji 与非 emoji 混住，按码位扣掉
+# emoji 字表后并入（✓ ★ ☐ ⌘ 在此，✔ ☀ ⌚ 不在），故下面有许多零碎小段。
+- key: 符号
+  ranges:
+    - U+2000-U+206F
+    - U+2070-U+209F
+    - U+20A0-U+20CF
+    - U+2100-U+214F
+    - U+2150-U+218F
+    - U+2190-U+21FF
+    - U+2200-U+22FF
+    - U+2300-U+2319
+    - U+231C-U+2327
+    - U+2329-U+23CE
+    - U+23D0-U+23E8
+    - U+23F4-U+23F7
+    - U+23FB-U+23FF
+    - U+2460-U+24FF
+    - U+2500-U+257F
+    - U+2580-U+259F
+    - U+25A0-U+25FF
+    - U+2605-U+260D
+    - U+260F-U+2610
+    - U+2612-U+2613
+    - U+2616-U+2617
+    - U+2619-U+261C
+    - U+261E-U+261F
+    - U+2621
+    - U+2624-U+2625
+    - U+2627-U+2629
+    - U+262B-U+262D
+    - U+2630-U+2637
+    - U+263B-U+263F
+    - U+2641
+    - U+2643-U+2647
+    - U+2654-U+265E
+    - U+2661-U+2662
+    - U+2664
+    - U+2667
+    - U+2669-U+267A
+    - U+267C-U+267D
+    - U+2680-U+2691
+    - U+2698
+    - U+269A
+    - U+269D-U+269F
+    - U+26A2-U+26A6
+    - U+26A8-U+26A9
+    - U+26AC-U+26AF
+    - U+26B2-U+26BC
+    - U+26BF-U+26C3
+    - U+26C6-U+26C7
+    - U+26C9-U+26CD
+    - U+26D0
+    - U+26D2
+    - U+26D5-U+26E8
+    - U+26EB-U+26EF
+    - U+26F6
+    - U+26FB-U+26FC
+    - U+26FE-U+26FF
+    - U+2700-U+2701
+    - U+2703-U+2704
+    - U+2706-U+2707
+    - U+270E
+    - U+2710-U+2711
+    - U+2713
+    - U+2715
+    - U+2717-U+271C
+    - U+271E-U+2720
+    - U+2722-U+2727
+    - U+2729-U+2732
+    - U+2735-U+2743
+    - U+2745-U+2746
+    - U+2748-U+274B
+    - U+274D
+    - U+274F-U+2752
+    - U+2756
+    - U+2758-U+2762
+    - U+2765-U+2794
+    - U+2798-U+27A0
+    - U+27A2-U+27AF
+    - U+27B1-U+27BE
+    - U+2FF0-U+2FFF
+    - U+3000-U+303F
+    - U+3200-U+32FF
+    - U+3300-U+33FF
+    - U+FE30-U+FE4F
+    - U+FF00-U+FFEF
+  order: 1000

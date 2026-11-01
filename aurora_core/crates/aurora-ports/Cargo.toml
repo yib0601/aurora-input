@@ -1,0 +1,19 @@
+[package]
+name = "aurora-ports"
+version.workspace = true
+edition.workspace = true
+
+# 端口（trait）定义层：**只有 trait，没有实现**。
+#
+# 存在的理由与 aurora-ids 同源但针对另一类倒置：消费方需要某个能力的抽象，适配器
+# 实现它。若把 trait 定义在消费方 crate 里，适配器就被迫反向依赖消费方。
+# 例：`KeyInjector` 定义在 aurora-cmdbar（消费方）里，aurora-keys（适配器）为了实现它
+# 就得依赖 cmdbar —— 而 cmdbar 是功能层。
+#
+# 这些 trait 都不带默认实现、不带平台代码，故各适配器可以自由实现而不引入额外依赖。
+
+[dependencies]
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

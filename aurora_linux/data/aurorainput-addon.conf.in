@@ -1,0 +1,18 @@
+[Addon]
+Name=AuroraInput
+Name[zh_CN]=极光输入法
+Category=InputMethod
+Version=@AURORA_ADDON_VERSION@
+Library=libaurorainput
+Type=SharedLibrary
+# OnDemand 必须是 False：它是「装完即用」的前提，不是性能选项。
+#
+# Fcitx5 的 OnDemand=True 表示「只有本 addon 提供的输入法被选中时才 dlopen 它」。
+# 而全新用户的输入法组里只有 keyboard-us——极光不在组里就选不到，选不到就不加载，
+# 不加载就没有引擎可以被加进组：首启引导会卡成一个死锁，用户必须先去 Fcitx5 配置里
+# 手动添加「极光输入法」一次（正是本项要消灭的手工步骤）。
+#
+# 代价：不用极光的 Fcitx5 用户也会加载本 addon，从而拉起 Rust 服务并映射词库
+# （实测服务冷起约 1 秒，托盘图标 38ms）。这是为「装完即用」付的固定代价。
+OnDemand=False
+Configurable=True

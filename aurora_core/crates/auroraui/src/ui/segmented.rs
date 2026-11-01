@@ -1,0 +1,582 @@
+//! 分段控制器 SegmentedControl：连体多段单选，选中段高亮。
+//!
+//! 与 [`RadioButton`](crate::ui::RadioButton) 语义相同（绑定 `Rc<Cell<usize>>` 选中索引），
+//! 但视觉为一条连体胶囊：等宽分段、段间分隔线、选中段填充强调色底 + 强调色文字。
+//! 适合"二/三选一"的紧凑切换（简体/繁体、半角/全角等输入法常见开关）。
+//!
+//! 事件契约：点击某段即选中该段；悬停逐段高亮（依赖 `Move` 派发到悬停控件，
+//! 见 `core::dispatch_pointer`）；获得焦点后左右方向键在相邻段间移动选中。
+
+use std::cell::{Cell, RefCell};
+
+use crate::anim::{Easing, Transition};
+use crate::core::{EventCtx, Widget};
+use crate::event::{Event, Key, PointerKind};
+use crate::geometry::{Rect, Size};
+use crate::render::{Canvas, Paint};
+use crate::signal::Signal;
+use crate::spec::Align;
+use crate::style::Style;
+use crate::text::TextEngine;
+use crate::ui::TextContent;
+
+/// 段内左右内边距（measure 用，决定等宽段的自然宽度）。
+const SEG_PAD_X: i32 = 14;
+
+/// 多段单选控件。各段等宽，选中段高亮，段间以分隔线连体。
+pub struct SegmentedControl {
+    /// 段标签。存 [`TextContent`]，measure/paint 时现取——传 `t!` 进来换语言即跟随。
+    options: Vec<TextContent>,
+    selected: Signal<usize>,
+    /// 当前悬停段下标（仅视觉，不写绑定状态）。
+    hover: Option<usize>,
+    /// 选中高亮位置补间：存动画中的选中下标(f32)，驱动胶囊跨段滑动。
+    sel_pos: Cell<Transition<f32>>,
+    /// 各段文字的单行截断，一段一份缓存（共用一份会在段间来回失效，每帧重算）。
+    fits: Vec<super::text_fit::SingleLine>,
+    /// 选中变化**之后**的副作用钩子（见 [`SegmentChangeFn`]）。`RefCell` 只为在 `&self`
+    /// 的 `select` 里取用。
+    on_change: RefCell<Option<SegmentChangeFn>>,
+}
+
+/// 选中段变化之后的副作用钩子：回调收到已生效的新下标，不必自己再 `set`。
+/// 与 [`crate::ui::inputs::SwitchChangeFn`] 同构——`ctx` 恒在首位，新值跟在后面。
+pub type SegmentChangeFn = Box<dyn Fn(&mut EventCtx, usize)>;
+
+impl SegmentedControl {
+    pub fn new(options: Vec<impl Into<TextContent>>, selected: Signal<usize>) -> Self {
+        let options: Vec<TextContent> = options.into_iter().map(Into::into).collect();
+        let init = selected.get().min(options.len().saturating_sub(1)) as f32;
+        Self {
+            selected,
+            hover: None,
+            sel_pos: Cell::new(Transition::new(init).movement()),
+            fits: options.iter().map(|_| Default::default()).collect(),
+            options,
+            on_change: RefCell::new(None),
+        }
+    }
+
+    /// 设置选中变化后的钩子（供 Builder 的 `.on_segment_change()` 调用）。
+    pub fn set_on_change(&mut self, f: SegmentChangeFn) {
+        *self.on_change.borrow_mut() = Some(f);
+    }
+
+    fn len(&self) -> usize {
+        self.options.len()
+    }
+
+    /// 夹紧后的有效选中下标（绑定值越界时回退到末段）。
+    fn sel(&self) -> usize {
+        self.selected.get().min(self.len().saturating_sub(1))
+    }
+
+    /// 第 `i` 段的横向范围 `[x0, x1)`。整数边界按 `i*w/n` 计算，保证相邻段
+    /// 首尾相接、无缝无叠，且末段右界恰为 `bounds` 右缘（不溢出）。
+    fn seg_x(&self, bounds: Rect, i: usize) -> (i32, i32) {
+        let n = self.len().max(1) as i32;
+        let x0 = bounds.x + (bounds.w * i as i32) / n;
+        let x1 = bounds.x + (bounds.w * (i as i32 + 1)) / n;
+        (x0, x1)
+    }
+
+    /// 命中点 `x` 落在第几段（夹紧到 `[0, n)`）。与 `seg_x` 同一映射的反演。
+    fn seg_at(&self, bounds: Rect, x: i32) -> usize {
+        let n = self.len();
+        if n == 0 || bounds.w <= 0 {
+            return 0;
+        }
+        let rel = (x - bounds.x).clamp(0, bounds.w - 1);
+        ((rel * n as i32) / bounds.w).clamp(0, n as i32 - 1) as usize
+    }
+
+    fn select(&self, ctx: &mut EventCtx, i: usize) {
+        if i < self.len() && self.selected.get() != i {
+            self.selected.set(i);
+            // 先 set 再通知（回调读到的是新值），借用在调用前结束——理由同 `Switch::toggle`。
+            let cb = self.on_change.borrow_mut().take();
+            if let Some(f) = cb {
+                f(ctx, i);
+                *self.on_change.borrow_mut() = Some(f);
+            }
+            ctx.mark_dirty();
+        }
+    }
+}
+
+impl Widget for SegmentedControl {
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    fn frame_corner(&self, _bounds: Rect) -> Option<f32> {
+        let th = crate::theme::current();
+        Some(th.segment.corner(&th.metrics))
+    }
+    fn measure(&self, _avail: Size, style: &Style, text: &mut dyn TextEngine) -> Size {
+        // 取最宽选项作为统一段宽，乘段数 → 等宽连体。
+        let mut tw = 0;
+        let mut th = 0;
+        for o in &self.options {
+            let t = text.measure(&o.resolve(), &crate::text::TextStyle::of(style), None);
+            tw = tw.max(t.w);
+            th = th.max(t.h);
+        }
+        let seg_w = tw + 2 * SEG_PAD_X;
+        // 高度只看字号公式（与按钮、输入框同一个），不看实测行高——真实字体的行高约为
+        // 字号的 1.4 倍，按行高加留白会让大字号下各控件高低不齐。`th + 4` 只防极端字号溢出。
+        let h = crate::theme::current()
+            .metrics
+            .control_height(style.font_size())
+            .max(th + 4);
+        Size::new(seg_w * self.len().max(1) as i32, h)
+    }
+
+    fn paint(
+        &self,
+        bounds: Rect,
+        _content: Rect,
+        focused: bool,
+        enabled: bool,
+        canvas: &mut dyn Canvas,
+        style: &Style,
+    ) {
+        let t = crate::theme::current();
+        let (pal, sg) = (&t.palette, &t.segment);
+        let (x, y, w, h) = (
+            bounds.x as f32,
+            bounds.y as f32,
+            bounds.w as f32,
+            bounds.h as f32,
+        );
+        let corner = sg.corner(&t.metrics);
+        let n = self.len();
+        let sel = self.sel();
+
+        // 容器底。
+        canvas.fill_round_rect(x, y, w, h, corner, &Paint::fill(sg.bg(pal)));
+
+        // 选中高亮位置补间：跨段滑动。胶囊几何按动画中的浮点下标插值（等宽近似）。
+        let mut sp = self.sel_pos.get();
+        let sel_target = sel as f32;
+        if sp.target() != sel_target {
+            sp.retarget(sel_target, t.anim.normal(), Easing::EaseInOut);
+        }
+        let fi = sp.animate();
+        self.sel_pos.set(sp);
+        // 文字属性打包传递：字重与行高随 `Style` 自动带上，不必在每个调用点重列。
+        let ts = &crate::text::TextStyle::of(style);
+        let inset = sg.pill_inset();
+        // 悬停浅底（非选中段；选中段由滑动胶囊覆盖）。
+        for i in 0..n {
+            if self.hover == Some(i) && enabled && i != sel {
+                let (x0, x1) = self.seg_x(bounds, i);
+                fill_seg_bg(
+                    canvas,
+                    bounds,
+                    x0 as f32,
+                    x1 as f32,
+                    inset,
+                    corner,
+                    &Paint::fill(sg.hover_bg(pal)),
+                );
+            }
+        }
+        // 滑动选中胶囊（始终有选中项）。几何按相邻整数段的 seg_x 端点插值，
+        // 使落定态与文字/分隔线所用的整数分段逐像素对齐（段宽不整除时也不错位）。
+        // 提前计算胶囊矩形，供后续文字裁剪复用。
+        let pill_clip: Option<Rect> = if n > 0 {
+            let i0 = (fi.floor() as usize).min(n - 1);
+            let i1 = (i0 + 1).min(n - 1);
+            let frac = fi - i0 as f32;
+            let (a0, a1) = self.seg_x(bounds, i0);
+            let (b0, b1) = self.seg_x(bounds, i1);
+            let px0 = a0 as f32 + (b0 - a0) as f32 * frac;
+            let px1 = a1 as f32 + (b1 - a1) as f32 * frac;
+            let pill_bg = if enabled {
+                sg.selected_bg(pal)
+            } else {
+                // track 在亮/暗模式下均与 surface 有明显对比度，surface_alt 几乎不可见
+                pal.track
+            };
+            // 选中胶囊（文字色由 selected_text 提供），无投影/渐变。
+            Some(fill_seg_bg(
+                canvas,
+                bounds,
+                px0,
+                px1,
+                inset,
+                corner,
+                &Paint::fill(pill_bg),
+            ))
+        } else {
+            None
+        };
+        // 文字两遍绘制：先全段用普通色，再裁剪到胶囊区域用选中色覆盖。段高按单行写死，
+        // 窄到放不下的段截成 `text…`，不折行画出 bounds。
+        // 这样文字颜色精确跟随胶囊像素位置，动画过程中不会出现颜色提前切换的问题。
+        let tc_normal = if enabled {
+            sg.text(pal)
+        } else {
+            pal.text_disabled
+        };
+        let tc_selected = if enabled {
+            sg.selected_text(pal)
+        } else {
+            // text_muted 比 text_disabled 更深，使选中段与非选中段有可见对比
+            pal.text_muted
+        };
+        // 每帧现取一次（两遍绘制共用）：`t!` 标签换语言后这里拿到新译文，单行截断缓存
+        // 按文字散列做键，文字一变即失效。
+        let labels: Vec<_> = self.options.iter().map(TextContent::resolve).collect();
+        for (i, label) in labels.iter().enumerate() {
+            let (x0, x1) = self.seg_x(bounds, i);
+            let seg = Rect::new(x0, bounds.y, x1 - x0, bounds.h);
+            self.fits[i].draw_text(canvas, label, seg, tc_normal, Align::Center, ts);
+        }
+        if let Some(clip) = pill_clip {
+            canvas.save();
+            canvas.clip_rect(clip);
+            for (i, label) in labels.iter().enumerate() {
+                let (x0, x1) = self.seg_x(bounds, i);
+                let seg = Rect::new(x0, bounds.y, x1 - x0, bounds.h);
+                self.fits[i].draw_text(canvas, label, seg, tc_selected, Align::Center, ts);
+            }
+            canvas.restore();
+        }
+
+        // 段间分隔线：仅画两侧都非选中的边界（选中段填充自带视觉边界）。
+        let divider = sg.divider(pal);
+        for i in 1..n {
+            if i == sel || i - 1 == sel {
+                continue;
+            }
+            let (x0, _) = self.seg_x(bounds, i);
+            canvas.draw_line(
+                x0 as f32,
+                (bounds.y + 6) as f32,
+                x0 as f32,
+                (bounds.y + bounds.h - 6) as f32,
+                1.0,
+                &Paint::fill(divider),
+            );
+        }
+
+        // 外边框最后描，盖住分隔线端点与选中底的圆角缝。键盘焦点的可见性交由核心
+        // 焦点环（仅键盘导航时绘制），纯鼠标操作不再强制高亮框。
+        let _ = focused;
+        let bw = t.metrics.border_width.to_logical(canvas.dpi_scale());
+        let border = if !enabled { pal.track } else { sg.border(pal) };
+        canvas.stroke_round_rect(x, y, w, h, corner, bw, &Paint::fill(border));
+    }
+
+    fn on_event(&mut self, ctx: &mut EventCtx, ev: &Event) -> bool {
+        match ev {
+            Event::Pointer(p) => match p.kind {
+                PointerKind::Down => {
+                    ctx.request_focus();
+                    true
+                }
+                PointerKind::Up => {
+                    if ctx.bounds().contains(p.pos) {
+                        let i = self.seg_at(ctx.bounds(), p.pos.x);
+                        self.select(ctx, i);
+                    }
+                    true
+                }
+                PointerKind::Move | PointerKind::Enter => {
+                    let i = self.seg_at(ctx.bounds(), p.pos.x);
+                    if self.hover != Some(i) {
+                        self.hover = Some(i);
+                        ctx.mark_dirty();
+                    }
+                    true
+                }
+                PointerKind::Leave => {
+                    if self.hover.is_some() {
+                        self.hover = None;
+                        ctx.mark_dirty();
+                    }
+                    true
+                }
+                _ => false,
+            },
+            Event::Key(k) if k.pressed => match k.key {
+                Key::Left => {
+                    let cur = self.sel();
+                    if cur > 0 {
+                        self.select(ctx, cur - 1);
+                    }
+                    true
+                }
+                Key::Right => {
+                    let cur = self.sel();
+                    if cur + 1 < self.len() {
+                        self.select(ctx, cur + 1);
+                    }
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn focusable(&self) -> bool {
+        true
+    }
+}
+
+/// 画一段的底（选中胶囊 / 悬停浅底），返回实际占的矩形（供文字裁剪）。
+///
+/// `inset > 0`：框里浮着一颗四角都圆的胶囊，四周各留 `inset`。
+///
+/// `inset == 0`：贴边。做法是先按本段矩形裁剪、再填满整个外框圆角矩形，得到两者的
+/// 交集——于是只有贴着外框两端的段带圆角，且与外框圆角严丝合缝，中间段是直角；滑动
+/// 动画停在两段之间时也自然正确。不用"圆角矩形 + 补直角块"拼：底色常是半透明的，
+/// 两块重叠处会叠两遍 alpha，留下一道深色缝。
+fn fill_seg_bg(
+    canvas: &mut dyn Canvas,
+    bounds: Rect,
+    x0: f32,
+    x1: f32,
+    inset: f32,
+    corner: f32,
+    paint: &Paint,
+) -> Rect {
+    if inset > 0.0 {
+        let (rx, ry, rw, rh) = (
+            x0 + inset,
+            bounds.y as f32 + inset,
+            x1 - x0 - inset * 2.0,
+            bounds.h as f32 - inset * 2.0,
+        );
+        canvas.fill_round_rect(rx, ry, rw, rh, (corner - inset).max(0.0), paint);
+        return Rect::new(rx as i32, ry as i32, rw as i32, rh as i32);
+    }
+    let seg = Rect::new(
+        x0.round() as i32,
+        bounds.y,
+        (x1.round() - x0.round()) as i32,
+        bounds.h,
+    );
+    canvas.save();
+    canvas.clip_rect(seg);
+    canvas.fill_round_rect(
+        bounds.x as f32,
+        bounds.y as f32,
+        bounds.w as f32,
+        bounds.h as f32,
+        corner,
+        paint,
+    );
+    canvas.restore();
+    seg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::{MouseButton, PointerEvent};
+    use crate::geometry::Point;
+    use crate::signal::signal;
+    use crate::ui::Element;
+
+    /// 在 200×200 窗口布局单个分段控件，返回 (tree, root)。
+    fn layout(el: Element) -> Tree {
+        let mut tree = Tree::new();
+        let root = el.build(&mut tree);
+        tree.root = Some(root);
+        tree.layout_root(Size::new(200, 200), &mut crate::text::NullTextEngine);
+        tree
+    }
+
+    use crate::core::Tree;
+
+    /// 合成一次完整点击（Down→Up）于 `at`。
+    fn click(tree: &mut Tree, at: Point) -> crate::core::DispatchResult {
+        let mut hover = None;
+        let mut capture = None;
+        tree.dispatch_pointer(
+            PointerEvent::single(PointerKind::Down, at, MouseButton::Left),
+            &mut hover,
+            &mut capture,
+        );
+        tree.dispatch_pointer(
+            PointerEvent::single(PointerKind::Up, at, MouseButton::Left),
+            &mut hover,
+            &mut capture,
+        )
+    }
+
+    #[test]
+    fn click_selects_segment_under_pointer() {
+        let sel = signal(0usize);
+        // 180 宽 3 段 → 每段 60：[0,60) [60,120) [120,180)。根布局落在 (0,0)。
+        let mut tree = layout(
+            Element::segmented(vec!["简体", "繁体", "其它"], sel)
+                .width(180)
+                .height(32),
+        );
+        click(&mut tree, Point::new(150, 16)); // 第三段
+        assert_eq!(sel.get(), 2, "点击第三段应选中索引 2");
+        click(&mut tree, Point::new(30, 16)); // 第一段
+        assert_eq!(sel.get(), 0, "点击第一段应选中索引 0");
+    }
+
+    /// `on_segment_change`：选中变了才通知，收到的是已生效的新下标；点同一段不通知。
+    #[test]
+    fn change_hook_fires_with_new_index_only_on_change() {
+        let sel = signal(0usize);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = seen.clone();
+        let mut tree = layout(
+            Element::segmented(vec!["A", "B", "C"], sel)
+                .width(180)
+                .height(32)
+                .on_segment_change(move |_, i| log.borrow_mut().push((i, sel.get()))),
+        );
+        click(&mut tree, Point::new(150, 16));
+        click(&mut tree, Point::new(150, 16)); // 同一段：不通知
+        click(&mut tree, Point::new(90, 16));
+        assert_eq!(
+            *seen.borrow(),
+            vec![(2, 2), (1, 1)],
+            "回调读到的信号已是新值"
+        );
+    }
+
+    #[test]
+    fn arrow_keys_move_selection() {
+        let sel = signal(0usize);
+        let mut tree = layout(
+            Element::segmented(vec!["A", "B", "C"], sel)
+                .width(180)
+                .height(32),
+        );
+        // 先点击聚焦（Down 请求焦点），再用方向键移动。
+        let root = tree.root;
+        let mut hover = None;
+        let mut capture = None;
+        let res = tree.dispatch_pointer(
+            PointerEvent::single(PointerKind::Down, Point::new(30, 16), MouseButton::Left),
+            &mut hover,
+            &mut capture,
+        );
+        let focus = res.focus.or(root);
+        let right = crate::event::KeyEvent {
+            key: Key::Right,
+            pressed: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        };
+        tree.dispatch_key(right, focus);
+        assert_eq!(sel.get(), 1, "右键应移到下一段");
+        tree.dispatch_key(right, focus);
+        assert_eq!(sel.get(), 2);
+        let left = crate::event::KeyEvent {
+            key: Key::Left,
+            pressed: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        };
+        tree.dispatch_key(left, focus);
+        assert_eq!(sel.get(), 1, "左键应移回上一段");
+    }
+
+    /// 把分段控件按给定帧时钟绘制一帧（触发滑动胶囊的 retarget-in-paint）。
+    fn paint_at(sc: &SegmentedControl, clock: u64) {
+        use crate::render::SkiaCanvas;
+        use tiny_skia::Pixmap;
+        crate::anim::set_clock_ms(clock);
+        let mut pm = Pixmap::new(180, 32).unwrap();
+        let mut c = SkiaCanvas::new(&mut pm);
+        sc.paint(
+            Rect::new(0, 0, 180, 32),
+            Rect::new(0, 0, 180, 32),
+            false,
+            true,
+            &mut c,
+            &Style::default(),
+        );
+    }
+
+    #[test]
+    fn selected_pill_slides_then_settles_when_animated() {
+        crate::anim::set_enabled(true);
+        let sel = signal(0usize);
+        let sc = SegmentedControl::new(vec!["A", "B", "C"], sel);
+        paint_at(&sc, 0);
+        assert_eq!(sc.sel_pos.get().value(), 0.0, "初始胶囊在第 0 段");
+        sel.set(2); // 外部选到第 3 段
+        paint_at(&sc, 0); // paint 检测目标变化 → 改向 2.0
+        assert_eq!(sc.sel_pos.get().target(), 2.0, "选中变 2 后胶囊目标应为 2");
+        assert!(sc.sel_pos.get().is_active(), "动画开启时胶囊应在滑动中");
+        paint_at(&sc, 5000); // 远超时长 → 落定
+        assert_eq!(sc.sel_pos.get().value(), 2.0);
+    }
+
+    #[test]
+    fn selected_pill_snaps_when_animation_disabled() {
+        crate::anim::set_enabled(false);
+        let sel = signal(0usize);
+        let sc = SegmentedControl::new(vec!["A", "B", "C"], sel);
+        sel.set(2);
+        paint_at(&sc, 0);
+        assert_eq!(sc.sel_pos.get().value(), 2.0, "关闭动画应瞬时到选中段");
+        assert!(!sc.sel_pos.get().is_active());
+        crate::anim::set_enabled(true);
+    }
+
+    #[test]
+    fn seg_at_maps_boundaries() {
+        let sc = SegmentedControl::new(vec!["a", "b", "c"], signal(0));
+        let b = Rect::new(0, 0, 180, 32);
+        assert_eq!(sc.seg_at(b, 0), 0);
+        assert_eq!(sc.seg_at(b, 59), 0);
+        assert_eq!(sc.seg_at(b, 60), 1);
+        assert_eq!(sc.seg_at(b, 179), 2);
+        // 越界夹紧。
+        assert_eq!(sc.seg_at(b, 999), 2);
+        assert_eq!(sc.seg_at(b, -5), 0);
+    }
+}
+
+/// 段高按单行写死：窄到放不下的段截成单行，不折行画出 bounds。
+#[cfg(test)]
+mod overflow_tests {
+    use crate::signal::signal;
+    use crate::ui::text_fit::ink::*;
+    use crate::ui::Element;
+
+    fn seg() -> Element {
+        // 长文案放在非选中段：选中段是白字，白底上量不出墨。
+        Element::segmented(vec![LONG_LATIN, "B"], signal(1usize)).font_size(13.0)
+    }
+
+    #[test]
+    fn long_segment_stays_inside_bounds_explicit_width() {
+        // 每段 80 宽；段高约一行字高 + 14，取 40 作宽松上界。
+        assert_wraps_taller(LONG_LATIN, 13.0, 80, 40);
+        let el =
+            Element::col().children([seg().width(160), Element::col().height(80).width_match()]);
+        let (pm, b) = paint_first_child(el, 240, 150);
+        assert_eq!(b.w, 160);
+        assert_no_ink_outside(&pm, b, "Segmented 显式宽");
+    }
+
+    #[test]
+    fn long_segment_stays_inside_bounds_wrap_width() {
+        // 每段 80 宽；段高约一行字高 + 14，取 40 作宽松上界。
+        assert_wraps_taller(LONG_LATIN, 13.0, 80, 40);
+        let el = Element::col()
+            .width_match()
+            .children([seg(), Element::col().height(80).width_match()]);
+        let (pm, b) = paint_first_child(el, 160, 150);
+        assert!(b.w <= 160, "Wrap 宽应受父宽约束：{b:?}");
+        assert_no_ink_outside(&pm, b, "Segmented Wrap 宽");
+    }
+}

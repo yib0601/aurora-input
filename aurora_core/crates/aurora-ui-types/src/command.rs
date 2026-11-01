@@ -1,0 +1,382 @@
+//! 正向协议：协调器 → 渲染端的 [`UiCommand`]，及全局热键条目、翻页器 tag 常量。
+
+use crate::candidate::CandidateItem;
+use crate::diag::{CaretOverlayView, InputDiagView};
+use crate::menu::{MenuAnchor, MenuItemSpec, MenuPointerEvent};
+use crate::softkeyboard::SoftKeyCap;
+use crate::status_tip::StatusTipPlacement;
+use crate::toast::{ToastKind, ToastPosition};
+use crate::toolbar::{ToolbarItem, ToolbarState};
+
+/// UI 命令
+#[derive(Debug)]
+pub enum UiCommand {
+    /// 更新候选列表
+    UpdateCandidates {
+        preedit: String,
+        /// 编码区插入符位置：`preedit` 内的**字节**偏移（恒在字符边界）。自绘 preedit 栏据此
+        /// 画竖线；等于 `preedit.len()` 即光标在末尾。
+        preedit_caret: usize,
+        /// 编码区**由宿主自绘**（`preedit_display = app_inline`：编码嵌在宿主组合区里）。
+        ///
+        /// ⚠ 它只回答「谁来画」，**不影响 `preedit` 是否下发**——后者恒有值。
+        /// 此前是「不画就不发」，把渲染策略焊在了数据通道上：自绘编码栏的宿主
+        /// （Android）想拿数据，只能去改一个显示模式配置项。
+        preedit_host_owned: bool,
+        /// 模式指示文本（拼/双/快/英/符 或全称）；空=不显示。有 preedit 空间时随候选窗持久显示。
+        mode_label: String,
+        candidates: Vec<CandidateItem>,
+        /// 键盘选中项（页内下标），空格上屏目标
+        selected: usize,
+        /// 鼠标悬停项（页内下标），-1 表示无；与 selected 独立
+        hover: i32,
+        /// 当前页（1 起）
+        page: usize,
+        /// 总页数（含动态加载估计）
+        total_pages: usize,
+        /// 展开态的网格版式；`None` = 单行（单列）的普通候选窗。
+        ///
+        /// 为 `Some` 时 `candidates` / `selected` / `hover` 都是网格内的平铺下标，见
+        /// [`CandidateGrid`]；`page` / `total_pages` 照旧，此时读作「高亮行 / 总行数」。
+        grid: Option<crate::candidate::CandidateGrid>,
+        caret_x: i32,
+        caret_y: i32,
+        /// 光标高度（用于上翻时定位到光标上方）
+        caret_height: i32,
+        /// 光标坐标是否有效（无效时窗口仅临时显示、不锁定锚点）
+        caret_valid: bool,
+        /// 固定位置模式（ui.candidate.position_mode=fixed）：忽略光标，用 fixed_x/fixed_y 定位。
+        fixed: bool,
+        /// 固定位置的**内容左上**屏幕坐标；(0,0) 表示尚未设定，由 UI 侧落到屏幕默认锚点。
+        fixed_x: i32,
+        fixed_y: i32,
+    },
+    /// 隐藏候选窗口
+    HideCandidates,
+    /// 一次性通知 toast（方案切换/词库就绪/错误等）；duration_ms 后自动隐藏。
+    ShowToast {
+        text: String,
+        position: ToastPosition,
+        kind: ToastKind,
+        duration_ms: u64,
+        /// 自定义强调色（`ui.toast(color=…)`）。None = 按 `kind` 取内置色。
+        /// 给了值就**压过主题配的 toast 边框色**：写这个参数的人是在为这一条提示
+        /// 指定含义（如"危险操作已执行"），主题不该把它抹平。
+        accent: Option<[u8; 4]>,
+    },
+    /// 显示状态提示气泡（中英/标点/全半角/方案切换），约 1 秒后自动隐藏。
+    /// (x,y)=光标点(y 为底端)，caret_height 上翻定位用；怎么用它们由 `placement` 决定。
+    ShowStatusTip {
+        text: String,
+        x: i32,
+        y: i32,
+        caret_height: i32,
+        /// 自动隐藏时长（毫秒）；0=常驻不自动隐藏（display_mode=always）。
+        duration_ms: u64,
+        /// 定位方式：跟随光标（含用户偏移）/ 固定坐标 / 锚点。
+        placement: StatusTipPlacement,
+    },
+    /// 隐藏状态提示气泡（常驻模式失焦/切走输入法时）。
+    HideStatusTip,
+    /// 显示/更新输入诊断 HUD（右键「高级」开）。惰性创建，可拖动，双击复制。
+    ShowInputDiag(InputDiagView),
+    /// 候选窗定位调试浮窗：把宿主上报的几何与算出的锚点叠在屏幕上画出来。
+    /// 仅 Dev 变体的菜单可开，默认关闭。
+    ShowCaretOverlay(Box<CaretOverlayView>),
+    /// 隐藏定位调试浮窗。
+    HideCaretOverlay,
+    /// 隐藏输入诊断 HUD。
+    HideInputDiag,
+    /// 复制输入诊断 HUD 当前显示的文本到剪贴板（右键菜单）。
+    /// 走 UI 线程而非协调器直接写剪贴板：文本以**实际渲染的行**为准（含分区隐藏结果），
+    /// 那份只有 UI 侧有。
+    CopyInputDiagText,
+    /// 更新常驻工具栏状态（中英/方案/标点/全半角）
+    UpdateToolbar(ToolbarState),
+    /// 隐藏工具栏
+    HideToolbar,
+    /// 设置工具栏锚点（启动恢复持久化位置 / 焦点换屏后落到该屏的记忆位置）。
+    ///
+    /// 传的是窗口**右下角**的屏幕坐标，不是左上角：工具栏的尺寸会在位置不变的前提下
+    /// 变化（横纵切换是宽高对调、增删格子改条长），锚右下角才能让这些变化朝屏幕内侧
+    /// 展开而不是把条顶出工作区。落点 `(right - w, bottom - h)` 由 UI 侧在排版之后算——
+    /// 与 [`Self::SetToolbarCorner`] 同一个理由，`w`/`h` 只有那一刻才可信。
+    SetToolbarAnchor { right: i32, bottom: i32 },
+    /// 把工具栏落到指定显示器工作区的右下角——焦点切到一块从未拖过工具栏的屏时下发。
+    /// 传边界而非坐标：右下角要减工具栏自身尺寸，那只有 UI 侧知道。
+    SetToolbarCorner { work_right: i32, work_bottom: i32 },
+    /// 工具栏自动隐藏配置（开关 + 超时毫秒 + 悬停唤回）。来自 ui.toolbar.auto_hide /
+    /// auto_hide_delay / auto_hide_hover_reveal，协调器 apply_ui_config（启动 + 配置重载）下发。
+    /// `hover_reveal` = 淡出后不真隐藏、留一层几乎透明的可命中窗口，光标移到原位即重新显示。
+    SetToolbarAutoHide {
+        enabled: bool,
+        delay_ms: u64,
+        hover_reveal: bool,
+    },
+    /// 工具栏纵向排列（true=竖条）。来自 ui.toolbar.vertical，
+    /// 协调器 apply_ui_config（启动 + 配置重载）下发。
+    SetToolbarVertical(bool),
+    /// 工具栏显示哪些格、按什么顺序（顺序即渲染顺序）。来自 ui.toolbar.items，
+    /// 协调器 apply_ui_config（启动 + 配置重载）下发，解析与告警都在那侧。
+    ///
+    /// **不并进 `UpdateToolbar`**：那条是随按键高频推送的动态状态、靠 `PartialEq` 去重，
+    /// 把这份配置塞进去等于每次切中英都 clone 一遍列表再深比较——去重反成开销。
+    /// 同 `SetToolbarVertical` / `SetToolbarAutoHide` 的分界。
+    SetToolbarLayout(Vec<ToolbarItem>),
+    /// 应用主题（协调器加载解析后下发）
+    SetTheme(Box<aurora_theme::Resolved>),
+    /// 候选布局方向。来自 ui.candidate.layout（叠加方案级与模式级意图后的结果）。
+    ///
+    /// 两位刻意分开而不是一个四值枚举：旋转态的 `vertical` 是 **false**（屏幕上候选确是
+    /// 并列的），于是渲染端所有按方向分叉的既有判据自动走横排那一支，一处不用改；
+    /// 只有「列表怎么构造」这一件事额外判 `rotated`。
+    /// `upright` 再往下一层，只改「叶子怎么搭」，排列与 `rotated` 完全一致。
+    /// ⚠️ 合法组合只有四个：`vertical && rotated` 不合法（竖排再转 90° 就是横排），
+    /// `upright && !rotated` 也不合法（字直立是旋转态内部的取舍）。
+    SetCandidateLayout {
+        /// 候选纵向堆叠。
+        vertical: bool,
+        /// 整个候选列表顺时针旋转 90° 呈现（蒙古文等纵向书写脚本）。
+        rotated: bool,
+        /// 旋转态下每个字逆时针扶正、逐字下行（对联式竖排）。蕴含 `rotated`。
+        upright: bool,
+    },
+    /// 预编辑嵌入模式（true=编码嵌入候选行首，不显示独立 preedit 条）。
+    /// 来自 ui.candidate.preedit_display == "candidate_inline"。
+    SetPreeditEmbedded(bool),
+    /// 候选字号覆盖（0=跟随主题）。来自 ui.candidate.font_size。
+    SetCandidateFontSize(f32),
+    /// 候选字体：主字体 + 回退链 + 按脚本的字体指派。来自 `[ui.font]`。
+    ///
+    /// 三项合成一条命令而非各发各的：`fallback` 的语义是「`family` 缺字时找谁」，
+    /// 链首就是 `family` 本身 —— 拆成两条命令就产生了**到达顺序依赖**（先收到链、
+    /// 后收到主字体时，链首是错的），而命令通道不保证接线方按发送顺序消费每一类。
+    /// 同 `SetCandidateMinSize` 把五个值并一条的理由。
+    ///
+    /// `scripts` 的键是**字符串**而不是枚举：脚本类的定义与它的 Unicode 区间表同住
+    /// aurora-ui（`text::script`），把枚举拆到本协议 crate 会让「加一个类」变成改两个 crate，
+    /// 而区间表才是那个类真正的定义。未知键由渲染端记一条 warn 后忽略——配置是用户手写的。
+    SetCandidateFont {
+        /// `ui.font.family`，空 = 用渲染端的内置默认字族。
+        family: String,
+        /// `ui.font.fallback`，主字体缺字时的接续顺序。
+        fallback: Vec<String>,
+        /// `ui.font.scripts`：脚本类名 → 该类的字体链。
+        scripts: Vec<(String, Vec<String>)>,
+        /// `ui.font.weight`，0 = 不指定（旧 GDI 字体名里带的字重 / 常规）。
+        weight: i32,
+    },
+    /// 候选**文字节点**的字族覆盖（方案级 `[candidate] font_family`）；空 = 不覆盖。
+    ///
+    /// ⚠️ 与 [`Self::SetCandidateFont`] 的**下发节奏不同**，故是两条命令而不是一个字段：
+    /// 前者来自 `ui.font`、随配置重载推一次；本条的归属是**数据方案**
+    /// （临英/快符叠加时会切走），随输入语境逐次按键变化，故在 `UpdateCandidates`
+    /// 的两个发送点之前重算。合成一条会让配置重载那条路每次按键都重推整份字体方案。
+    SetCandidateTextFamily(String),
+    /// 候选窗尺寸下限（抗抖动）。来自 ui.candidate.min_window_width_horizontal /
+    /// min_window_width_vertical / min_window_height_horizontal /
+    /// min_window_height_vertical / min_rows。
+    ///
+    /// 五值合成一条命令而非各发各的：每条命令都要在两个平台的 manager 各接一条分发臂、
+    /// 在启动与热重载两处各发一次，合并后这四个接线点只需记住一次。
+    SetCandidateMinSize {
+        /// 横排时窗口最小宽度，单位 dp（0=不限）。
+        width_horizontal: u32,
+        /// 竖排时窗口最小宽度，单位 dp（0=不限）。
+        width_vertical: u32,
+        /// 横排时窗口最小高度，单位 dp（0=不限）。
+        height_horizontal: u32,
+        /// 竖排时窗口最小高度，单位 dp（0=不限）。
+        height_vertical: u32,
+        /// 竖排最小行数，不足补透明占位行（0=不补）。
+        rows: u32,
+    },
+    /// 悬停提示激活延迟（毫秒）。来自 ui.tooltip.delay。
+    SetTooltipDelay(i32),
+    /// 候选窗在光标上方时反转候选顺序。来自 ui.candidate.flip_when_above。
+    SetCandidateFlipWhenAbove(bool),
+    /// 候选窗在光标上方时交换编码栏与候选栏位置。来自 ui.candidate.swap_preedit_when_above。
+    SetCandidateSwapWhenAbove(bool),
+    /// 候选窗用户偏移（dp，与主题 position_offset 相加）。来自 ui.candidate.offset_x / offset_y。
+    SetCandidateOffset { x: i32, y: i32 },
+    /// 候选窗是否画主题阴影（false=覆盖为无阴影）。来自 ui.candidate.shadow（"off"→false）。
+    SetCandidateShadow(bool),
+    /// 翻页栏并入编码所在行右对齐显示（独立编码栏 / 内联编码两种落点）。来自 ui.candidate.pager_in_preedit。
+    SetPagerInPreedit(bool),
+    /// 翻页栏显示覆盖（""跟随主题/"hide"/"auto"/"always"）。来自 ui.candidate.pager_bar_display。
+    ///
+    /// ★ **横竖各下发一份**，由渲染端按自己的排布取：排布是渲染端的状态（随
+    /// `set_orientation` 变，还有旋转态），协调器发出这条的那一刻并不知道稍后会用哪一档。
+    /// 与既有的最小窗口尺寸一次下发四个值是同一套做法。
+    SetPagerDisplay { h: String, v: String },
+    /// 页码文字显示覆盖（""跟随主题/"show"/"hide"）。来自 ui.candidate.page_number_display。
+    /// 同样横竖各一份，理由见上。
+    SetPageNumberDisplay { h: String, v: String },
+    /// 拆字字根字体（PUA 字根字符渲染）：TTF 文件路径 + DWrite 家族名（取自方案 [engine.chaizi]）。
+    ///
+    /// `path` 为空 = **撤掉**字根字体。渲染端的私用区字体位只有一个，且优先于方案级
+    /// `[candidate] font_family`：切到不带字根字体的方案时不撤，上一个方案的字根字体就会
+    /// 接管新方案的全部私用区文字（五笔 → Toli 蒙古文：蒙文被画成字根或空白）。
+    SetTooltipChaiziFont { path: String, family: String },
+    /// 显示菜单（候选右键菜单 / 功能主菜单；UI 自管导航与子菜单）。
+    ShowCandidateMenu {
+        items: Vec<MenuItemSpec>,
+        anchor: MenuAnchor,
+    },
+    /// 转发键给打开的菜单（方向键/回车/ESC/空格）；菜单窗无焦点，键由协调器转发
+    MenuKey(u32),
+    /// 隐藏菜单
+    HideMenu,
+    /// 外部宿主（Linux addon）报上来的菜单指针事件，屏幕坐标。Windows 菜单窗口自己收鼠标
+    /// 消息、从不下发本命令；Linux 的菜单只是 addon 贴出来的位图，命中测试仍在渲染端做。
+    MenuPointer {
+        event: MenuPointerEvent,
+        x: i32,
+        y: i32,
+    },
+    /// 外部宿主报告的工作区（左, 上, 右, 下，屏幕坐标）：菜单翻转 / 子菜单左右展开的依据。
+    /// Windows 渲染端自己按显示器查（`MonitorFromPoint`），不需要本命令。
+    SetWorkArea {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    },
+    /// 外部宿主（Linux addon）报上来的「右键悬停提示」：`(x, y)` 屏幕坐标（菜单锚点），
+    /// `(local_x, local_y)` 右键点在提示位图内的坐标。按段 / 按行的命中要文本块的排布，只有
+    /// 渲染端知道，故由渲染端换算后回送 `UiEvent::RequestTooltipMenu`——与 Windows 气泡自己
+    /// 收到右键时同一个事件。Windows 气泡窗口自己收鼠标消息，从不下发本命令。
+    TooltipMenuAt {
+        x: i32,
+        y: i32,
+        local_x: i32,
+        local_y: i32,
+    },
+    /// 写剪贴板（菜单"复制"由协调器驱动 → UI 侧执行）
+    CopyToClipboard(String),
+    /// 用资源管理器打开路径（菜单"打开配置目录"）
+    OpenPath(String),
+    /// 启动应用程序并传参（如 aurora_setting.exe `--page dict`）。
+    OpenApp { path: String, args: String },
+    /// 截图所有可见 UI 窗口，保存到 dir 目录（由协调器根据 config 确定）。
+    TakeScreenshot { dir: String },
+    /// 将候选窗口截图复制到剪贴板（候选不可见则提示）。
+    ScreenshotCandidateToClipboard,
+    /// 截图状态提示气泡到文件（状态提示右键菜单「截图此窗口」）。
+    ScreenshotStatusTip { dir: std::path::PathBuf },
+    /// 把悬停提示的内容复制到剪贴板并 Toast 结果（其右键菜单的各「复制」项）。
+    ///
+    /// 文本由协调器按**原始行**拼好（未截断、未折行，见 `RenderedTooltip`）——气泡上画的是
+    /// 显示行，UI 侧手里没有原文。空串 = 没有可复制的内容，UI 提示「为空」。
+    CopyTooltipText(String),
+    /// 截图悬停提示到文件（其右键菜单「截图此窗口」）。
+    ScreenshotTooltip { dir: std::path::PathBuf },
+    /// 设置悬停提示右键菜单打开状态（开启时抑制其 WM_MOUSELEAVE 自动隐藏）。
+    SetTooltipMenuOpen(bool),
+    /// 标记状态气泡的右键菜单开/关（打开期间抑制自动隐藏）。
+    SetStatusMenuOpen(bool),
+    /// 请求上报状态气泡当前位置：UI 侧回 `UiEvent::StatusTipMoved`。
+    /// 供「固定位置」开关把当前实际位置落盘，而不是跳到陈旧的 custom_x/custom_y。
+    ReportStatusTipPos,
+    /// 请求上报候选窗当前位置：UI 侧回 `UiEvent::CandidateWindowMoved`。
+    /// 供「定位方式」切到 fixed 时就地固定——窗口正显示着就用它当前的位置，
+    /// 不显示则不上报（协调器留空，首显时由 UI 落到屏幕默认锚点）。
+    ReportCandidatePos,
+    /// 注册全局热键（Win32 RegisterHotKey，线程级）。覆盖式：先反注册旧列表再注册新列表，
+    /// 空列表 = 仅清除已注册项。来自 keys.global_hotkeys（协调器构建，启动/配置重载时下发）。
+    RegisterGlobalHotkeys(Vec<GlobalHotkeyEntry>),
+    /// 软键盘：显示面板，或整块刷新它（切面也走这一条）。
+    ///
+    /// 只带**当前面**的键位，不带全部 13 面，理由见 [`crate::softkeyboard`]。
+    ShowSoftKeyboard {
+        /// 各面显示名，用来画标签行。
+        pages: Vec<String>,
+        /// 当前面在 `pages` 里的下标。
+        current: usize,
+        /// 当前面的键位表，顺序即键盘上的行列顺序。
+        keys: Vec<SoftKeyCap>,
+        /// 当前面是**键盘面**（`send_keys`）：画的是键盘本来就有的键。
+        ///
+        /// 面板只用它做一件事：**让 CapsLock 参与字母键的档位显示**。键盘面上
+        /// Caps 开着敲 `q` 出的是 `Q`，键帽就该显示 `Q`；符号面上 CapsLock 没有
+        /// 「大写」这个语义，按键处理也只认 Shift，跟着变只会让显示与实际不符。
+        send_keys: bool,
+        /// 该屏记忆的面板**右下角**屏幕坐标；`None` = 这块屏没记录过。
+        ///
+        /// 随每一条 `ShowSoftKeyboard` 重发（含切面刷新），而不是只在首次打开时发一次：
+        /// 各面键数不同 ⇒ 切面会改面板尺寸，锚右下角正是为了让那次尺寸变化朝屏幕内侧
+        /// 展开。协调器侧的内存镜像是这份锚点的真相源（拖动上报即更新），故这里每次
+        /// 都带上最新值不会与用户刚拖到的位置打架。
+        anchor: Option<(i32, i32)>,
+        /// 焦点显示器工作区 `(left, top, right, bottom)`；`None` = 协调器查不到
+        /// （非 Windows / 查询失败），UI 侧自行回退到主屏。
+        ///
+        /// ⚠️ 传边界而非现成坐标，与 [`Self::SetToolbarCorner`] 同一个理由：默认位置
+        /// （底部居中）要减去面板自身的 w/h，而尺寸只有 UI 侧知道，且要等排版之后才可信。
+        work_area: Option<(i32, i32, i32, i32)>,
+    },
+    /// 软键盘：隐藏面板。
+    HideSoftKeyboard,
+    /// 软键盘：物理按键按下/抬起时同步键帽高亮。
+    ///
+    /// 与 [`Self::ShowSoftKeyboard`] 分开是因为它每次按键都发，而面板内容不变——
+    /// 渲染端据此只重画那一个键帽，不必重排整块面板。
+    SoftKeyboardKeyState { slot: String, down: bool },
+    /// 软键盘：切层（按住 Shift 显示第二层，松开还原）。
+    SoftKeyboardLayer { shift: bool },
+    /// 外部宿主（Linux addon）报上来的工具栏 / 软键盘指针事件（`CMD_PANEL_POINTER` 原样转来）：
+    /// `kind` 是浮层 kind，`event` / `button` 见 `panel_pointer`，`(x, y)` 是位图内坐标。
+    /// 渲染端翻译成 `WM_*` 交给窗口自己的鼠标状态机。Windows 窗口自己收鼠标消息，从不下发本命令。
+    PanelPointer {
+        kind: u32,
+        event: u32,
+        button: u32,
+        x: i32,
+        y: i32,
+    },
+    /// 外部宿主本地拖完工具栏 / 软键盘后的落点（内容盒左上，屏幕坐标）。协调器已据此落盘，
+    /// 渲染端只同步自己记下的位置，下一帧不跳回旧处。Windows 从不下发。
+    PanelMoved { kind: u32, x: i32, y: i32 },
+    /// 外部宿主报告焦点窗口进入 / 退出全屏：全屏期间不显示工具栏（对位 Windows 的独占全屏判据）。
+    /// Windows 渲染端自己探前台，从不下发。
+    SetHostFullscreen(bool),
+    /// 外部宿主（Linux addon）的 push 连接（重）建立：它收到 SERVICE_READY 会丢掉手里的工具栏 /
+    /// 软键盘，渲染端把此刻可见的原样补推一帧。Windows 从不下发。
+    HostReconnected,
+    /// 关闭 UI
+    Shutdown,
+    /// 注入 host-render 管理器（Windows）；协调器 `set_host_render` 后下发，
+    /// UI 线程收到后在消息循环中激活 SHM 分流路径。
+    #[cfg(windows)]
+    SetHostRender(HostRenderArc),
+}
+
+/// `HostRenderManager` 不派生 Debug，包一层使 UiCommand 可 derive Debug。
+#[cfg(windows)]
+pub struct HostRenderArc(pub std::sync::Arc<aurora_bridge::host_render_windows::HostRenderManager>);
+
+#[cfg(windows)]
+impl std::fmt::Debug for HostRenderArc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HostRenderManager")
+    }
+}
+
+/// 全局热键条目（协调器按 keys.global_hotkeys 构建，UI 线程经 Win32 RegisterHotKey 注册）。
+/// `modifiers` 为 Win32 RegisterHotKey 修饰位（MOD_ALT=0x1/MOD_CONTROL=0x2/MOD_SHIFT=0x4/
+/// MOD_WIN=0x8），与 aurora-ipc 的 MOD_* 位序不同（ALT/SHIFT 互换），转换在协调器侧完成。
+#[derive(Debug, Clone)]
+pub struct GlobalHotkeyEntry {
+    /// RegisterHotKey 热键 ID（UI 线程内唯一即可）
+    pub id: i32,
+    /// Win32 修饰位
+    pub modifiers: u32,
+    /// Windows 虚拟键码
+    pub vk: u32,
+    /// 触发后回送协调器的热键动作名（与 dispatch_hotkey 的 action 一致）
+    pub action: String,
+}
+
+/// 翻页器命中/悬停 tag（远高于候选下标，避免冲突）
+pub const HOVER_PAGE_PREV: i32 = 100_000;
+pub const HOVER_PAGE_NEXT: i32 = 100_001;

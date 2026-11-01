@@ -1,0 +1,74 @@
+[package]
+name = "aurora-coordinator"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-utils = { path = "../aurora-utils" }
+aurora-ipc = { path = "../aurora-ipc" }
+aurora-bridge = { path = "../aurora-bridge" }
+aurora-config = { path = "../aurora-config" }
+aurora-host = { path = "../aurora-host" }
+aurora-store = { path = "../aurora-store" }
+aurora-dict = { path = "../aurora-dict" }
+# ⚠ 勿加 aurora-transfer/fontdb：它们随 webdata 独立进了 aurora-webdata（依赖方向
+# webdata → coordinator），是 Android 闭包免 C 依赖（check-android 免 NDK）的关键。
+aurora-engine = { path = "../aurora-engine" }
+aurora-assoc = { path = "../aurora-assoc" }
+aurora-candidate = { path = "../aurora-candidate" }
+aurora-transform = { path = "../aurora-transform" }
+aurora-theme = { path = "../aurora-theme" }
+# 表现层协议类型（UiCommand/UiEvent 等）；数据类型一律从这里引，aurora-ui 只供
+# 桌面构造路径的运行期能力（UiManager/剪贴板/macOS forwarder），由 desktop-ui
+# feature 门控——`--no-default-features` 即 headless/Android 形态。
+aurora-ui-types = { path = "../aurora-ui-types" }
+aurora-ui = { path = "../aurora-ui", optional = true }
+aurora-cmdbar = { path = "../aurora-cmdbar" }
+aurora-phrase = { path = "../aurora-phrase" }
+aurora-keys = { path = "../aurora-keys" }
+aurora-quick-input = { path = "../aurora-quick-input" }
+aurora-softkeyboard = { path = "../aurora-softkeyboard" }
+aurora-reverse = { path = "../aurora-reverse" }
+aurora-aux-code = { path = "../aurora-aux-code" }
+aurora-punct = { path = "../aurora-punct" }
+unicode-segmentation = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+chrono = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+# 空闲时 malloc_trim（heap_trim.rs）；SIGTERM 先落盘（exit_signal.rs，桌面 unix）
+[target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+# DirectSwitchHotkeys 注册表同步（direct_switch.rs）
+winreg = "0.52"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# 系统明暗探测（theme_style.rs 读全局偏好 AppleInterfaceStyle）
+core-foundation-sys = "0.8"
+
+[features]
+default = ["desktop-ui"]
+# 桌面渲染路径：UiManager/剪贴板直通/macOS forwarder。关掉即 headless/Android
+# 形态——生产构造器 `new` 不可用，走 `new_headless_with_ui` + 注入 HostServices。
+desktop-ui = ["dep:aurora-ui"]
+# Linux 外部宿主（Fcitx5 addon）形态：见 build.rs 的 `ext_presenter` 别名。默认关。
+linux-host = ["desktop-ui", "aurora-ui/linux-host", "aurora-bridge/linux-host"]
+
+[dev-dependencies]
+# tests/ 的数据域 RPC 断言经 aurora-webdata（dev 环允许）
+aurora-webdata = { path = "../aurora-webdata" }
+aurora-config = { path = "../aurora-config" }
+aurora-host = { path = "../aurora-host" }
+aurora-keys = { path = "../aurora-keys" }
+aurora-ui-types = { path = "../aurora-ui-types" }
+aurora-bridge = { path = "../aurora-bridge" }
+aurora-ipc = { path = "../aurora-ipc" }
+
+[lints]
+workspace = true

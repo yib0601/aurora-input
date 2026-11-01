@@ -1,0 +1,20 @@
+[Desktop Entry]
+# 极光输入法设置（aurora_setting）。装到 /usr/share/applications/，应用菜单里的入口；
+# 同时声明 aurora-input:// 协议处理（网页上的「一键导入」链接），xdg-open 据此拉起设置程序。
+# 设置程序自己是单实例：已开着时新进程只把参数（深链页 / 协议 URL）转给首实例。
+Type=Application
+Name=极光输入法设置
+Name[en]=Aurora Input Settings
+GenericName=输入法设置
+GenericName[en]=Input Method Settings
+Comment=配置极光输入法的方案、按键、外观与词库
+Comment[en]=Configure schemas, keys, appearance and dictionaries of Aurora Input
+Exec=/usr/lib/aurora-input/aurora_setting %u
+Icon=windinput
+Terminal=false
+Categories=Settings;Utility;
+Keywords=input;ime;fcitx;pinyin;wubi;输入法;拼音;五笔;
+MimeType=x-scheme-handler/aurora-input;
+StartupNotify=true
+# WM_CLASS 实例名 = 可执行文件名（windui x11.rs::wm_class），任务栏据此把窗口归到本入口。
+StartupWMClass=aurora_setting

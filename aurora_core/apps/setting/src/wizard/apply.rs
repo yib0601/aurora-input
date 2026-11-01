@@ -1,0 +1,277 @@
+//! 向导写入编排。顺序：全局键 → 双拼布局（方案级） → 默认方案。
+//! `schema.setActive` 要求目标方案已启用，而启用表随第一步的 setItems 落盘，所以它必须排在最后。
+
+use serde_json::{Value, json};
+
+use crate::config::ConfigItem;
+use crate::dialogs::schema_manager::set_json_path;
+
+pub trait CoreCalls {
+    fn call(&mut self, method: &str, params: &Value) -> Result<Value, String>;
+}
+
+pub struct RealCore;
+
+impl CoreCalls for RealCore {
+    fn call(&mut self, method: &str, params: &Value) -> Result<Value, String> {
+        crate::rpc::call_core(method, params)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Plan {
+    pub items: Vec<ConfigItem>,
+    /// (双拼主方案 id, 布局 id)：写到哪个方案上随主方案走，不写死 `shuangpin`。
+    pub layout: Option<(String, String)>,
+    pub active: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApplyOutcome {
+    Done,
+    Failed {
+        step: &'static str,
+        error: String,
+        /// 已落盘的步骤（展示用文案）。
+        done: Vec<String>,
+    },
+}
+
+pub fn apply_writes(core: &mut dyn CoreCalls, plan: &Plan) -> ApplyOutcome {
+    let mut done: Vec<String> = Vec::new();
+    let fail = |step: &'static str, error: String, done: &Vec<String>| ApplyOutcome::Failed {
+        step,
+        error,
+        done: done.clone(),
+    };
+
+    if !plan.items.is_empty() {
+        let items: Vec<Value> = plan
+            .items
+            .iter()
+            .map(|it| json!({"key": it.key, "value": it.value}))
+            .collect();
+        match core.call("config.setItems", &json!({ "items": items })) {
+            Ok(resp) => {
+                let skipped: Vec<String> = resp
+                    .get("skipped")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|it| it.get("key").and_then(|k| k.as_str()))
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !skipped.is_empty() {
+                    // core 对被拒项只是跳过，合法项照样落盘（aurora-rpc dispatch 的 setItems 回
+                    // applied + skipped）。有写进去的就得记成已完成，不能报「没有改动任何配置」。
+                    let applied = resp
+                        .get("applied")
+                        .and_then(|v| v.as_u64())
+                        .map(|n| n as usize)
+                        .unwrap_or(items.len().saturating_sub(skipped.len()));
+                    if applied > 0 {
+                        done.push(format!(
+                            "保存配置（{} 项被拒，其余 {applied} 项已写入）",
+                            skipped.len()
+                        ));
+                    }
+                    return fail(
+                        "保存配置",
+                        format!("服务端拒绝了 {} 项：{}", skipped.len(), skipped.join(", ")),
+                        &done,
+                    );
+                }
+            }
+            Err(e) => return fail("保存配置", e, &done),
+        }
+        done.push("保存配置".into());
+    }
+
+    if let Some((schema, layout)) = &plan.layout {
+        // 与方案设置对话框同一写法：取三层合并后的方案配置，改布局叶子，整份 saveConfig。
+        let mut cfg = match core.call("schema.getConfig", &json!({ "id": schema })) {
+            Ok(v) if v.is_object() => v,
+            Ok(_) => json!({}),
+            Err(e) => return fail("双拼布局", e, &done),
+        };
+        set_json_path(
+            &mut cfg,
+            &["engine", "pinyin", "shuangpin", "layout"],
+            json!(layout),
+        );
+        if let Err(e) = core.call("schema.saveConfig", &json!({ "id": schema, "cfg": cfg })) {
+            return fail("双拼布局", e, &done);
+        }
+        done.push("双拼布局".into());
+    }
+
+    if let Some(id) = &plan.active {
+        match core.call("schema.setActive", &json!({ "id": id })) {
+            Ok(v) if v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) => {}
+            Ok(_) => return fail("切换默认方案", "方案未能加载".into(), &done),
+            Err(e) => return fail("切换默认方案", e, &done),
+        }
+    }
+    ApplyOutcome::Done
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    struct Rec {
+        calls: Vec<String>,
+        /// 布局两步收到的方案 id。
+        layout_ids: Vec<String>,
+        fail_on: Option<&'static str>,
+        skipped: bool,
+    }
+    impl CoreCalls for Rec {
+        fn call(&mut self, m: &str, p: &Value) -> Result<Value, String> {
+            self.calls.push(m.to_string());
+            if m == "schema.getConfig" || m == "schema.saveConfig" {
+                self.layout_ids
+                    .push(p["id"].as_str().unwrap_or_default().to_string());
+            }
+            if self.fail_on == Some(m) {
+                return Err("boom".into());
+            }
+            Ok(match m {
+                "config.setItems" if self.skipped => json!({"skipped": [{"key": "x.y"}]}),
+                "schema.getConfig" => {
+                    json!({"engine": {"pinyin": {"shuangpin": {"layout": "xiaohe"}}}})
+                }
+                "schema.setActive" => json!({"ok": true}),
+                _ => json!({}),
+            })
+        }
+    }
+    fn rec() -> Rec {
+        Rec {
+            calls: vec![],
+            layout_ids: vec![],
+            fail_on: None,
+            skipped: false,
+        }
+    }
+    fn plan() -> Plan {
+        Plan {
+            items: vec![ConfigItem {
+                key: "input.emoji.enabled".into(),
+                value: json!(true),
+            }],
+            layout: Some(("double_pinyin".into(), "ziranma".into())),
+            active: Some("double_pinyin".into()),
+        }
+    }
+
+    #[test]
+    fn order_is_items_layout_active() {
+        let mut r = rec();
+        assert_eq!(apply_writes(&mut r, &plan()), ApplyOutcome::Done);
+        assert_eq!(
+            r.calls,
+            [
+                "config.setItems",
+                "schema.getConfig",
+                "schema.saveConfig",
+                "schema.setActive"
+            ]
+        );
+    }
+
+    /// 布局写到主方案上：读、写都用 Plan 给的方案 id。
+    #[test]
+    fn layout_goes_to_main_schema_id() {
+        let mut r = rec();
+        assert_eq!(apply_writes(&mut r, &plan()), ApplyOutcome::Done);
+        assert_eq!(r.layout_ids, ["double_pinyin", "double_pinyin"]);
+    }
+
+    #[test]
+    fn empty_plan_calls_nothing() {
+        let mut r = rec();
+        let p = Plan {
+            items: vec![],
+            layout: None,
+            active: None,
+        };
+        assert_eq!(apply_writes(&mut r, &p), ApplyOutcome::Done);
+        assert!(r.calls.is_empty());
+    }
+
+    #[test]
+    fn skipped_items_stop_before_layout() {
+        let mut r = rec();
+        r.skipped = true;
+        match apply_writes(&mut r, &plan()) {
+            ApplyOutcome::Failed { step, done, error } => {
+                assert_eq!(step, "保存配置");
+                assert!(done.is_empty(), "唯一一项被拒，什么都没写进去：{done:?}");
+                assert!(error.contains("x.y"));
+            }
+            o => panic!("{o:?}"),
+        }
+        assert_eq!(r.calls, ["config.setItems"]);
+    }
+
+    /// 被拒项只是跳过、其余照样落盘：已完成步骤要记下「部分写入」。
+    #[test]
+    fn partially_rejected_items_count_as_done() {
+        struct Partial;
+        impl CoreCalls for Partial {
+            fn call(&mut self, _m: &str, _p: &Value) -> Result<Value, String> {
+                Ok(json!({"applied": 3, "skipped": [{"key": "x.y"}]}))
+            }
+        }
+        match apply_writes(&mut Partial, &plan()) {
+            ApplyOutcome::Failed { step, done, .. } => {
+                assert_eq!(step, "保存配置");
+                assert_eq!(
+                    done,
+                    vec!["保存配置（1 项被拒，其余 3 项已写入）".to_string()]
+                );
+            }
+            o => panic!("{o:?}"),
+        }
+    }
+
+    #[test]
+    fn active_failure_reports_done_steps() {
+        let mut r = rec();
+        r.fail_on = Some("schema.setActive");
+        match apply_writes(&mut r, &plan()) {
+            ApplyOutcome::Failed { step, done, .. } => {
+                assert_eq!(step, "切换默认方案");
+                assert_eq!(done, ["保存配置", "双拼布局"]);
+            }
+            o => panic!("{o:?}"),
+        }
+    }
+
+    #[test]
+    fn set_active_ok_false_is_failure() {
+        struct NotOk;
+        impl CoreCalls for NotOk {
+            fn call(&mut self, m: &str, _p: &Value) -> Result<Value, String> {
+                Ok(if m == "schema.setActive" {
+                    json!({"ok": false})
+                } else {
+                    json!({})
+                })
+            }
+        }
+        let p = Plan {
+            items: vec![],
+            layout: None,
+            active: Some("pinyin".into()),
+        };
+        assert!(matches!(
+            apply_writes(&mut NotOk, &p),
+            ApplyOutcome::Failed { .. }
+        ));
+    }
+}

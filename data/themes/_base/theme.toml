@@ -1,0 +1,228 @@
+# 唯一基础主题（_ 前缀目录 → 不显示在主题列表，仅供 default/msime/jidian 等通过 base 继承）。
+# 配方：颜色=清风蓝；toolbar=跟随语义（${accent}/${surface}/${text_dim}）；候选窗几何基线
+# （item padding 保证合理行高）；序号=纯数字无圆圈（default 可 override 圆圈）。
+#
+# TOML 主题为「扁平人写形态」：视图节点直接顶层成表（[window]/[item]/…），radius/shape 上提到
+# 节点级，padding/margin 支持标量/数组简写，引擎加载时归一化为内存模型（见 aurora-theme/normalize.rs）。
+# 视图节点白名单：window candidate_list preedit_bar item index text comment
+#                 accent_bar footer_bar mode_label status tooltip toast toolbar menu
+
+[meta]
+name = "基础主题(清风蓝·跟随语义)"
+version = "1.0"
+
+[colors]
+primary = "#4285F4"
+# 颜色派生固化：引擎只读最终色、不重算。derive 块仅供编辑器记录算法，引擎忽略。
+derive = { enabled = true, algorithm = "hsl-shift" }
+
+bg = { light = "#FFFFFF", dark = "#2D2D2D" }
+surface = { light = "#F0F0F0", dark = "#3A3A3A" }
+border = { light = "#C8C8C8", dark = "#404040" }
+text = { light = "#1E1E1E", dark = "#E0E0E0" }
+text_dim = { light = "#646464", dark = "#B0B0B0" }
+text_hint = { light = "#969696", dark = "#808080" }
+accent = "${primary}"
+on_accent = "#FFFFFF"
+shadow = { light = "#0000000F", dark = "#0000001A" }
+
+# 标准色契约：候选注释 / 悬停提示模板的内联色 `$[名]{…}` 写这些名字即跟随主题与明暗，
+# 所有继承 _base 的主题都保证能解析（设计 text-span-colors.md §5.4，含取值依据与对比度）。
+# 出厂视图节点只在下方的 [tooltip.roles] 里引用它们（气泡角色色）。
+# accent_text 两档都等于 accent：_base 没有「强调色不可读」要另调，只为让名字在所有主题里存在；
+# 清风系自带调好的值，照旧覆盖。
+accent_text = "${accent}"
+success = { light = "#1E8E3E", dark = "#81C995" }
+warning = { light = "#B06000", dark = "#FDD663" }
+error = { light = "#D93025", dark = "#F28B82" }
+info = { light = "#1A73E8", dark = "#8AB4F8" }
+
+selection = { light = "#E6F0FF", dark = "#3D4A5C" }
+selection_text = "${text}"
+hover = "${selection}"
+
+menu_bg = "${bg}"
+menu_border = { light = "#C7C7C7", dark = "${border}" }
+menu_text = "${text}"
+menu_disabled = { light = "#A1A1A1", dark = "#707070" }
+menu_hover_bg = "${accent}"
+menu_hover_text = "${on_accent}"
+menu_separator = { light = "#DBDBDB", dark = "${border}" }
+
+tooltip_bg = { light = "#3C3C3CF0", dark = "#1E1E1EF0" }
+tooltip_text = { light = "#FFFFFF", dark = "${text}" }
+# 气泡里的标准色：内联色在气泡里写 `x` 先取 `tooltip_x`（为深色气泡底调过），契约里每个名字
+# 都有一份。气泡底两档都是深色，故亮暗同值；没有语境意义的 on_accent / selection_text 等于
+# tooltip_text，保证写了也可读。清风系按各自强调色覆盖 tooltip_accent。
+tooltip_text_dim = { light = "#BDBDBD", dark = "#BDBDBD" }
+tooltip_text_hint = { light = "#A0A0A0", dark = "#A0A0A0" }
+tooltip_accent = { light = "#8AB4F8", dark = "#8AB4F8" }
+tooltip_accent_text = "${tooltip_accent}"
+tooltip_on_accent = "${tooltip_text}"
+tooltip_selection_text = "${tooltip_text}"
+tooltip_success = { light = "#81C995", dark = "#81C995" }
+tooltip_warning = { light = "#FDD663", dark = "#FDD663" }
+tooltip_error = { light = "#F28B82", dark = "#F28B82" }
+tooltip_info = { light = "#8AB4F8", dark = "#8AB4F8" }
+status_bg = { light = "#323232E6", dark = "#1E1E1EE6" }
+status_text = { light = "#FFFFFF", dark = "${text}" }
+status_border = "${accent}"
+toast_bg = { light = "#323232E6", dark = "#1E1E1EE6" }
+toast_text = { light = "#FFFFFF", dark = "${text}" }
+
+toolbar_background = "${bg}"
+toolbar_border = { light = "#E0E0E0", dark = "${border}" }
+toolbar_grip = { light = "#C0C0C0B3", dark = "#5A5A5AB3" }
+toolbar_mode_chinese_bg = "${accent}"
+toolbar_mode_english_bg = { light = "#8A8A8A", dark = "#5A5A5A" }
+toolbar_mode_text = "${on_accent}"
+toolbar_full_width_off_bg = { light = "${surface}", dark = "${border}" }
+toolbar_full_width_off_text = "${text_dim}"
+toolbar_punct_english_bg = { light = "${surface}", dark = "${border}" }
+toolbar_punct_english_text = "${text_dim}"
+toolbar_settings_bg = { light = "${surface}", dark = "${border}" }
+toolbar_settings_icon = { light = "${text_dim}", dark = "#9B8CCE" }
+toolbar_settings_hole = { light = "${surface}", dark = "${border}" }
+
+# 任务栏语言栏图标主字色：cn = 中文态标签，en = 英文态标签（含不可输入态、CapsLock）。
+# 注意 light/dark 指**任务栏**明暗（浅色任务栏配深字、深色任务栏配浅字），与候选窗明暗无关。
+# 用 ${…} 引用别的 token 时按同一档取值：light 档取被引 token 的 light 值、dark 档取 dark 值
+# （引用不跟随候选窗当前明暗）。用户可在 [ui.langbar] text_color_* 覆盖。
+langbar_text_cn = { light = "#000000", dark = "#FFFFFF" }
+langbar_text_en = { light = "#000000", dark = "#FFFFFF" }
+
+[window]
+padding = [6, 8]
+radius = 8
+border = { width = "1px", color = "${border}" }
+background = "${bg}"
+shadow = { offset = [2, 2], color = "${shadow}" }
+
+[preedit_bar]
+padding = [3, 8]
+background = "${surface}"
+color = "${text_dim}"
+
+[item]
+padding = [7, 10, 7, 8]
+radius = 4
+
+[item.selected]
+background = "${selection}"
+color = "${selection_text}"
+
+[item.hover]
+background = "${hover}"
+
+[index]
+color = "${accent}"
+shape = "none"
+font_size = -2
+padding = { left = 3, right = 3 }
+
+[text]
+margin = { left = 4 }
+color = "${text}"
+
+# 正确拼音提示（候选里的 (ping)）：与候选文字、注释色都区分开的橙，对白/深底 >= 3:1。
+# 选中态改了正文色的主题自动回落注释色；不配则整体回退注释色。
+[text.roles]
+pinyin_hint = { light = "#C2410C", dark = "#FDBA74" }
+
+[comment]
+margin = { left = 6 }
+color = "${text_hint}"
+font_size = -4
+# 注释刻意不配角色色（设计 text-span-colors.md §18）：出厂注释保持 text_hint 的原外观（用户验收时
+# 要求）。想分色的主题自己写 [comment.roles]，用户也可在模板里写 $[颜色]{…}。
+# 角色名即变量名，另有结构角色 literal（模板字面文字）、title（段名）、separator（${chaizi_all:／}
+# 一类变量的分隔符；不配时随所在变量同色）。
+# 唯一例外是 ${correct_pinyin}（正确拼音提示，出厂模板不含它）：与上面的 pinyin_hint 同色。
+
+[comment.roles]
+correct_pinyin = { light = "#C2410C", dark = "#FDBA74" }
+
+[footer_bar]
+font_size = -4
+margin = { left = 8 }
+prev_image = { ref = "chevron_prev.svg", mode = "center", tint = "${accent}", disabled_tint = "${text_hint}" }
+next_image = { ref = "chevron_next.svg", mode = "center", tint = "${accent}", disabled_tint = "${text_hint}" }
+
+[accent_bar]
+background = "${accent}"
+
+[status]
+background = "${status_bg}"
+color = "${status_text}"
+
+[tooltip]
+background = "${tooltip_bg}"
+color = "${tooltip_text}"
+
+# 气泡的角色色。⚠ 这里的 ${token} 按字面解析、不做 tooltip_ 作用域查找（§6.2），故显式写
+# tooltip_*（为深色气泡底调过的那组）。段名里的变量（「编码(五笔)」的 code_source）同样取角色色；
+# 段名的字面文字（title）与 ${char}、调试、词库注释不配色，保持气泡文字色。
+[tooltip.roles]
+full_text = "${tooltip_accent_text}"
+readings = "${tooltip_accent_text}"
+word_code = "${tooltip_success}"
+code_source = "${tooltip_info}"
+chaizi = "${tooltip_warning}"
+chaizi_all = "${tooltip_warning}"
+chaizi_code = "${tooltip_info}"
+chaizi_code_all = "${tooltip_info}"
+unicode = "${tooltip_error}"
+unicode_all = "${tooltip_error}"
+
+[toast]
+background = "${toast_bg}"
+color = "${toast_text}"
+
+[toolbar]
+background = "${toolbar_background}"
+border = { color = "${toolbar_border}" }
+# 几何（dp）：整条高、拖动柄宽、每格宽、激活/悬停格高亮内缩。
+# button_radius 未列→引擎按「格内高×0.3」派生（随高自适应）；如需固定圆角可显式配置。
+height = 30
+grip_width = 12
+button_width = 30
+button_padding = 4
+
+[toolbar.grip]
+color = "${toolbar_grip}"
+
+[toolbar.button]
+background = "${toolbar_full_width_off_bg}"
+color = "${toolbar_full_width_off_text}"
+
+[toolbar.button.chinese]
+background = "${toolbar_mode_chinese_bg}"
+
+[toolbar.button.english]
+background = "${toolbar_mode_english_bg}"
+
+[toolbar.settings]
+icon = "${toolbar_settings_icon}"
+hole = "${toolbar_settings_hole}"
+
+[menu.root]
+radius = 6
+padding = 4
+background = "${menu_bg}"
+border = { width = 1, color = "${menu_border}" }
+
+[menu.item]
+color = "${menu_text}"
+# 几何：内边距（上下 4 / 左右 12）、hover 高亮圆角 4。行高由字号×1.9 派生。
+padding = [4, 12]
+radius = 4
+
+[menu.item.hover]
+background = "${menu_hover_bg}"
+color = "${menu_hover_text}"
+
+[menu.item.disabled]
+color = "${menu_disabled}"
+
+[menu.separator]
+background = "${menu_separator}"

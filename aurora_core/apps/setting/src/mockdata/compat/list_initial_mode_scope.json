@@ -1,0 +1,103 @@
+{
+  "rules": [
+    {
+      "class": "",
+      "effective": {
+        "classes": [
+          "Progman",
+          "WorkerW",
+          "CabinetWClass"
+        ],
+        "process": "explorer.exe"
+      },
+      "fields": {
+        "classes": {
+          "source": "user",
+          "systemValue": [
+            "Progman",
+            "WorkerW"
+          ],
+          "userValue": [
+            "Progman",
+            "WorkerW",
+            "CabinetWClass"
+          ],
+          "value": [
+            "Progman",
+            "WorkerW",
+            "CabinetWClass"
+          ]
+        }
+      },
+      "hasUserEntry": true,
+      "key": "explorer.exe\u001f\u001f",
+      "overridden": [
+        "classes"
+      ],
+      "process": "explorer.exe",
+      "state": "modified",
+      "system": {
+        "classes": [
+          "Progman",
+          "WorkerW"
+        ],
+        "process": "explorer.exe"
+      },
+      "title": "",
+      "unknownKeys": [],
+      "user": {
+        "classes": [
+          "Progman",
+          "WorkerW",
+          "CabinetWClass"
+        ],
+        "process": "explorer.exe"
+      }
+    },
+    {
+      "class": "",
+      "effective": {
+        "classes": [
+          "Notepad"
+        ],
+        "process": "notepad.exe"
+      },
+      "fields": {
+        "classes": {
+          "source": "system",
+          "systemValue": [
+            "Notepad"
+          ],
+          "userValue": null,
+          "value": [
+            "Notepad"
+          ]
+        }
+      },
+      "hasUserEntry": false,
+      "key": "notepad.exe\u001f\u001f",
+      "overridden": [],
+      "process": "notepad.exe",
+      "state": "system",
+      "system": {
+        "classes": [
+          "Notepad"
+        ],
+        "process": "notepad.exe"
+      },
+      "title": "",
+      "unknownKeys": [],
+      "user": null
+    }
+  ],
+  "warnings": [
+    {
+      "class": "",
+      "key": "initial_punct",
+      "message": "字段 initial_punct 的值 \"englsh\" 无效，已忽略",
+      "process": "Tabby.exe",
+      "section": "apps",
+      "title": ""
+    }
+  ]
+}

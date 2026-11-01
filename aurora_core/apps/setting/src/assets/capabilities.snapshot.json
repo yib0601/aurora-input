@@ -1,0 +1,2629 @@
+{
+  "appVersion": "0.127.0",
+  "configKeys": [
+    {
+      "default": "wubi86",
+      "key": "schema.active",
+      "type": "str"
+    },
+    {
+      "default": [
+        "wubi86",
+        "wubi86_pinyin"
+      ],
+      "key": "schema.available",
+      "type": "strlist"
+    },
+    {
+      "default": "",
+      "key": "schema.primary_codetable",
+      "type": "str"
+    },
+    {
+      "default": "",
+      "key": "schema.primary_pinyin",
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "schema.keep_all_loaded",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.codetable.top_code_commit",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.clear_on_empty_max",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.auto_commit_at_full",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": 0,
+      "key": "schema.codetable.auto_commit_min_len",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "int"
+    },
+    {
+      "default": true,
+      "key": "schema.codetable.punct_commit",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.codetable.show_code_hint",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.single_code_input",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.codetable.single_code_complete",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": 0,
+      "key": "schema.codetable.short_code_yield_level",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.single_char",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.codetable.z_key_repeat",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.english_merge.enable",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的英文候选设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.english_merge]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": 3,
+      "key": "schema.codetable.english_merge.min_length",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的英文候选设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.english_merge]"
+      },
+      "type": "int"
+    },
+    {
+      "default": true,
+      "key": "schema.codetable.english_merge.block_commit",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的英文候选设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.english_merge]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": 0,
+      "key": "schema.codetable.english_merge.complete_min_length",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的英文候选设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.english_merge]"
+      },
+      "type": "int"
+    },
+    {
+      "default": true,
+      "key": "schema.codetable.english_merge.block_commit_on_word",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的英文候选设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.english_merge]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": 1,
+      "key": "schema.codetable.english_merge.exact_position",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的英文候选设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.english_merge]"
+      },
+      "type": "int"
+    },
+    {
+      "default": 2,
+      "key": "schema.codetable.english_merge.complete_position",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的英文候选设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.english_merge]"
+      },
+      "type": "int"
+    },
+    {
+      "default": 2,
+      "key": "schema.codetable.english_merge.max_count",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的英文候选设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.english_merge]"
+      },
+      "type": "int"
+    },
+    {
+      "default": "",
+      "key": "schema.codetable.z_key_action",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.wildcard",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": "z",
+      "key": "schema.codetable.wildcard_key",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.wildcard_single_only",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": "",
+      "key": "schema.codetable.input_chars",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "str"
+    },
+    {
+      "default": "",
+      "key": "schema.codetable.leading_chars",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable]"
+      },
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.frequency.enabled",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.frequency.record_always",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": 0,
+      "key": "schema.codetable.frequency.protect_top_n",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "int"
+    },
+    {
+      "default": 1,
+      "key": "schema.codetable.frequency.protect_top_n_len1",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "int"
+    },
+    {
+      "default": 1,
+      "key": "schema.codetable.frequency.protect_top_n_len2",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "schema.codetable.frequency.protect_top_n_len3",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "int"
+    },
+    {
+      "default": "top",
+      "key": "schema.codetable.frequency.strategy",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "enum",
+      "values": [
+        "top",
+        "step",
+        "position"
+      ]
+    },
+    {
+      "default": "all",
+      "key": "schema.codetable.frequency.promote_prefix",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "enum",
+      "values": [
+        "none",
+        "single",
+        "all"
+      ]
+    },
+    {
+      "default": 0.0,
+      "key": "schema.codetable.frequency.half_life",
+      "schemaOverride": {
+        "note": "码表方案可逐项覆盖这里的调频设置；方案没写的项仍然用这里的值。",
+        "section": "[engine.codetable.frequency]"
+      },
+      "type": "float"
+    },
+    {
+      "default": false,
+      "key": "schema.english.frequency.enabled",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.english.frequency.record_always",
+      "type": "bool"
+    },
+    {
+      "default": "position",
+      "key": "schema.english.frequency.strategy",
+      "type": "enum",
+      "values": [
+        "top",
+        "step",
+        "position"
+      ]
+    },
+    {
+      "default": "all",
+      "key": "schema.english.frequency.promote_prefix",
+      "type": "enum",
+      "values": [
+        "none",
+        "single",
+        "all"
+      ]
+    },
+    {
+      "default": 0.0,
+      "key": "schema.english.frequency.half_life",
+      "type": "float"
+    },
+    {
+      "default": "candidate",
+      "key": "schema.english.frequency.code_scope",
+      "type": "enum",
+      "values": [
+        "candidate",
+        "input"
+      ]
+    },
+    {
+      "default": false,
+      "key": "schema.english.commit_space",
+      "type": "bool"
+    },
+    {
+      "default": "always",
+      "key": "schema.english.raw_candidate",
+      "type": "enum",
+      "values": [
+        "always",
+        "in_dict",
+        "off"
+      ]
+    },
+    {
+      "default": false,
+      "key": "schema.english.case_variants",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.english.case_follow_input",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.english.phrase_seg",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.english.auto_learn.enabled",
+      "type": "bool"
+    },
+    {
+      "default": 3,
+      "key": "schema.english.auto_learn.promote_count",
+      "type": "int"
+    },
+    {
+      "default": 5000,
+      "key": "schema.english.auto_learn.temp_max_entries",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "schema.codetable.auto_phrase.enabled",
+      "type": "bool"
+    },
+    {
+      "default": 2,
+      "key": "schema.codetable.auto_phrase.min_phrase_len",
+      "type": "int"
+    },
+    {
+      "default": 5,
+      "key": "schema.codetable.auto_phrase.max_phrase_len",
+      "type": "int"
+    },
+    {
+      "default": 3,
+      "key": "schema.codetable.auto_phrase.promote_count",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "schema.codetable.auto_phrase.idle_timeout_ms",
+      "type": "int"
+    },
+    {
+      "default": 5000,
+      "key": "schema.codetable.auto_phrase.temp_max_entries",
+      "type": "int"
+    },
+    {
+      "default": 24,
+      "key": "schema.codetable.auto_phrase.draft_ttl_hours",
+      "type": "int"
+    },
+    {
+      "default": 50000,
+      "key": "schema.codetable.auto_phrase.draft_max_entries",
+      "type": "int"
+    },
+    {
+      "default": 64,
+      "key": "schema.codetable.auto_phrase.draft_flush_batch",
+      "type": "int"
+    },
+    {
+      "default": "off",
+      "key": "schema.pinyin.code_hint_source",
+      "type": "enum",
+      "values": [
+        "off",
+        "codetable",
+        "shuangpin",
+        "auto"
+      ]
+    },
+    {
+      "default": true,
+      "key": "schema.pinyin.use_smart_compose",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.pinyin.sentence_uses_user_words",
+      "type": "bool"
+    },
+    {
+      "default": 1,
+      "key": "schema.pinyin.sentence_count",
+      "type": "int"
+    },
+    {
+      "default": 1,
+      "key": "schema.pinyin.sentence_max_count",
+      "type": "int"
+    },
+    {
+      "default": "",
+      "key": "schema.pinyin.sentence_cycle_key",
+      "type": "str"
+    },
+    {
+      "default": "auto",
+      "key": "schema.pinyin.separator",
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.single_char",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.english_merge.enable",
+      "type": "bool"
+    },
+    {
+      "default": 3,
+      "key": "schema.pinyin.english_merge.min_length",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "schema.pinyin.english_merge.complete_min_length",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "schema.pinyin.english_merge.exact_position",
+      "type": "int"
+    },
+    {
+      "default": 2,
+      "key": "schema.pinyin.english_merge.complete_position",
+      "type": "int"
+    },
+    {
+      "default": 2,
+      "key": "schema.pinyin.english_merge.max_count",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.enabled",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.zh_z",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.ch_c",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.sh_s",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.n_l",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.f_h",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.r_l",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.an_ang",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.en_eng",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.in_ing",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.ian_iang",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.uan_uang",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.un_ong",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.fuzzy.eng_ong",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.pinyin.frequency.enabled",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.frequency.record_always",
+      "type": "bool"
+    },
+    {
+      "default": 0.0,
+      "key": "schema.pinyin.frequency.half_life",
+      "type": "float"
+    },
+    {
+      "default": 0.0,
+      "key": "schema.pinyin.frequency.base_scale",
+      "type": "float"
+    },
+    {
+      "default": 0.0,
+      "key": "schema.pinyin.frequency.recency_peak",
+      "type": "float"
+    },
+    {
+      "default": "single",
+      "key": "schema.pinyin.frequency.promote_prefix",
+      "type": "enum",
+      "values": [
+        "none",
+        "single",
+        "all"
+      ]
+    },
+    {
+      "default": true,
+      "key": "schema.pinyin.auto_learn.enabled",
+      "type": "bool"
+    },
+    {
+      "default": 2,
+      "key": "schema.pinyin.auto_learn.min_word_length",
+      "type": "int"
+    },
+    {
+      "default": 10,
+      "key": "schema.pinyin.auto_learn.max_word_length",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "schema.pinyin.auto_learn.promote_count",
+      "type": "int"
+    },
+    {
+      "default": 4,
+      "key": "schema.pinyin.completion.min_syllables",
+      "type": "int"
+    },
+    {
+      "default": 5,
+      "key": "schema.pinyin.completion.max_extra_syllables",
+      "type": "int"
+    },
+    {
+      "default": true,
+      "key": "schema.pinyin.abbrev.enabled",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.grammar.enabled",
+      "type": "bool"
+    },
+    {
+      "default": 0.5,
+      "key": "schema.pinyin.grammar.weight",
+      "type": "float"
+    },
+    {
+      "default": "wanxiang-mini.gram",
+      "key": "schema.pinyin.grammar.model",
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.shuangpin.allow_full_pinyin",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.aux_code.enabled",
+      "schemaOverride": {
+        "note": "方案可覆盖这一项；方案没写则用这里的值。",
+        "section": "[engine.aux_code]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": 0,
+      "key": "schema.pinyin.aux_code.max_phrase_len",
+      "schemaOverride": {
+        "note": "方案可覆盖这一项；方案没写则用这里的值。",
+        "section": "[engine.aux_code]"
+      },
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "schema.pinyin.aux_code.direct",
+      "schemaOverride": {
+        "note": "方案可覆盖这一项；方案没写则用这里的值。只对双拼方案生效。",
+        "section": "[engine.aux_code]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.mix.show_source_hint",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.mix.enable_english",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.mix.pinyin_only_overflow",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.mix.top_code_override_pinyin",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.mix.auto_commit_block_on_pinyin",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.mix.auto_commit_block_on_english",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.mix.block_commit_on_english_word",
+      "type": "bool"
+    },
+    {
+      "default": 2,
+      "key": "schema.mix.min_pinyin_length",
+      "type": "int"
+    },
+    {
+      "default": 3,
+      "key": "schema.mix.min_english_length",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "schema.mix.english_complete_min_length",
+      "type": "int"
+    },
+    {
+      "default": 1,
+      "key": "schema.mix.english_exact_position",
+      "type": "int"
+    },
+    {
+      "default": 2,
+      "key": "schema.mix.english_complete_position",
+      "type": "int"
+    },
+    {
+      "default": 2,
+      "key": "schema.mix.english_max_count",
+      "type": "int"
+    },
+    {
+      "default": true,
+      "key": "schema.mix.block_commit_on_pinyin_word",
+      "type": "bool"
+    },
+    {
+      "default": 0,
+      "key": "schema.mix.pinyin_word_min_weight",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "schema.mix.enable_pinyin_abbrev",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.mix.pinyin_code_hint",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "schema.mix.pinyin_partial_candidates",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "schema.mix.pinyin_partial_candidates_overflow",
+      "type": "bool"
+    },
+    {
+      "default": 6,
+      "key": "schema.quick_input.decimal_places",
+      "type": "int"
+    },
+    {
+      "default": 1000,
+      "key": "schema.quick_input.history_max",
+      "type": "int"
+    },
+    {
+      "default": [
+        {
+          "candidate_layout": "vertical",
+          "free_input": "auto",
+          "free_input_takes_select_keys": true,
+          "id": "quick_mix",
+          "members": [
+            "quick_input.calc",
+            "quick_input.number",
+            "quick_input.date",
+            "quick_input.repeat",
+            "$primary_pinyin",
+            "english"
+          ],
+          "name": "快捷",
+          "numeric_letter_select": true,
+          "short_name": "快",
+          "trigger_keys": [
+            "semicolon"
+          ]
+        }
+      ],
+      "key": "schema.mix_modes",
+      "type": "structlist"
+    },
+    {
+      "default": [],
+      "key": "schema.frequency.exclude_blocks",
+      "type": "strlist"
+    },
+    {
+      "default": "smart",
+      "key": "input.filter_mode",
+      "type": "str"
+    },
+    {
+      "default": "keep",
+      "key": "input.rare_phrase",
+      "type": "enum",
+      "values": [
+        "keep",
+        "filter"
+      ]
+    },
+    {
+      "default": "keep",
+      "key": "input.commit_newline",
+      "type": "enum",
+      "values": [
+        "keep",
+        "cr",
+        "lf",
+        "crlf"
+      ]
+    },
+    {
+      "default": "",
+      "key": "input.english_case_cycle_key",
+      "type": "str"
+    },
+    {
+      "default": "off",
+      "key": "input.alt_commit",
+      "type": "enum",
+      "values": [
+        "off",
+        "pinyin",
+        "pinyin_plain",
+        "comment"
+      ]
+    },
+    {
+      "default": true,
+      "key": "input.scope_relax.page_end_key",
+      "type": "bool"
+    },
+    {
+      "default": "·",
+      "key": "input.scope_relax.prefix",
+      "type": "str"
+    },
+    {
+      "default": true,
+      "key": "input.correction.enabled",
+      "type": "bool"
+    },
+    {
+      "default": "*",
+      "key": "input.correction.marker",
+      "type": "str"
+    },
+    {
+      "default": [],
+      "key": "input.correction.custom",
+      "type": "strlist"
+    },
+    {
+      "default": false,
+      "key": "input.correction.rules.gn_ng",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.correction.rules.on_ong",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.correction.rules.vowel_swap",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.correction.rules.legacy_spelling",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.correction.rules.h_misplaced",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.correction.rules.mg_ng",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.correction.rules.n_before_g",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.correction.rules.ai_ia",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.correction.hint.enabled",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.correction.hint.fuzzy",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.correction.hint.misread",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.correction.hint.correction",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.correction.hint.tone",
+      "type": "bool"
+    },
+    {
+      "default": "first",
+      "key": "input.correction.hint.scope",
+      "type": "enum",
+      "values": [
+        "first",
+        "all"
+      ]
+    },
+    {
+      "default": "commit",
+      "key": "input.enter_behavior",
+      "type": "enum",
+      "values": [
+        "commit",
+        "clear"
+      ]
+    },
+    {
+      "default": "commit",
+      "key": "input.space_on_empty_behavior",
+      "type": "enum",
+      "values": [
+        "commit",
+        "clear"
+      ]
+    },
+    {
+      "default": "clear",
+      "key": "input.punct_on_empty_behavior",
+      "type": "enum",
+      "values": [
+        "commit",
+        "clear",
+        "clear_no_input"
+      ]
+    },
+    {
+      "default": "-",
+      "key": "input.buffer_symbol_chars",
+      "type": "str"
+    },
+    {
+      "default": "direct",
+      "key": "input.numpad_behavior",
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "input.numpad_half_width",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.default.remember_last_state",
+      "type": "bool"
+    },
+    {
+      "default": "global",
+      "key": "input.default.state_scope",
+      "type": "enum",
+      "values": [
+        "global",
+        "app"
+      ]
+    },
+    {
+      "default": true,
+      "key": "input.default.chinese_mode",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.default.full_width",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.default.chinese_punct",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.punct.follow_mode",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.punct.smart_after_digit",
+      "type": "bool"
+    },
+    {
+      "default": ".,:",
+      "key": "input.punct.smart_list",
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "input.punct.custom_enabled",
+      "schemaOverride": {
+        "note": "声明了自己标点表的方案不受这个开关约束——整表替换时连它一起换掉了。",
+        "section": "[punct]"
+      },
+      "type": "bool"
+    },
+    {
+      "default": {},
+      "key": "input.punct.custom_mappings",
+      "schemaOverride": {
+        "note": "声明了自己标点表的方案**整表**不用这里的表——不是逐条合并。",
+        "section": "[punct]"
+      },
+      "type": "map"
+    },
+    {
+      "default": false,
+      "key": "input.symbol.smart_mode",
+      "type": "bool"
+    },
+    {
+      "default": 500,
+      "key": "input.symbol.smart_timeout_ms",
+      "type": "int"
+    },
+    {
+      "default": "。，？！：；、～￥·……——",
+      "key": "input.symbol.smart_chars",
+      "type": "str"
+    },
+    {
+      "default": "delete_replace",
+      "key": "input.symbol.smart_method",
+      "type": "enum",
+      "values": [
+        "delete_replace",
+        "hold_composition"
+      ]
+    },
+    {
+      "default": false,
+      "key": "input.symbol.english_punct_mode",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.symbol.english_mode",
+      "type": "bool"
+    },
+    {
+      "default": ".,?!:;",
+      "key": "input.symbol.english_chars",
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "input.auto_pair.chinese",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.auto_pair.english",
+      "type": "bool"
+    },
+    {
+      "default": [
+        "（）",
+        "【】",
+        "｛｝",
+        "《》",
+        "〈〉"
+      ],
+      "key": "input.auto_pair.chinese_pairs",
+      "type": "strlist"
+    },
+    {
+      "default": [
+        "()",
+        "[]",
+        "{}",
+        "<>"
+      ],
+      "key": "input.auto_pair.english_pairs",
+      "type": "strlist"
+    },
+    {
+      "default": [
+        "right_symbol"
+      ],
+      "key": "input.auto_pair.jump_out_keys",
+      "type": "strlist"
+    },
+    {
+      "default": 120,
+      "key": "input.auto_pair.state_ttl_secs",
+      "type": "int"
+    },
+    {
+      "default": true,
+      "key": "input.temp_english.enabled",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.temp_english.show_candidates",
+      "type": "bool"
+    },
+    {
+      "default": "temp_english",
+      "key": "input.temp_english.shift_behavior",
+      "type": "enum",
+      "values": [
+        "temp_english",
+        "direct_commit"
+      ]
+    },
+    {
+      "default": "buffer",
+      "key": "input.temp_english.shift_when_composing",
+      "type": "enum",
+      "values": [
+        "buffer",
+        "commit_enter"
+      ]
+    },
+    {
+      "default": [],
+      "key": "input.temp_english.trigger_keys",
+      "type": "strlist"
+    },
+    {
+      "default": false,
+      "key": "input.temp_english.allow_symbols",
+      "type": "bool"
+    },
+    {
+      "default": "0123456789+-_.@#/",
+      "key": "input.temp_english.symbol_chars",
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "input.temp_english.space_as_input",
+      "type": "bool"
+    },
+    {
+      "default": "always",
+      "key": "input.temp_english.raw_candidate",
+      "type": "enum",
+      "values": [
+        "always",
+        "in_dict",
+        "off"
+      ]
+    },
+    {
+      "default": false,
+      "key": "input.temp_english.commit_space",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.temp_english.phrase_seg",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.caret.add_word_via_composition",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.caret.temp_pinyin_via_composition",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.caret.special_via_composition",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.caret.rare_char_via_composition",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.temp_english.case_variants",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.temp_english.case_follow_input",
+      "type": "bool"
+    },
+    {
+      "default": "follow",
+      "key": "input.temp_english.candidate_layout",
+      "type": "enum",
+      "values": [
+        "follow",
+        "vertical",
+        "horizontal"
+      ]
+    },
+    {
+      "default": false,
+      "key": "input.capslock.cancel_on_mode_switch",
+      "type": "bool"
+    },
+    {
+      "default": "chinese",
+      "key": "input.capslock.mode_after_cancel",
+      "type": "enum",
+      "values": [
+        "chinese",
+        "english",
+        "toggle"
+      ]
+    },
+    {
+      "default": false,
+      "key": "input.capslock.commit_upper",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.temp_pinyin.enabled",
+      "type": "bool"
+    },
+    {
+      "default": [
+        "backtick"
+      ],
+      "key": "input.temp_pinyin.trigger_keys",
+      "type": "strlist"
+    },
+    {
+      "default": "",
+      "key": "input.temp_pinyin.hotkey",
+      "type": "str"
+    },
+    {
+      "default": "follow",
+      "key": "input.temp_pinyin.candidate_layout",
+      "type": "enum",
+      "values": [
+        "follow",
+        "vertical",
+        "horizontal"
+      ]
+    },
+    {
+      "default": "auto",
+      "key": "input.temp_pinyin.code_hint_source",
+      "type": "enum",
+      "values": [
+        "off",
+        "codetable",
+        "shuangpin",
+        "auto"
+      ]
+    },
+    {
+      "default": false,
+      "key": "input.url.enabled",
+      "type": "bool"
+    },
+    {
+      "default": [
+        "www.",
+        "http",
+        "https",
+        "ftp."
+      ],
+      "key": "input.url.prefixes",
+      "type": "strlist"
+    },
+    {
+      "default": false,
+      "key": "input.url.history_enabled",
+      "type": "bool"
+    },
+    {
+      "default": 200,
+      "key": "input.url.history_max",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "input.email.enabled",
+      "type": "bool"
+    },
+    {
+      "default": [
+        "qq.com",
+        "163.com",
+        "126.com",
+        "foxmail.com",
+        "sina.com",
+        "sina.cn",
+        "sohu.com",
+        "139.com",
+        "189.cn",
+        "aliyun.com",
+        "yeah.net",
+        "21cn.com",
+        "tom.com",
+        "gmail.com",
+        "outlook.com",
+        "hotmail.com",
+        "yahoo.com",
+        "icloud.com",
+        "live.com",
+        "me.com",
+        "proton.me",
+        "protonmail.com",
+        "aol.com",
+        "gmx.com"
+      ],
+      "key": "input.email.suffixes",
+      "type": "strlist"
+    },
+    {
+      "default": false,
+      "key": "input.unicode.enabled",
+      "type": "bool"
+    },
+    {
+      "default": [
+        "u+",
+        "U+"
+      ],
+      "key": "input.unicode.prefixes",
+      "type": "strlist"
+    },
+    {
+      "default": [],
+      "key": "input.rare_char.trigger_keys",
+      "type": "strlist"
+    },
+    {
+      "default": [],
+      "key": "input.rare_char.include_blocks",
+      "type": "strlist"
+    },
+    {
+      "default": "follow",
+      "key": "input.reverse.candidate_layout",
+      "type": "enum",
+      "values": [
+        "follow",
+        "vertical",
+        "horizontal"
+      ]
+    },
+    {
+      "default": false,
+      "key": "input.reverse.lookup_disabled_dicts",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.emoji.enabled",
+      "type": "bool"
+    },
+    {
+      "default": "exact",
+      "key": "input.emoji.scope",
+      "type": "enum",
+      "values": [
+        "off",
+        "exact",
+        "all"
+      ]
+    },
+    {
+      "default": "after",
+      "key": "input.emoji.show_as",
+      "type": "enum",
+      "values": [
+        "after",
+        "tail",
+        "comment"
+      ]
+    },
+    {
+      "default": 3,
+      "key": "input.emoji.max_per_word",
+      "type": "int"
+    },
+    {
+      "default": 1,
+      "key": "input.emoji.max_hosts",
+      "type": "int"
+    },
+    {
+      "default": 2,
+      "key": "input.emoji.min_word_chars",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "input.emoji.categories",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.emoji.block_auto_commit",
+      "type": "bool"
+    },
+    {
+      "default": {
+        "frost_chem": false,
+        "frost_diezi": false,
+        "frost_emoji": true,
+        "frost_greek": false,
+        "frost_keys": false,
+        "frost_misc": false,
+        "frost_month": false,
+        "frost_radicals": false,
+        "frost_sitcom": false
+      },
+      "key": "input.emoji.modules",
+      "type": "map"
+    },
+    {
+      "default": "follow",
+      "key": "input.url.candidate_layout",
+      "type": "enum",
+      "values": [
+        "follow",
+        "vertical",
+        "horizontal"
+      ]
+    },
+    {
+      "default": "follow",
+      "key": "input.email.candidate_layout",
+      "type": "enum",
+      "values": [
+        "follow",
+        "vertical",
+        "horizontal"
+      ]
+    },
+    {
+      "default": "follow",
+      "key": "input.unicode.candidate_layout",
+      "type": "enum",
+      "values": [
+        "follow",
+        "vertical",
+        "horizontal"
+      ]
+    },
+    {
+      "default": "vertical",
+      "key": "input.add_word.candidate_layout",
+      "type": "enum",
+      "values": [
+        "follow",
+        "vertical",
+        "horizontal"
+      ]
+    },
+    {
+      "default": false,
+      "key": "input.s2t.enabled",
+      "type": "bool"
+    },
+    {
+      "default": "s2t",
+      "key": "input.s2t.variant",
+      "type": "str"
+    },
+    {
+      "default": false,
+      "key": "input.t2s.enabled",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.cmdbar.enabled",
+      "type": "bool"
+    },
+    {
+      "default": "⚡",
+      "key": "input.cmdbar.candidate_prefix",
+      "type": "str"
+    },
+    {
+      "default": 2,
+      "key": "input.phrase.min_prefix",
+      "type": "int"
+    },
+    {
+      "default": "direct_commit",
+      "key": "input.top_commit_mode",
+      "type": "enum",
+      "values": [
+        "pre_confirm",
+        "direct_commit"
+      ]
+    },
+    {
+      "default": true,
+      "key": "input.top_commit_learn",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.password_force_english",
+      "type": "bool"
+    },
+    {
+      "default": "off",
+      "key": "input.association.kind",
+      "type": "enum",
+      "values": [
+        "off",
+        "word",
+        "smart"
+      ]
+    },
+    {
+      "default": "one_shot",
+      "key": "input.association.mode",
+      "type": "enum",
+      "values": [
+        "one_shot",
+        "continuous"
+      ]
+    },
+    {
+      "default": 9,
+      "key": "input.association.max_count",
+      "type": "int"
+    },
+    {
+      "default": true,
+      "key": "input.association.space_commits",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.association.select_keys_commit",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.association.enter_cancels_only",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.association.backspace_cancels_only",
+      "type": "bool"
+    },
+    {
+      "default": 5000,
+      "key": "input.association.hide_after_ms",
+      "type": "int"
+    },
+    {
+      "default": "联想输入",
+      "key": "input.association.hint",
+      "type": "str"
+    },
+    {
+      "default": true,
+      "key": "input.association.history",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.association.bigram",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "input.association.prefix",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "input.association.punct",
+      "type": "bool"
+    },
+    {
+      "default": [
+        "lshift",
+        "rshift"
+      ],
+      "key": "keys.toggle_mode_keys",
+      "type": "strlist"
+    },
+    {
+      "default": true,
+      "key": "keys.commit_on_switch",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "keys.ctrl_space_toggle",
+      "type": "bool"
+    },
+    {
+      "default": "ctrl+shift+e",
+      "key": "keys.switch_engine",
+      "type": "str"
+    },
+    {
+      "default": "shift+space",
+      "key": "keys.toggle_full_width",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+.",
+      "key": "keys.toggle_punct",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+shift+\\",
+      "key": "keys.toggle_toolbar",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+shift+]",
+      "key": "keys.open_settings",
+      "type": "str"
+    },
+    {
+      "default": "none",
+      "key": "keys.open_dictionary",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+equal",
+      "key": "keys.add_word",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+shift+equal",
+      "key": "keys.open_add_word_dialog",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+shift+j",
+      "key": "keys.toggle_s2t",
+      "type": "str"
+    },
+    {
+      "default": "none",
+      "key": "keys.toggle_t2s",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+shift+[",
+      "key": "keys.activate_ime",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+number",
+      "key": "keys.pin_candidate",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+shift+number",
+      "key": "keys.delete_candidate",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+number",
+      "key": "keys.quick_input_select",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+shift+f11",
+      "key": "keys.take_screenshot",
+      "type": "str"
+    },
+    {
+      "default": "ctrl+shift+k",
+      "key": "keys.softkeyboard",
+      "type": "str"
+    },
+    {
+      "default": [],
+      "key": "keys.global_hotkeys",
+      "type": "strlist"
+    },
+    {
+      "default": {},
+      "key": "keys.key_actions",
+      "type": "map"
+    },
+    {
+      "default": {},
+      "key": "keys.session_actions",
+      "type": "map"
+    },
+    {
+      "default": [
+        "semicolon_quote"
+      ],
+      "key": "keys.select_key_groups",
+      "type": "strlist"
+    },
+    {
+      "default": [
+        "pageupdown",
+        "minus_equal"
+      ],
+      "key": "keys.page_keys",
+      "type": "strlist"
+    },
+    {
+      "default": [
+        "arrows",
+        "tab"
+      ],
+      "key": "keys.highlight_keys",
+      "type": "strlist"
+    },
+    {
+      "default": [],
+      "key": "keys.select_char_keys",
+      "type": "strlist"
+    },
+    {
+      "default": "ignore",
+      "key": "keys.overflow.number_key",
+      "type": "enum",
+      "values": [
+        "ignore",
+        "commit",
+        "commit_and_input",
+        "clear_and_input"
+      ]
+    },
+    {
+      "default": "ignore",
+      "key": "keys.overflow.select_key",
+      "type": "enum",
+      "values": [
+        "ignore",
+        "commit",
+        "commit_and_input"
+      ]
+    },
+    {
+      "default": "ignore",
+      "key": "keys.overflow.select_char_key",
+      "type": "enum",
+      "values": [
+        "ignore",
+        "commit",
+        "commit_and_input"
+      ]
+    },
+    {
+      "default": "ignore",
+      "key": "keys.overflow.page_key",
+      "type": "enum",
+      "values": [
+        "ignore",
+        "commit_and_input"
+      ]
+    },
+    {
+      "default": {},
+      "key": "keys.overflow.page_key_overrides",
+      "type": "map"
+    },
+    {
+      "default": 7,
+      "key": "ui.candidate.per_page",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.per_page_extended",
+      "type": "int"
+    },
+    {
+      "default": "horizontal",
+      "key": "ui.candidate.layout",
+      "schemaOverride": {
+        "note": "方案可覆盖候选窗排列方向；方案没写则用这里的值。",
+        "section": "[candidate]"
+      },
+      "type": "enum",
+      "values": [
+        "horizontal",
+        "vertical"
+      ]
+    },
+    {
+      "default": "app_inline",
+      "key": "ui.candidate.preedit_display",
+      "type": "enum",
+      "values": [
+        "app_inline",
+        "candidate_top",
+        "candidate_inline"
+      ]
+    },
+    {
+      "default": false,
+      "key": "ui.candidate.hide_window",
+      "type": "bool"
+    },
+    {
+      "default": "fast",
+      "key": "ui.candidate.first_show_mode",
+      "type": "enum",
+      "values": [
+        "fast",
+        "wait",
+        "instant"
+      ]
+    },
+    {
+      "default": 0.8,
+      "key": "ui.candidate.first_show_settle_ratio",
+      "type": "float"
+    },
+    {
+      "default": 100,
+      "key": "ui.candidate.fast_typing_window_ms",
+      "type": "int"
+    },
+    {
+      "default": 25,
+      "key": "ui.candidate.fast_first_show_fallback_ms",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.font_size",
+      "type": "float"
+    },
+    {
+      "byLayout": true,
+      "default": "",
+      "key": "ui.candidate.pager_bar_display",
+      "type": "enum",
+      "values": [
+        "",
+        "hide",
+        "auto",
+        "always"
+      ]
+    },
+    {
+      "byLayout": true,
+      "default": "",
+      "key": "ui.candidate.page_number_display",
+      "type": "enum",
+      "values": [
+        "",
+        "show",
+        "hide"
+      ]
+    },
+    {
+      "default": 16,
+      "key": "ui.candidate.max_chars",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.min_window_width_horizontal",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.min_window_width_vertical",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.min_window_height_horizontal",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.min_window_height_vertical",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.min_rows",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "ui.candidate.grid_expand",
+      "type": "bool"
+    },
+    {
+      "default": 5,
+      "key": "ui.candidate.grid_rows",
+      "type": "int"
+    },
+    {
+      "default": 6,
+      "key": "ui.candidate.grid_cell_max_chars",
+      "type": "int"
+    },
+    {
+      "default": "rows",
+      "key": "ui.candidate.grid_index_fill",
+      "type": "enum",
+      "values": [
+        "rows",
+        "cells",
+        "off"
+      ]
+    },
+    {
+      "default": true,
+      "key": "ui.candidate.grid_pageupdown_screen",
+      "type": "bool"
+    },
+    {
+      "default": [
+        "all",
+        "single",
+        "phrase",
+        "rare"
+      ],
+      "key": "ui.candidate.grid_categories",
+      "type": "strlist"
+    },
+    {
+      "default": true,
+      "key": "ui.candidate.comment_enabled",
+      "type": "bool"
+    },
+    {
+      "default": "${code_hint|code_rev|shuangpin}",
+      "key": "ui.candidate.comment_template_vertical",
+      "schemaOverride": {
+        "note": "方案可覆盖注释模板；方案没写则用这里的值。",
+        "section": "[candidate]"
+      },
+      "type": "str"
+    },
+    {
+      "default": "${code_hint|code_rev|shuangpin}",
+      "key": "ui.candidate.comment_template_horizontal",
+      "schemaOverride": {
+        "note": "方案可覆盖注释模板；方案没写则用这里的值。",
+        "section": "[candidate]"
+      },
+      "type": "str"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.comment_max_chars_vertical",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.comment_max_chars_horizontal",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "ui.candidate.comment_above",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "ui.candidate.auto_comment_dicts",
+      "type": "bool"
+    },
+    {
+      "default": [],
+      "key": "ui.comment_dicts",
+      "type": "structlist"
+    },
+    {
+      "default": [],
+      "key": "ui.candidate.index_labels",
+      "type": "strlist"
+    },
+    {
+      "default": false,
+      "key": "ui.candidate.flip_when_above",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "ui.candidate.swap_preedit_when_above",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "ui.candidate.pager_in_preedit",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "ui.candidate.double_click_screenshot",
+      "type": "bool"
+    },
+    {
+      "default": "follow_caret",
+      "key": "ui.candidate.position_mode",
+      "type": "enum",
+      "values": [
+        "follow_caret",
+        "fixed"
+      ]
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.offset_x",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.offset_y",
+      "type": "int"
+    },
+    {
+      "default": "follow",
+      "key": "ui.candidate.shadow",
+      "type": "enum",
+      "values": [
+        "follow",
+        "off"
+      ]
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.custom_x",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.candidate.custom_y",
+      "type": "int"
+    },
+    {
+      "default": "",
+      "key": "ui.font.family",
+      "type": "str"
+    },
+    {
+      "default": "",
+      "key": "ui.font.path",
+      "type": "str"
+    },
+    {
+      "default": "directwrite",
+      "key": "ui.font.render_mode",
+      "type": "enum",
+      "values": [
+        "directwrite",
+        "gdi"
+      ]
+    },
+    {
+      "default": [],
+      "key": "ui.font.fallback",
+      "type": "strlist"
+    },
+    {
+      "default": 0,
+      "key": "ui.font.weight",
+      "type": "int"
+    },
+    {
+      "default": {},
+      "key": "ui.font.scripts",
+      "type": "map",
+      "values": [
+        "latin",
+        "greek",
+        "cyrillic",
+        "cjk",
+        "emoji",
+        "digits",
+        "punct"
+      ]
+    },
+    {
+      "default": "default",
+      "key": "ui.theme.name",
+      "type": "str"
+    },
+    {
+      "default": "system",
+      "key": "ui.theme.style",
+      "type": "str"
+    },
+    {
+      "default": "short",
+      "key": "ui.mode_indicator.style",
+      "type": "enum",
+      "values": [
+        "short",
+        "full",
+        "none"
+      ]
+    },
+    {
+      "default": true,
+      "key": "ui.tooltip.enabled",
+      "type": "bool"
+    },
+    {
+      "default": 200,
+      "key": "ui.tooltip.delay",
+      "type": "int"
+    },
+    {
+      "default": 200,
+      "key": "ui.tooltip.max_chars",
+      "type": "int"
+    },
+    {
+      "default": 40,
+      "key": "ui.tooltip.wrap_width",
+      "type": "int"
+    },
+    {
+      "default": [
+        {
+          "each": "",
+          "enabled": true,
+          "inline": false,
+          "label": "完整原文",
+          "promote": "",
+          "template": "${full_text}"
+        },
+        {
+          "each": "",
+          "enabled": true,
+          "inline": false,
+          "label": "编码{(${code_source})}",
+          "promote": "",
+          "template": "${word_code}"
+        },
+        {
+          "each": "han",
+          "enabled": true,
+          "inline": false,
+          "label": "拼音",
+          "promote": "",
+          "template": "${char}：${readings}"
+        },
+        {
+          "each": "han",
+          "enabled": false,
+          "inline": false,
+          "label": "拆字",
+          "promote": "",
+          "template": "${char}：${chaizi}{ [${chaizi_code}]}"
+        },
+        {
+          "each": "",
+          "enabled": true,
+          "inline": false,
+          "label": "释义",
+          "promote": "",
+          "template": "${dict_all:\n}"
+        },
+        {
+          "each": "char",
+          "enabled": false,
+          "inline": false,
+          "label": "Unicode",
+          "promote": "",
+          "template": "${char}：${unicode}"
+        },
+        {
+          "each": "",
+          "enabled": false,
+          "inline": false,
+          "label": "调试",
+          "promote": "",
+          "template": "${debug}"
+        }
+      ],
+      "key": "ui.tooltip.sections",
+      "type": "structlist"
+    },
+    {
+      "default": true,
+      "key": "ui.status.enabled",
+      "type": "bool"
+    },
+    {
+      "default": 800,
+      "key": "ui.status.duration",
+      "type": "int"
+    },
+    {
+      "default": "temp",
+      "key": "ui.status.display_mode",
+      "type": "enum",
+      "values": [
+        "temp",
+        "always"
+      ]
+    },
+    {
+      "default": false,
+      "key": "ui.status.show_on_focus",
+      "type": "bool"
+    },
+    {
+      "default": "full",
+      "key": "ui.status.schema_name_style",
+      "type": "enum",
+      "values": [
+        "full",
+        "short"
+      ]
+    },
+    {
+      "default": "follow_caret",
+      "key": "ui.status.position_mode",
+      "type": "enum",
+      "values": [
+        "follow_caret",
+        "fixed",
+        "screen_center",
+        "screen_top_left",
+        "screen_top_right",
+        "screen_bottom_left",
+        "screen_bottom_right",
+        "window_center",
+        "window_bottom_left"
+      ]
+    },
+    {
+      "default": "last",
+      "key": "ui.status.fallback_position",
+      "type": "enum",
+      "values": [
+        "last",
+        "hide",
+        "screen_center",
+        "screen_top_left",
+        "screen_top_right",
+        "screen_bottom_left",
+        "screen_bottom_right",
+        "window_center",
+        "window_bottom_left"
+      ]
+    },
+    {
+      "default": 0,
+      "key": "ui.status.offset_x",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.status.offset_y",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.status.custom_x",
+      "type": "int"
+    },
+    {
+      "default": 0,
+      "key": "ui.status.custom_y",
+      "type": "int"
+    },
+    {
+      "default": [
+        "schema",
+        "punct",
+        "full_width",
+        "s2t",
+        "caps"
+      ],
+      "key": "ui.status.items",
+      "type": "strlist"
+    },
+    {
+      "default": true,
+      "key": "ui.toolbar.visible",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "ui.toolbar.hide_in_fullscreen",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "ui.toolbar.fullscreen_watch",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "ui.toolbar.hide_in_english",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "ui.toolbar.auto_hide",
+      "type": "bool"
+    },
+    {
+      "default": 5,
+      "key": "ui.toolbar.auto_hide_delay",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "ui.toolbar.auto_hide_hover_reveal",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "ui.toolbar.vertical",
+      "type": "bool"
+    },
+    {
+      "default": [
+        "mode",
+        "punct",
+        "full_width",
+        "-s2t",
+        "-t2s",
+        "soft_keyboard",
+        "settings"
+      ],
+      "key": "ui.toolbar.items",
+      "type": "strlist"
+    },
+    {
+      "default": [],
+      "key": "ui.toolbar.buttons",
+      "type": "structlist"
+    },
+    {
+      "default": "none",
+      "key": "ui.langbar.badge",
+      "type": "enum",
+      "values": [
+        "none",
+        "corner"
+      ]
+    },
+    {
+      "default": 1.0,
+      "key": "ui.langbar.badge_scale",
+      "type": "float"
+    },
+    {
+      "default": 0.88,
+      "key": "ui.langbar.badge_alpha",
+      "type": "float"
+    },
+    {
+      "default": [
+        {
+          "color_dark": "#2288E0",
+          "color_light": "#2288E0",
+          "corner": "bottom_right",
+          "enabled": true,
+          "scale": 1.0,
+          "state": "punct_cn"
+        },
+        {
+          "color_dark": "#EE9922",
+          "color_light": "#EE9922",
+          "corner": "bottom_right",
+          "enabled": true,
+          "scale": 1.0,
+          "state": "punct_en"
+        },
+        {
+          "color_dark": "#E0447A",
+          "color_light": "#E0447A",
+          "corner": "top_right",
+          "enabled": true,
+          "scale": 1.0,
+          "state": "full_width"
+        }
+      ],
+      "key": "ui.langbar.badges",
+      "type": "structlist"
+    },
+    {
+      "default": "",
+      "key": "ui.langbar.text_color_cn_light",
+      "type": "str"
+    },
+    {
+      "default": "",
+      "key": "ui.langbar.text_color_cn_dark",
+      "type": "str"
+    },
+    {
+      "default": "",
+      "key": "ui.langbar.text_color_en_light",
+      "type": "str"
+    },
+    {
+      "default": "",
+      "key": "ui.langbar.text_color_en_dark",
+      "type": "str"
+    },
+    {
+      "default": "英",
+      "key": "ui.labels.english",
+      "type": "str"
+    },
+    {
+      "default": "A",
+      "key": "ui.labels.caps_lock",
+      "type": "str"
+    },
+    {
+      "default": true,
+      "key": "stats.enabled",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "stats.track_english",
+      "type": "bool"
+    },
+    {
+      "default": 0.85,
+      "key": "stats.speed_factor",
+      "type": "float"
+    },
+    {
+      "default": "info",
+      "key": "debug.log_level",
+      "type": "enum",
+      "values": [
+        "off",
+        "error",
+        "warn",
+        "info",
+        "debug",
+        "trace"
+      ]
+    },
+    {
+      "default": 10,
+      "key": "debug.log_max_size_mb",
+      "type": "int"
+    },
+    {
+      "default": 10,
+      "key": "debug.log_max_files",
+      "type": "int"
+    },
+    {
+      "default": false,
+      "key": "system.dota2_compat",
+      "type": "bool"
+    },
+    {
+      "default": "拼音输入法",
+      "key": "system.dota2_compat_name",
+      "type": "str"
+    },
+    {
+      "default": "smart",
+      "key": "mobile.association.kind",
+      "type": "enum",
+      "values": [
+        "off",
+        "word",
+        "smart"
+      ]
+    },
+    {
+      "default": "continuous",
+      "key": "mobile.association.mode",
+      "type": "enum",
+      "values": [
+        "one_shot",
+        "continuous"
+      ]
+    },
+    {
+      "default": true,
+      "key": "mobile.association.punct",
+      "type": "bool"
+    },
+    {
+      "default": false,
+      "key": "mobile.association.space_commits",
+      "type": "bool"
+    },
+    {
+      "default": true,
+      "key": "mobile.grammar.enabled",
+      "type": "bool"
+    },
+    {
+      "default": 0.5,
+      "key": "mobile.grammar.weight",
+      "type": "float"
+    },
+    {
+      "default": "wanxiang-mini.gram",
+      "key": "mobile.grammar.model",
+      "type": "str"
+    }
+  ]
+}

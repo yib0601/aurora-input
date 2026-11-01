@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的旧运行被新推送取消，省额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: 格式检查
+        run: cargo fmt --check
+
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: fmt
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Wayland 后端的 xkb 单测要真跑 libxkbcommon（运行期 dlopen）+ XKB 数据。runner 镜像
+      # 一般自带，但不装保证、缺了测试只会打印「跳过」后算通过——显式装上，再让下面的
+      # WINDUI_REQUIRE_XKB=1 把「缺库」变成失败。
+      - name: 安装 libxkbcommon（仅 Linux）
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends libxkbcommon0 xkb-data
+      - name: Build
+        run: cargo build --all-targets
+      - name: Test
+        run: cargo test
+        env:
+          WINDUI_REQUIRE_XKB: ${{ runner.os == 'Linux' && '1' || '' }}
+      - name: Clippy（零警告）
+        run: cargo clippy --all-targets -- -D warnings
+      # 默认 feature 之外唯一在用的组合（wind-portable 用 default-features = false）。
+      # 它的消费者在别的仓里，本仓的 example 又全跑默认 feature——没有这条，svg/d2d
+      # 关闭时的门控疏漏一路溜到发布版才被发现（0.11.0 即如此）。
+      - name: Clippy（关闭默认 feature）
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
+      # 32 位 Windows。windows-rs 在 x86 上有两处与 64 位不同的形状：`NOTIFYICONDATAW`
+      # 是 packed(1)（对字段取引用即 E0793），`SetWindowLongPtrW` 收 i32。本矩阵的
+      # windows-latest 只编 x86_64，没有这条就只能等下游用户撞上（#17、#9 各一次）。
+      # 只 clippy lib：要守的是平台层能否编译，测试与示例在 x64 那档已覆盖。
+      - name: Clippy（i686，仅 Windows）
+        if: runner.os == 'Windows'
+        # bash 带 -e：pwsh 下多行 run 只看最后一条命令的退出码，前一档失败会被吞掉。
+        shell: bash
+        run: |
+          rustup target add i686-pc-windows-msvc
+          cargo clippy --target i686-pc-windows-msvc --lib -- -D warnings
+          cargo clippy --target i686-pc-windows-msvc --lib --no-default-features -- -D warnings
+      # 跨平台 GPU 后端（wgpu）。**macOS 不在这里跑**：那边后端是默认编入的，上面
+      # 三步（build / test / clippy）已经覆盖；`gpu` feature 只对非 macOS 目标有意义。
+      #
+      # Windows runner 走 DX12/WARP 软件回退；Linux runner 通常没有 Vulkan/GL 适配器。
+      # 拿不到适配器时 GPU 用例会打印「跳过」后返回——绿灯不等于跑了，怀疑时进日志搜
+      # 「跳过：本机没有可用的 wgpu 适配器」。Linux 上这一档守的主要是「能编译」：
+      # Linux 平台层尚未接 GPU 呈现，但 `src/render/gpu/` 在那里照样要编得过。
+      - name: Clippy（gpu feature，非 macOS）
+        if: runner.os != 'macOS'
+        run: cargo clippy --all-targets --features gpu -- -D warnings
+      - name: Test（gpu feature，非 macOS）
+        if: runner.os != 'macOS'
+        run: cargo test --features gpu
+        env:
+          WINDUI_REQUIRE_XKB: ${{ runner.os == 'Linux' && '1' || '' }}
+
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: 检查每个提交的 Signed-off-by
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          fail=0
+          for c in $(git rev-list "$base..$head"); do
+            if ! git log -1 --format=%B "$c" | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then
+              echo "::error::提交 $c 缺少 Signed-off-by（DCO）。请用 git commit -s 重新签署。"
+              fail=1
+            fi
+          done
+          exit $fail

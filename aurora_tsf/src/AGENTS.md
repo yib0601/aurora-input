@@ -1,0 +1,290 @@
+<!-- Parent: ../AGENTS.md -->
+<!-- Generated: 2026-03-13 | Updated: 2026-04-20 -->
+
+# src/ - Implementation Files
+
+## Purpose
+
+C++ implementation files for the TSF DLL。所有文件编译链接进唯一目标 `wind_tsf.dll`。文件按组件（text service, IPC, hotkey, UI, host window, logging）和入口点（dllmain）组织。
+
+> **注意：`WindDWriteShim.cpp` 已移除。** DirectWrite 渲染改由 Go 侧通过 CGO 直接调用系统 dwrite.dll，不再在 C++ 侧构建。
+
+## Key Files
+
+| File | Description |
+|------|-------------|
+| `dllmain.cpp` | DLL entry point (DllMain, DllCanUnloadNow, DllGetClassObject, DllRegisterServer, DllUnregisterServer) |
+| `Globals.cpp` | Global state initialization (HINSTANCE, ref count, GUID definitions) |
+| `TextService.cpp` | CTextService implementation (TSF integration, composition, caret tracking, state sync) |
+| `KeyEventSink.cpp` | CKeyEventSink implementation (key capture, modifier state machine, barrier mechanism) |
+| `IPCClient.cpp` | CIPCClient implementation (named pipe, binary protocol, circuit breaker, async reader) |
+| `ClassFactory.cpp` | CClassFactory implementation (COM class factory for TextService) |
+| `HotkeyManager.cpp` | CHotkeyManager implementation (hotkey lookup, key classification) |
+| `LangBarItemButton.cpp` | CLangBarItemButton implementation (language bar UI, menu, async updates) |
+| `CaretEditSession.cpp` | CCaretEditSession implementation (TSF edit session for caret position) |
+| `DisplayAttributeInfo.cpp` | Display attribute classes (styling for composition text) |
+| `Register.cpp` | Registry integration (DllRegisterServer, DllUnregisterServer, profile/category registration) |
+| `FileLogger.cpp` | CFileLogger implementation (Init/Shutdown, config file reading, file write with Named Mutex, auto-rotation at 5MB) |
+| `HostWindow.cpp` | CHostWindow implementation（创建 Band 级分层窗口、共享内存渲染帧读取、渲染线程、动态解析 CreateWindowInBand/GetWindowBand API） |
+
+## Component Responsibilities
+
+### dllmain.cpp
+- `DllMain()` - Process attach/detach, thread initialization
+- `DllCanUnloadNow()` - Return S_FALSE if server locked, else S_OK
+- `DllGetClassObject()` - Create and return CClassFactory
+- `DllRegisterServer()` - Register with Windows (delegates to Register.cpp)
+- `DllUnregisterServer()` - Unregister from Windows (delegates to Register.cpp)
+
+### TextService.cpp
+- `CTextService::Activate()` - Register thread manager event sink, initialize components
+- `CTextService::Deactivate()` - Unregister sinks, cleanup
+- `CTextService::OnSetFocus()` - Handle window focus changes（含读取焦点控件 InputScope + 密码框检测，随 focus_gained 上报）
+- `CTextService::_QueryInputScopeMask()` - 同步读锁读取焦点文档的 TSF InputScope 集合，编码为 bitmask（bit N = 枚举值 N 存在，IS_PASSWORD=31），失败返回 0。由 `CQueryInputScopeEditSession`（TextService.cpp 内联）在 selection + 文档起点两 range 合并读取
+- `CTextService::_IsFocusKeyboardDisabled()` - 读焦点 context 的 `GUID_COMPARTMENT_KEYBOARD_DISABLED`（Weasel/小狼毫做法）判定密码框：Chromium 系浏览器密码框置位、无痕普通框不置位。命中则在 mask 补 IS_PASSWORD 位让 Go 抑制中文（图标不变）
+- `CTextService::UpdateComposition()` - Update inline composition text via edit session
+- `CTextService::InsertText()` - Commit text without composition
+- `CTextService::EndComposition()` - Terminate active composition
+- `CTextService::InsertTextAndStartComposition()` - Commit + start new composition (for top-code)
+- `CTextService::GetCaretPosition()` - Get caret position from context
+- `CTextService::SendCaretPositionUpdate()` - Send caret update to Go service
+- `CTextService::ToggleInputMode()` - Toggle Chinese/English mode
+- `CTextService::_DoFullStateSync()` - Sync state with Go service after reconnection
+- `CTextService::NotifyCandidatesVisibilityChanged()` / UIElement 段 - TSF **UI-less** 支持：宿主
+  （全屏游戏、SDL/Unreal、搜索框）在 `BeginUIElement` 回 `pbShow=FALSE` 或以
+  `TF_TMAE_UIELEMENTENABLEDONLY` 激活时接管候选绘制。DLL 经 `CMD_UIELEMENT_STATE` 报「谁画」、
+  每次候选变化经 `CMD_UIELEMENT_QUERY` 同步拉快照答 `ITfCandidateListUIElement`，宿主的
+  `SetSelection/Finalize/Abort` 经 `CMD_UIELEMENT_ACTION` 回流；服务端按 pid 不弹本地候选窗。
+  宿主不接管时 getter 仍是占位数据（`GetCount=1`），不拉快照。见
+  `docs/design/game-compat-tsf-uielement.md`
+- Edit session helper classes: CUpdateCompositionEditSession, CEndCompositionEditSession, etc.
+
+### KeyEventSink.cpp
+- `CKeyEventSink::OnKeyDown()` - Capture key down events
+- `CKeyEventSink::OnKeyUp()` - Capture key up events
+- `CKeyEventSink::OnTestKey()` - Peek at key without consuming
+- `CKeyEventSink::OnPreservedKey()` - Handle hotkey (Ctrl+Space, etc.)
+- `_UpdateModsOnKeyDown()` - Update modifier state machine on key down
+- `_UpdateModsOnKeyUp()` - Update modifier state machine on key up
+- `_GetModsSnapshot()` - Get current modifier state for event
+- `_GetTogglesSnapshot()` - Get CapsLock/NumLock/ScrollLock state
+- `_SendKeyToService()` - Serialize and send key event to Go service
+- `_HandleServiceResponse()` - Parse response and apply (consume/pass through)
+- `_SendCommitRequest()` - Send commit request with barrier for Space/Enter/number（**已实现，尚未调用，见下方 Barrier 说明**）
+- `_HandleCommitResult()` - Process commit result from Go service（**已实现，尚未调用**）
+- `_CheckBarrierTimeout()` - Check if barrier mechanism times out (500ms)（每次 OnKeyDown 检查，有挂起时才生效）
+- `_IsMatchingKeyUp()` - Match KeyUp with pending toggle KeyDown
+- `_IsContextReadOnly()` - Detect read-only input fields (browser support)
+- `OnCompositionUnexpectedlyTerminated()` - Handle composition termination by application
+- Toggle key tap detection (500ms threshold for mode toggle vs long press)
+
+### IPCClient.cpp
+- `CIPCClient::Connect()` - Connect to named pipe (with timeout)
+- `CIPCClient::Disconnect()` - Close pipe handle
+- `CIPCClient::IsServiceAvailable()` - Check circuit breaker and pipe state
+- `SendKeyEvent()` - Send key event with binary protocol
+- `SendCommitRequest()` - Send commit request with barrier
+- `SendCaretUpdate()` - Send caret position to Go service
+- `SendFocusGained()` / `SendFocusLost()` - Focus notifications。FocusGained 为**同步**命令：Go 在响应里回传 CMD_MODE_PUSH（权威 chineseMode/fullWidth），本端在 OnSetFocus 内同步写入 `_bChineseMode`，消除首次按键上屏英文竞态；重型状态（工具栏/热键/hostRender）仍由 push pipe CMD_ACTIVATION_STATUS_PUSH 异步回送。FocusLost 仍 async。FocusGainedPayload 现为 38 字节，末尾依次是 8 字节 InputScope bitmask（密码框等语义供 Go 决策）+ disabled(1B) + reason(1B)（输入诊断 HUD，Task 7）；定长段之后是三个变长段（bundleId 占位 / 顶层窗口类名 / 顶层窗口标题，布局见 BinaryProtocol.h）。标题只在 core 推开 `CONFIG_KEY_COMPAT_TITLE_MATCH`（本进程可能命中 compat 标题规则）时用 `InternalGetWindowText` 采集，日志只记长度（判据 `WindowTitlePolicy.h`）
+- `SendInputStateReport()` - 输入诊断 HUD（Task 7）：async 上报 `CMD_INPUT_STATE_REPORT`（14 字节：pid u32 + disabled u8 + reason u8 + inputScopeMask u64），用于 compartment 变更但焦点未变（不触发新 OnSetFocus）时让 HUD 即时刷新；调用点为 `TextService::OnChange` 的 `GUID_COMPARTMENT_KEYBOARD_DISABLED` 分支
+- `SendDiagSnapshot()` - 输入诊断 HUD 增强：async 上报 `CMD_DIAG_SNAPSHOT`（`DiagSnapshotHeader` 64 字节 + 三段 `len u16 + UTF-8` 类名：focus/root/foreground），内容为焦点窗口链、前台窗口、DocMgr/Context 实例 id、band。**由 `CONFIG_KEY_DIAG_SNAPSHOT` 门控，默认关**；采集器 `TextService::SendDiagSnapshotIfEnabled()` 在开关关闭时一次 Win32 调用都不做。调用点：`OnSetFocus`（focus_gained 之后，且在刷新 `_pLastActiveDocMgr` **之前**算 docMgrChanged）与 `OnChange` 的 KEYBOARD_DISABLED 分支。⚠ 刻意不并入 `CMD_FOCUS_GAINED`——那是宿主 UI 线程上的同步往返，首字延迟挂在它身上。焦点窗口句柄带 `WND_SRC_*` 来源标记（TSF view / GUI thread / foreground），三条通路语义不同，尤其 foreground 可能不属于本进程
+- `SendIMEActivated()` / `SendIMEDeactivated()` - IME state notifications（IMEActivated 已改 async；同上）
+- `SendModeNotify()` - Notify mode change (TSF local toggle, async)
+- `SendToggleMode()` - Toggle mode request from UI (sync)
+- `SendCompositionTerminated()` - Notify composition unexpectedly terminated
+- `SendAsync()` - Send async message (fire-and-forget)
+- `SendSync()` - Send sync message (wait for response)
+- `ReceiveResponse()` - Parse binary response from pipe
+- `_SendBinaryMessage()` - Low-level pipe write
+- `_ReceiveBinaryMessage()` - Low-level pipe read
+- `_ParseResponse()` - Deserialize binary response to ServiceResponse struct
+- `_WriteWithTimeout()` / `_ReadWithTimeout()` - Overlapped I/O with timeout
+- `_RecordSuccess()` / `_RecordFailure()` - Circuit breaker tracking
+- `_ShouldAttemptOperation()` - Circuit breaker decision logic
+- `_Utf8ToWide()` / `_WideToUtf8()` - Encoding helpers
+- `_Log()` / `_LogError()` / `_LogDebug()` - Logging helpers
+- Async reader thread: `_AsyncReaderThread()`, `_AsyncReaderLoop()`, `StartAsyncReader()`, `StopAsyncReader()`
+- Batch support: `BeginBatch()`, `AddBatchEvent()`, `SendBatch()`, `ReceiveBatchResponse()`
+
+### HotkeyManager.cpp
+- `CHotkeyManager::UpdateHotkeys()` - Update whitelist from Go service
+- `CHotkeyManager::IsKeyDownHotkey()` / `IsKeyUpHotkey()` - O(1) lookup
+- `CHotkeyManager::IsToggleModeKeyByVK()` - Check if key toggles mode
+- `CHotkeyManager::ClassifyInputKey()` - Classify key type (letter, number, punct, etc.)
+- `CHotkeyManager::CalcKeyHash()` - Calculate key hash for lookup
+- `CHotkeyManager::NormalizeModifiers()` - Strip left/right specific modifiers
+
+### LangBarItemButton.cpp
+- `CLangBarItemButton::GetInfo()` - Return language bar item info
+- `CLangBarItemButton::GetStatus()` - Return item visibility status
+- `CLangBarItemButton::OnClick()` - Handle left-click on language bar
+- `CLangBarItemButton::InitMenu()` - Build right-click context menu
+- `CLangBarItemButton::OnMenuSelect()` - Handle menu item selection
+- `CLangBarItemButton::GetIcon()` - Return language bar icon
+- `CLangBarItemButton::GetText()` - Return tooltip text
+- `CLangBarItemButton::UpdateLangBarButton()` - Update icon/text when mode changes
+- `CLangBarItemButton::UpdateCapsLockState()` - Update indicator when CapsLock toggled
+- `_MsgWndProc()` - Message window for cross-thread updates
+- `PostUpdateFullStatus()` - Thread-safe status update via WM_UPDATE_STATUS
+- `PostCommitText()` - Thread-safe commit via WM_COMMIT_TEXT
+- `PostClearComposition()` - Thread-safe clear composition via WM_CLEAR_COMPOSITION
+- `PostActivationStatus()` - Thread-safe activation status delivery via WM_ACTIVATION_STATUS (IMEActivated/FocusGained 异步化后由 AsyncReader 调用，TSF 线程 handler 触发 `CTextService::ApplyActivationStatusResponse`)
+
+### CaretEditSession.cpp
+- `CCaretEditSession::DoEditSession()` - TSF edit session callback
+- `CCaretEditSession::GetCaretAndCompositionStartRect()` - 同步取 caret + 组合起点（selection 退化时降级用组合起点当 caret）
+- `CCaretEditSession::RequestCaretRectAsync()` - 异步取坐标（非按键上下文必须用它，见函数注释）
+
+### DisplayAttributeInfo.cpp
+- `CDisplayAttributeInfoInput::GetAttributeInfo()` - Return underline styling for composition
+- `CDisplayAttributeProvider::EnumDisplayAttributeInfo()` - Enumerate available attributes
+- `CDisplayAttributeProvider::GetDisplayAttributeInfo()` - Get specific attribute by GUID
+- `CEnumDisplayAttributeInfo` - Enumerator for display attributes
+
+### Register.cpp
+- `RegisterServer()` - Register CLSID in HKEY_CLASSES_ROOT
+- `UnregisterServer()` - Unregister CLSID
+- `RegisterProfile()` - Register input method profile with TSF manager
+- `UnregisterProfile()` - Unregister profile
+- `RegisterCategories()` - Register text service categories (TIP, INPUTPROCESSOR, etc.)
+- `UnregisterCategories()` - Unregister categories
+
+### FileLogger.cpp
+- `CFileLogger::Instance()` - 获取单例
+- `CFileLogger::Init()` - 读取配置文件，构建日志路径，打开**常开**的追加句柄
+- `CFileLogger::Shutdown()` - 关闭文件句柄，清理资源
+- `CFileLogger::Write()` - 写入（本进程独占自己那个文件，**无跨进程锁**）
+- `CFileLogger::IsEnabled()` - 内联快速路径检查（mode=none 时零开销）
+- `_ReadConfig()` - 解析 `%LOCALAPPDATA%\AuroraInput\logs\tsf_log_config`（mode/level 两个键）
+- `_BuildPaths()` - 构建 logDir（`logs\`，放配置）/ fileDir（`logs\tsf_log\`，放日志）/
+  logPath（`wind_tsf.<宿主名>.<pid>.log`）/ oldPath / configPath
+- `_OpenLogFile()` - 建目录（父子各一次，`CreateDirectoryW` 不建中间层）+ 开
+  `FILE_APPEND_DATA` 句柄，并把已有文件大小计入 `_written`
+- `_ResyncFile()` - 与磁盘真实状态对表，**每秒最多一次**（节流用 `GetTickCount`，它读共享
+  用户页不是系统调用，故可以每行都问）。一次 `GetFileInformationByHandleEx(FileStandardInfo)`
+  同时判三件事：`NumberOfLinks==0 || DeletePending` → 文件被删，关句柄重开（连目录一起重建）；
+  否则以 `EndOfFile` 校正 `_written`（覆盖外部截断）。
+  **不做这件事的后果**：文件被删后 `WriteFile` 仍返回成功，日志静默进入已摘名的幽灵文件，
+  目录里什么都看不到——极易误判成「功能没跑」
+- `_RotateNow()` - `_written` 超过 5MB 时关句柄→改名到 `.old.log`→重开（本进程独占，无需协调）
+- `_WriteToFile()` - UTF-8 写入文件
+- `_WriteToDebugString()` - 调用 `OutputDebugStringW`
+- `_FormatTimestamp()` - 生成 `[HH:MM:SS.mmm]` 格式时间戳
+
+**Config file** (`%LOCALAPPDATA%\AuroraInput\logs\tsf_log_config`):
+```
+mode=none    # none | file | debugstring | all
+level=debug  # off | error | warn | info | debug | trace
+```
+
+### HostWindow.cpp
+- `CHostWindow::Initialize(shmName, eventName, maxBufferSize, instanceId, ipcClient, kind, ownerOverride)` - 接收共享内存/事件名 + `instanceId`（本连接 bridge clientID，存 `_instanceId`，渲染线程据此与帧的 `targetInstanceId` 比对）+ **IPCClient 弱引用**（鼠标事件经 `SendAsync` 回传 Go）+ `kind`（HostWindowKind：仅候选启用鼠标交互，tooltip/状态为纯显示）+ `ownerOverride`（band 窗口 owner；tooltip/状态传候选 hwnd 使其 z-order 压在候选之上不被遮挡）；调用 `_ResolveAPIs()` 和 `_CreateBandWindow()`，启动渲染线程。`GetHwnd()` 返回 band 窗口句柄供兄弟窗口作 owner
+- `CHostWindow::Uninitialize()` - 停止渲染线程，销毁窗口，解除共享内存映射
+- `CHostWindow::_ResolveAPIs()` - 动态从 user32.dll 获取 `CreateWindowInBand` 和 `GetWindowBand` 函数指针
+- `CHostWindow::GetHostBand()` - 获取宿主进程的 DWM Band 等级：先看前台窗口（`GetForegroundHostBand()`，前台不属本进程返回 0），否则枚举本进程顶层窗口取最大值——后者只是猜，SearchHost 开机预启动时会猜到开始菜单之下，靠 `RecheckHostBand` 纠正
+- `CHostWindow` 记下建窗依据：`GetProbedHostBand()` / `GetRequestedBand()` / `HasOwner()`，供复核与落位上报
+- `CHostWindow::_CreateBandWindow()` - 在指定 Band 等级创建 `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE` 无边框窗口；建后 `SetWindowLongPtr(GWLP_USERDATA, this)` 供静态 `_WndProc` 取实例。**band 回退**：受限 UWP/AppContainer 宿主（微软商店 `WinStore.App.exe` 等）下 `CreateWindowInBand(band=1, ZBID_DESKTOP)` 返回 `ERROR_INVALID_PARAMETER(87)`；失败且 band≠0 时自动回退 `band=0`(`ZBID_DEFAULT`) 重试（这类宿主本不在高 band，`WS_EX_TOPMOST`+owner 即可保层级）
+- `CHostWindow::_RenderThread()` / `_RenderLoop()` - 渲染线程：等待事件信号 → 读取 SharedRenderHeader → 跳过过期帧 → **帧定向过滤**（`!visible || header.targetInstanceId != _instanceId` → `_HideWindow` 后 continue，否则才渲染）→ `_RenderFrame()`。同进程多实例（如两个记事本窗口）共用单块 SHM、各等独立 event，Go signal 全部实例并盖 `targetInstanceId`，仅目标实例渲染、兄弟实例自隐藏——修复"两层候选只隐一个"
+- `CHostWindow::_RenderFrame()` - 先 `_UpdateHitRects()` 快照内嵌命中矩形（render 线程写、UI 线程读，`_rectLock` 守护），再将像素数据经 `UpdateLayeredWindow` 渲染到分层窗口
+- `CHostWindow::_WndProc()` - 静态窗口过程，经 GWLP_USERDATA 取实例后路由鼠标（**仅 `_windowKind==HOST_WINDOW_CANDIDATE` 路由；tooltip/状态纯显示落 DefWindowProc**）：`WM_LBUTTONDOWN`→`_OnMouseDown`（记命中 + SetCapture）、`WM_LBUTTONUP`→`_OnMouseUp`（**松开仍在同一项**才 `CmdCandidateSelect` index/翻页，判据 `include/HostClickPolicy.h`；按住期间窗口被收起则放弃）、`WM_MOUSEMOVE`+`WM_MOUSELEAVE`→`_OnMouseMove`/`_OnMouseLeave`（悬停→`CmdCandidateHover` index+屏幕锚点）、`WM_MOUSEWHEEL`→`_OnMouseWheel`（原始 delta→`CmdCandidateScroll`，**不**在 DLL 翻页，交 Go 决策）；均经 `SendAsync` 异步发送不阻塞宿主 UI 线程。`WM_MOUSEACTIVATE`→`MA_NOACTIVATE` 对所有 kind 生效（防夺焦）
+- **多 host 窗口**：`CTextService::_pHostWindow[HOST_WINDOW_KIND_COUNT]` 每 kind 一个 CHostWindow。`_EnsureHostRenderSetup` 遍历 `ServiceResponse.hostRenderSetups`（CMD_HOST_RENDER_SETUP 多条目）两趟建窗：先候选（pass 0，作 z-order owner），再 tooltip/状态（pass 1，owner=候选 hwnd）。`_EnsureHostRenderSetup`（activation 推送）整组重建；建窗部分拆在 `_CreateHostWindows`。**band 复核**：`RecheckHostBand` 在一段输入的首键（`KeyEventSink::OnKeyDown`，`!hasComposition`）按前台 band 复核，判据见 `include/HostBandPolicy.h`（前台 band>1 且与建窗时 requested 不符 / 建时无 owner / 句柄失效 → 整组重建，保持 owner 一致）。**落位上报**：每次建成经 `CMD_EXT` 信封发 `diag.host_render_placed`（JSON，recheck 带旧窗 `prev_*`），服务端写中央日志——SearchHost 是 AppContainer，写不了 tsf_log，这是看它 band 判定的唯一途径；`_DestroyHostWindow` 反序销毁（owned 先于 owner）。**失败上报**：建窗后候选仍为 null（band=0 回退也失败）或 setup 请求失败时，经 `SendAsync(CMD_HOST_RENDER_FAILED, reason u32)` 通知 Go（中央日志可观测 + 按 PID 去重 toast 提示用户已回退本地窗口）
+- `CHostWindow::_HitTest()` - 客户区坐标命中测试 `_hitRects`，候选(≥0)优先于翻页按钮(-1/-2)，无命中返回 `INT_MIN`
+- `CHostWindow::_HideWindow()` - 隐藏窗口（候选框消失时调用），同时清空 `_hitRects` 与悬停状态防止贴到隐藏帧
+
+## For AI Agents
+
+### Working In This Directory
+
+When implementing or debugging:
+
+1. **Understand edit sessions** - TSF APIs like SetText, SetCaret must be called within RequestEditSession context
+2. **Barrier mechanism（预留，尚未激活）** - `_SendCommitRequest`/`_HandleCommitResult` 已实现但 `_SendCommitRequest` 从未被调用。Go 侧的 `HandleCommitRequest` 也是死代码。接入时在 `OnKeyDown` 中检测 Space/Enter/数字键触发点，调用 `_SendCommitRequest` 并等待 `_HandleCommitResult` 回调；Go 侧 `handleSpaceInternal` 已正确使用 `selectedIndex`
+3. **Async reader thread** - Runs in background to receive state pushes; use callbacks and message window for thread-safe UI updates
+4. **Reference counting** - All COMobjects need AddRef/Release; use SafeRelease() to avoid leaks
+5. **Named pipe timeouts** - Connection 100ms, read/write 50-100ms; circuit breaker opens after 3 failures, resets after 3 seconds
+
+### Common Patterns
+
+**Sending a Key Event:**
+```cpp
+// In CKeyEventSink::OnKeyDown():
+uint32_t mods = _GetModsSnapshot();
+uint8_t toggles = _GetTogglesSnapshot();
+uint16_t seq = _GetNextEventSeq();
+_pTextService->GetIPCClient()->SendKeyEvent(wParam, scanCode, mods, KEY_EVENT_DOWN, toggles, seq);
+_HandleServiceResponse();  // Check if consumed or pass through
+```
+
+**Updating Composition:**
+```cpp
+// In CTextService::UpdateComposition():
+CUpdateCompositionEditSession* pEditSession = new CUpdateCompositionEditSession(...);
+_pThreadMgr->RequestEditSession(_tfClientId, pEditSession, TF_ES_SYNC, NULL);
+pEditSession->Release();
+```
+
+**Receiving Async State Push:**
+```cpp
+// In CIPCClient::_AsyncReaderLoop():
+ServiceResponse response;
+_ReceiveBinaryMessage(header, payload);
+_ParseResponse(header, payload, response);
+if (_statePushCallback) {
+    _statePushCallback(response);  // Call registered callback
+}
+```
+
+**Circuit Breaker Logic:**
+```cpp
+// In CIPCClient::_ShouldAttemptOperation():
+if (_circuitState == CircuitState::Open) {
+    DWORD elapsed = GetTickCount() - _lastFailureTime;
+    if (elapsed >= IPCConfig::CIRCUIT_RESET_INTERVAL_MS) {
+        _circuitState = CircuitState::HalfOpen;  // Try again
+    } else {
+        return FALSE;  // Skip operation
+    }
+}
+```
+
+### Testing Requirements
+
+**Build Verification:**
+- 所有 .cpp 文件（含 HostWindow.cpp）必须以 /utf-8 /W3 编译进 wind_tsf.dll
+- wind_tsf.dll must export 4 functions via wind_tsf.def
+- No C5260 warnings about pragma pack mismatch
+
+**Key Event Testing:**
+1. Register DLL and switch to 极光输入法
+2. Press key in text editor
+3. Verify Go service receives KEY_EVENT in IPC logs
+4. Verify composition appears in TSF context
+5. Press Space -> verify candidate committed（barrier 机制尚未接入，不会发送 CmdCommitRequest）
+
+**IPC Testing:**
+1. Monitor named pipe with NamedPipeMon
+2. Verify binary protocol format matches BinaryProtocol.h
+3. Test circuit breaker: kill Go service -> verify circuit opens -> restart service -> verify recovery
+4. Test async reader: send state push from Go -> verify callback fires and UI updates
+
+**Composition Testing:**
+1. Type a composition-requiring sequence (e.g., "shng" for 上)
+2. Verify UpdateComposition is called with correct text/caret position
+3. Verify display attribute (underline) is applied
+4. Press Enter -> verify InsertText and composition ends
+5. Verify caret position is correct after commit
+
+## Dependencies
+
+### Internal
+- All `.cpp` files include their corresponding `.h` header
+- TextService.cpp includes KeyEventSink, IPCClient, LangBarItemButton, etc.
+- dllmain.cpp includes Globals, TextService, ClassFactory, Register
+
+### External
+- Windows SDK: kernel32, ole32, user32 (linked via pragma comment in source)
+- MSVC Runtime: libc, libcmt (C runtime)
+- TSF Libraries: msctf.lib, ctfutb.lib
+- DirectWrite: 不再由 C++ 侧链接；Go 侧通过 CGO 直接调用系统 dwrite.dll
+
+<!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->

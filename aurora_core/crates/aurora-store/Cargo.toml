@@ -1,0 +1,27 @@
+[package]
+name = "aurora-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+redb = { workspace = true }
+aurora-utils = { path = "../aurora-utils" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = "0.4"
+# 词条文本域的转义分流判据（`is_cmdbar_grammar`）：命令栏语法条目的反斜杠归 lexer 管，
+# 本层不得再转一次。判据只此一份，抄第二份就是下次漂移的起点。
+aurora-cmdbar = { path = "../aurora-cmdbar" }
+aurora-wdict = { path = "../aurora-wdict" }
+aurora-dict = { path = "../aurora-dict" }
+aurora-candidate = { path = "../aurora-candidate" }
+aurora-userdata = { path = "../aurora-userdata" }
+
+[lints]
+workspace = true

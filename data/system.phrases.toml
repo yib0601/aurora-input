@@ -1,0 +1,610 @@
+# WindInput 系统短语
+# 随程序打包发布，用户不应直接修改此文件
+# 文本中的 $变量 会在运行时自动展开（$var / ${var}，$$ 转义为 $）
+#
+# weight: 0~10000 短语 tier 内排序权重，未设置默认 1000（中位）
+# position: 仅同 code 多条 tie-break（升序）
+# platform: ""/"all"=全平台；"windows"/"macos"/"linux"/"android"=仅该平台（"darwin" 是 "macos" 的旧写法）；
+#   "desktop"=三种电脑（windows/macos/linux），手机上没有——打开网页、模拟按键、读写剪贴板这类
+#   手机上执行不了的条目写它，不必复制三份。
+#   按运行平台取舍：同一个 code 要在各平台做不同的事（路径、程序名不同），就每个平台各写一条。
+# enabled: 出厂是否启用，缺省开。少数人用、编码又容易和码表撞的写 false（如时间戳 tmts），
+#   照样出现在短语管理里，用户自己打开即可；「恢复默认」回到这里的值。
+# 详见 docs/design/command-bar-design.md
+
+[[phrases]]
+code = 'date'
+text = '$Y年$M月$D日'
+weight = 1000
+position = 1
+
+[[phrases]]
+code = 'date'
+text = '$Y-$MM-$DD'
+weight = 800
+position = 2
+
+[[phrases]]
+code = 'date'
+text = '$Y.$MM.$DD'
+weight = 800
+position = 3
+
+[[phrases]]
+code = 'date'
+text = '$Y/$MM/$DD'
+weight = 800
+position = 4
+
+[[phrases]]
+code = 'date'
+text = '${YC}年${MC}月${DC}日'
+weight = 800
+position = 5
+
+# 农历补两条，weight 低于全部公历形态故恒排其后。$LF 在非节日展开为空，
+# 于是同一条模板平常日子给「农历四月廿九」、端午当天给「农历五月初五端午节」。
+# 农历大全见 zznl。
+[[phrases]]
+code = 'date'
+text = '农历$LMD$LF'
+weight = 600
+position = 6
+
+[[phrases]]
+code = 'date'
+text = '$LY$LZ年$LMD$LF'
+weight = 600
+position = 7
+
+[[phrases]]
+code = 'time'
+text = '$HH:$mm:$ss'
+weight = 1000
+position = 1
+
+[[phrases]]
+code = 'time'
+text = '$HH:$mm'
+weight = 800
+position = 2
+
+[[phrases]]
+code = 'time'
+text = '$HH时$mm分$ss秒'
+weight = 800
+position = 3
+
+# ⚠️ datm 组权重高于同组默认的 1000/800：五笔 `datm` 是「万花筒」(w=1080) 的全码。
+# 协调器删除 PHRASE_WEIGHT_BASE(40M) 后短语与码表精确候选真比权重，1000 会输给 1080，
+# 打 datm 首选变成「万花筒」。54 个系统短语码里只有 datm 和 tmts 与五笔碰撞，
+# tmts 对手「身条」w=536 无需调整。
+#
+# 变体取 1100 而非沿用 800：三条都要越过 1080，否则「万花筒」会插进本组中间。
+# 组内次序由 weight 降序 → position 升序保证，1200 > 1100 已足够分出主条。
+[[phrases]]
+code = 'datm'
+text = '$Y年$M月$D日 $HH:$mm:$ss'
+weight = 1200
+position = 1
+
+[[phrases]]
+code = 'datm'
+text = '$Y-$MM-$DD $HH:$mm:$ss'
+weight = 1100
+position = 2
+
+[[phrases]]
+code = 'datm'
+text = '${YC}年${MC}月${DC}日 $HH:$mm:$ss'
+weight = 1100
+position = 3
+
+[[phrases]]
+code = 'week'
+text = '星期$WC'
+weight = 1000
+position = 1
+
+[[phrases]]
+code = 'week'
+text = '周$WC'
+weight = 800
+position = 2
+
+[[phrases]]
+code = 'week'
+text = '$Y年$M月$D日 星期$WC'
+weight = 800
+position = 3
+
+[[phrases]]
+code = 'week'
+text = '$Y年$M月$D日 周$WC'
+weight = 800
+position = 4
+
+[[phrases]]
+code = 'uuid'
+text = '$uuid'
+weight = 1000
+
+[[phrases]]
+code = 'tmts'
+text = '$ts'
+enabled = false
+weight = 800
+position = 2
+
+[[phrases]]
+code = 'tmts'
+text = '$tsms'
+enabled = false
+weight = 800
+position = 3
+
+[[phrases]]
+code = 'zzbd'
+text = '$AA("标点", "、。·ˉˇ¨〃々—～‖…‘’“”〔〕〈〉《》「」『』〖〗【】±×÷∶∧∨∑∏∪∩∈∷√⊥∥∠⌒⊙∫∮≡≌≈∽∝≠≮≯≤≥∞∵∴♂♀°′″℃＄¤￠￡‰§№☆★○●◎◇◆□■△▲※→←↑↓〓")'
+weight = 1230
+
+[[phrases]]
+code = 'zzsz'
+text = '$AA("数字", "❶❷❸❹❺❻❼❽❾❿")'
+weight = 1220
+
+[[phrases]]
+code = 'zzzm'
+text = '$AA("字母", "ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ")'
+weight = 1210
+
+[[phrases]]
+code = 'zzpp'
+text = '$AA("偏旁", "亻彳讠饣艹丶乛亠冖宀冫丷扌氵灬丨亅丿乚勹匚冂凵爫忄丬纟疒阝刂卩犭辶廴钅礻衤罒覀夂癶耂牜虍歺糹釒飠")'
+weight = 1200
+
+[[phrases]]
+code = 'zzdw'
+text = '$AA("单位", "㎎㎏㎜㎝㎞㎡㏄㏎㏑㏒㏕")'
+weight = 1190
+
+[[phrases]]
+code = 'zzpy'
+text = '$AA("拼音", "āáǎàōóǒòêēéěèīíǐìǖǘǚǜüūúǔù")'
+weight = 1180
+
+[[phrases]]
+code = 'zzds'
+text = '$AA("点号数字", "⒈⒉⒊⒋⒌⒍⒎⒏⒐⒑⒒⒓⒔⒕⒖⒗⒘⒙⒚⒛")'
+weight = 1170
+
+[[phrases]]
+code = 'zzks'
+text = '$AA("括号数字", "⑴⑵⑶⑷⑸⑹⑺⑻⑼⑽⑾⑿⒀⒁⒂⒃⒄⒅⒆⒇")'
+weight = 1160
+
+[[phrases]]
+code = 'zzys'
+text = '$AA("圆圈数字", "①②③④⑤⑥⑦⑧⑨⑩")'
+weight = 1150
+
+[[phrases]]
+code = 'zzzs'
+text = '$AA("中文数字", "㈠㈡㈢㈣㈤㈥㈦㈧㈨㈩")'
+weight = 1140
+
+[[phrases]]
+code = 'zzhb'
+text = '$AA("货币符号", "＄￠￡￥¤")'
+weight = 1130
+
+[[phrases]]
+code = 'zzjt'
+text = '$AA("箭头符号", "→↑←↓↖↗↘↙")'
+weight = 1120
+
+[[phrases]]
+code = 'zzde'
+text = '$AA("大写俄文", "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯЁ")'
+weight = 1110
+
+[[phrases]]
+code = 'zzxe'
+text = '$AA("小写俄文", "абвгдежзийклмнопрстуфхцчшщъыьэюяё")'
+weight = 1100
+
+[[phrases]]
+code = 'zzdl'
+text = '$AA("大写罗马", "ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ")'
+weight = 1090
+
+[[phrases]]
+code = 'zzxl'
+text = '$AA("小写罗马", "ⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹ")'
+weight = 1080
+
+[[phrases]]
+code = 'zzdx'
+text = '$AA("大写希腊", "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ")'
+weight = 1070
+
+[[phrases]]
+code = 'zzxx'
+text = '$AA("小写希腊", "αβγδεζηθικλμνξοπρστυφχψω")'
+weight = 1060
+
+[[phrases]]
+code = 'zzpj'
+text = '$AA("平假名", "ぁあぃいぅうぇえぉおかがきぎぱくぐけげこごさざしじすずせぜそぞただちぢっつづてでとどなにぬねのはばひびぴふぶぷへべぺほぼぽまみむめもゃやゅゆょよらりるれろゎわゐゑをん゛゜ゝゞ")'
+weight = 1050
+
+[[phrases]]
+code = 'zzjp'
+text = '$AA("片假名", "ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロヮワヰヱヲンヴヵヶーヽヾ")'
+weight = 1040
+
+[[phrases]]
+code = 'zzsx'
+text = '$AA("数学符号", "＋－＜＝＞±×÷∈∏∑∕√∝∞∟∠∣∥∧∨∩∪∫∮∴∵∶∷∽≈≌≒≠≡≤≥≦≧≮≯⊕⊙⊥⊿")'
+weight = 1030
+
+[[phrases]]
+code = 'zzts'
+text = '$AA("特殊符号", "℃°‰♂♀§№☆★○●◎◇◆□■△▲※〓＃＆＠＼＾＿￣")'
+weight = 1020
+
+[[phrases]]
+code = 'zzzy'
+text = '$AA("注音符号", "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ")'
+weight = 1010
+
+[[phrases]]
+code = 'zzsb'
+text = '$AA("上标", "¹²³⁴⁵⁶⁷⁸⁹⁰⁺⁻⁼⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ")'
+weight = 1009
+
+[[phrases]]
+code = 'zzxb'
+text = '$AA("下标", "₁₂₃₄₅₆₇₈₉₀₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ")'
+weight = 1008
+
+[[phrases]]
+code = 'zzrq'
+text = '$Y年$M月$D日'
+weight = 1000
+position = 1
+
+[[phrases]]
+code = 'zzrq'
+text = '$Y-$MM-$DD'
+weight = 800
+position = 2
+
+[[phrases]]
+code = 'zzrq'
+text = '$Y.$MM.$DD'
+weight = 800
+position = 3
+
+[[phrases]]
+code = 'zzrq'
+text = '$Y/$MM/$DD'
+weight = 800
+position = 4
+
+[[phrases]]
+code = 'zzrq'
+text = '${YC}年${MC}月${DC}日'
+weight = 800
+position = 5
+
+# 与 date 同两条（zzrq 是 date 的 zz 系列入口，两者内容必须一致）。
+[[phrases]]
+code = 'zzrq'
+text = '农历$LMD$LF'
+weight = 600
+position = 6
+
+[[phrases]]
+code = 'zzrq'
+text = '$LY$LZ年$LMD$LF'
+weight = 600
+position = 7
+
+# 农历专用组。取的是**当天**的农历，与快捷输入 `;2026.6.19` 的农历候选同一套换算。
+#
+# $LF（传统节日）在非节日展开为空，故带它的条目平常日子只是少一段、照常出候选；
+# 而 position 7 那条**只有** $LF，整条展开为空时会被丢弃——于是它只在春节、端午、
+# 中秋这些日子自己冒出来，平时不占位。这是「条件性条目」的推荐写法。
+[[phrases]]
+code = 'zznl'
+text = '农历$LMD$LF'
+weight = 1000
+position = 1
+
+[[phrases]]
+code = 'zznl'
+text = '$LMD'
+weight = 900
+position = 2
+
+[[phrases]]
+code = 'zznl'
+text = '$LY$LZ年$LMD$LF'
+weight = 900
+position = 3
+
+[[phrases]]
+code = 'zznl'
+text = '$LYN年$LMD'
+weight = 800
+position = 4
+
+[[phrases]]
+code = 'zznl'
+text = '$LY年'
+weight = 800
+position = 5
+
+[[phrases]]
+code = 'zznl'
+text = '$LZ年'
+weight = 800
+position = 6
+
+[[phrases]]
+code = 'zznl'
+text = '$LF'
+weight = 800
+position = 7
+
+[[phrases]]
+code = 'zznl'
+text = '$Y年$M月$D日 农历$LMD$LF'
+weight = 700
+position = 8
+
+[[phrases]]
+code = 'zzsj'
+text = '$HH:$mm:$ss'
+weight = 1000
+position = 1
+
+[[phrases]]
+code = 'zzsj'
+text = '$HH:$mm'
+weight = 800
+position = 2
+
+[[phrases]]
+code = 'zzsj'
+text = '$HH时$mm分$ss秒'
+weight = 800
+position = 3
+
+[[phrases]]
+code = 'zzxq'
+text = '星期$WC'
+weight = 1000
+position = 1
+
+[[phrases]]
+code = 'zzxq'
+text = '周$WC'
+weight = 800
+position = 2
+
+[[phrases]]
+code = 'zzxq'
+text = '$Y年$M月$D日 星期$WC'
+weight = 800
+position = 3
+
+[[phrases]]
+code = 'zzxq'
+text = '$Y年$M月$D日 周$WC'
+weight = 800
+position = 4
+
+[[phrases]]
+code = 'cobd'
+text = '$CC("打开百度", open("https://baidu.com"))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'cozd'
+text = '$CC("汉典:{last(1)}", open("https://www.zdic.net/hans/{url(last(1))}"))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'cono'
+text = '$CC("打开记事本", proc.run("notepad.exe"))'
+weight = 2000
+platform = 'windows'
+
+[[phrases]]
+code = 'cono'
+text = '$CC("打开文本编辑", proc.run("open", "-a", "TextEdit"))'
+weight = 2000
+platform = 'macos'
+
+# Linux 各桌面自带的编辑器不同：按顺序试，第一个装了的即启动（GNOME / 旧 GNOME / KDE /
+# Xfce / Cinnamon / MATE / Deepin / LXQt / LXDE）。
+[[phrases]]
+code = 'cono'
+text = '$CC("打开文本编辑器", proc.any("gnome-text-editor", "gedit", "kate", "kwrite", "mousepad", "xed", "pluma", "deepin-editor", "featherpad", "leafpad"))'
+weight = 2000
+platform = 'linux'
+
+[[phrases]]
+code = 'coca'
+text = '$CC("打开计算器", proc.run("calc.exe"))'
+weight = 2000
+platform = 'windows'
+
+[[phrases]]
+code = 'coca'
+text = '$CC("打开计算器", proc.run("open", "-a", "Calculator"))'
+weight = 2000
+platform = 'macos'
+
+[[phrases]]
+code = 'coca'
+text = '$CC("打开计算器", proc.any("gnome-calculator", "kcalc", "deepin-calculator", "mate-calc", "galculator", "qalculate-gtk", "xcalc"))'
+weight = 2000
+platform = 'linux'
+
+[[phrases]]
+code = 'cohm'
+text = '$CC("打开用户主目录", open(env("USERPROFILE")))'
+weight = 2000
+platform = 'windows'
+
+[[phrases]]
+code = 'cohm'
+text = '$CC("打开用户主目录", open(env("HOME")))'
+weight = 2000
+platform = 'macos'
+
+[[phrases]]
+code = 'cohm'
+text = '$CC("打开用户主目录", open(env("HOME")))'
+weight = 2000
+platform = 'linux'
+
+[[phrases]]
+code = 'coll'
+text = '$CC(last(), type(last()))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'copa'
+text = '$CC("粘贴", clip.paste())'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'cojk'
+text = '$CC("「」", ime.pair("「", "」"))'
+weight = 2000
+
+[[phrases]]
+code = 'codl'
+text = '$CC("[删行]", key.seq("Home", "Shift+End", "Backspace"))'
+weight = 2000
+platform = 'windows'
+
+[[phrases]]
+code = 'codl'
+text = '$CC("[删行]", key.seq("Ctrl+A", "Ctrl+K"))'
+weight = 2000
+platform = 'macos'
+
+# Linux 上的按键合成（key.tap / key.seq / key.hold / key.release）由 Fcitx5 addon 接住
+#   CMD_KEY_* 下行帧、经 forwardKey 交给当前应用（aurora_linux/AGENTS.md「命令直通车按键合成」）。
+[[phrases]]
+code = 'codl'
+text = '$CC("[删行]", key.seq("Home", "Shift+End", "Backspace"))'
+weight = 2000
+platform = 'linux'
+
+[[phrases]]
+code = 'cocp'
+text = '$CC("复制时间", clip.copy(now()))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'coad'
+text = '$CC("剪贴板加词:{clip()}", dict.add(clip()))'
+platform = 'desktop'
+weight = 2000
+
+# 剪贴板反查：复制一个不认识的字 → 切回输入法 → 打 cofc → 候选即「字: 编码 拼音」，
+# 选中上屏这行文字。
+#
+# 用 `$CC` 而不是纯模板，是为了让**显示**与**上屏**分开：
+#   display = default(反查结果, 提示语)  → 查不到时显示提示，不让用户面对一片空白
+#   动作    = type(反查结果)             → 查不到时 type 到空串，选中什么也不上屏
+# 写成纯模板 `{dict.rev(clip())}` 的话，display 既是显示又是上屏文本，二者绑死：
+# 要么查不到时整条候选消失（用户分不清「没复制」还是「功能坏了」），
+# 要么把提示语本身当文本打进文档。
+#
+# 默认只查第 1 个字。要一次看多个字，自己改成 `$SS` 列若干元素、各查第 n 个：
+#   text = '$SS("反查", "{dict.rev(clip(),1)}", "{dict.rev(clip(),2)}", "{dict.rev(clip(),3)}")'
+# 元素个数即上限，查不到的那几条自动不出现。
+# 版式也可换，变量同候选注释段：`{dict.rev(clip(), 1, format="${char} ${chaizi}[${chaizi_code}]")}`
+[[phrases]]
+code = 'cofc'
+text = '$CC(default(dict.rev(clip()), "剪贴板反查（需先复制文字）"), type(dict.rev(clip())))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'coen'
+text = '$CC("切中英", ime.toggle("cn-en"))'
+weight = 2000
+
+[[phrases]]
+code = 'cofs'
+text = '$CC("切全半角", ime.toggle("fullshape"))'
+weight = 2000
+
+[[phrases]]
+code = 'coly'
+text = '$CC("切横纵候选", ime.toggle("layout"))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'cocw'
+text = '$CC("切候选窗", ime.toggle("candwin"))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'coss'
+text = '$CC("打开设置", setting.open(""))'
+platform = 'desktop'
+weight = 2000
+position = 1
+
+[[phrases]]
+code = 'cost'
+text = '$CC("切简繁", ime.toggle("s2t"))'
+weight = 2000
+
+[[phrases]]
+code = 'copm'
+text = '$CC("切编码模式", ime.toggle("preedit"))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'cotb'
+text = '$CC("切工具栏", ime.toggle("toolbar"))'
+platform = 'desktop'
+weight = 2000
+
+[[phrases]]
+code = 'cots'
+text = '$CC("切主题", ime.theme_cycle())'
+platform = 'desktop'
+weight = 2000
+
+# ── 手机专用（platform = 'android'）────────────────────────────────
+# 聊天里最常打的短回复与颜文字。电脑上用不着（有完整键盘），故只在手机上出现。
+[[phrases]]
+code = 'zzhf'
+text = '$SS("常用回复", "好的", "收到", "好的，谢谢", "没问题", "稍等一下", "马上到", "在路上了", "在开会，稍后回复", "辛苦了", "晚点联系")'
+weight = 1240
+platform = 'android'
+
+[[phrases]]
+code = 'zzbq'
+text = '$SS("颜文字", "(＾▽＾)", "(´・ω・｀)", "╮(╯▽╰)╭", "(ಥ_ಥ)", "(๑•̀ㅂ•́)و✧", "ʕ•ᴥ•ʔ", "ヽ(✿ﾟ▽ﾟ)ノ", "(⊙_⊙)", "(｡•́︿•̀｡)", "o(*￣▽￣*)ブ")'
+weight = 1235
+platform = 'android'

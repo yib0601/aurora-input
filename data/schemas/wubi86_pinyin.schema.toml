@@ -1,0 +1,20 @@
+[schema]
+id = "wubi86_pinyin"
+name = "五笔拼音"
+icon_label = "中"
+version = "1.0"
+author = "内置"
+description = "五笔86+拼音混合输入方案"
+
+[engine]
+type = "mixed"
+
+# 仅引擎固定参数（方案构成）；融合策略已上移至全局 [schema.mix]。
+[engine.mixed]
+primary_schema = "wubi86"
+secondary_schema = "pinyin"
+
+# 用户数据从引用方案继承：
+#   shadow/userdict → 主方案 (wubi86)
+#   userfreq → 拼音方案 (pinyin)
+# 调频/造词走子方案的全局 [schema.codetable] / [schema.pinyin] 配置。

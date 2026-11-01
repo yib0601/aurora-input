@@ -1,0 +1,568 @@
+//! 候选窗首显闸门：延迟首显判定与释放 + 共享兜底 timer。
+//!
+//! coordinator 的**子模块**（非平级）：首显族重度读写父模块私有字段
+//!（pending_first_show / candidate_shown / caret_cache_verified 等），子模块对父
+//! 私有项可见，平级模块则须放开字段可见性——封装以此为界。
+//!（自 coordinator.rs 平移，纯搬运。）
+
+use super::*;
+
+impl Coordinator {
+    /// 候选窗**已在显示**时，解开「组合起点」的两把锁（`composition_start` 与
+    /// `locked_rect_anchor`），**不动**显示状态（`shown_anchor` / `caret_baseline` 保留）。
+    ///
+    /// 用于联想接龙：连续打字时「打码 → 上屏 → 联想 → 又打码」，候选窗全程不隐藏，
+    /// `reset_first_show` 一次都不会被调到，可宿主那边每次上屏后都是**新建一个占位组合**、
+    /// 起点右移了一个字宽。两把锁不解，「同一组合起点只锁首个」就把候选窗钉在第一次的位置：
+    /// 日志里 `reshow: dx=24` 每次都判出来了，下发位置却恒取被钉住的旧起点，窗口越离越远
+    /// （论坛 t251 后续，2026-09-30 靶机记事本实测 1355 不动、光标走到 1466）。
+    ///
+    /// **窗口没显示时不解**：那是首显流程，锁由 `reset_first_show` 管，且本帧刚到的组合起点
+    /// 可能正是首显要用的坐标——清了会让首显闸门以为坐标未就绪。
+    ///
+    /// 解锁后下一帧宿主上报的组合矩形 / compStart 会重新锁定并 reshow 到新起点；在那一帧到达
+    /// 之前候选窗留在原处（`hold_anchor`），最多晚一个 caret_update，不会闪。
+    pub(crate) fn unpin_composition_anchor_if_shown(&self) {
+        if !*self
+            .candidate_shown
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+        {
+            return;
+        }
+        *self
+            .composition_start
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (0, 0, false);
+        *self
+            .locked_rect_anchor
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (0, 0, false);
+    }
+
+    /// 两把组合起点锁是否都还锁着（**仅测试用**，另一半见 `debug_mark_coords_ready`）。
+    #[cfg(test)]
+    pub(crate) fn debug_anchor_locks(&self) -> (bool, bool) {
+        (
+            self.composition_start
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .2,
+            self.locked_rect_anchor
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .2,
+        )
+    }
+
+    /// 把两把锁都置成锁着，并标记候选窗已在显示（**仅测试用**）。
+    #[cfg(test)]
+    pub(crate) fn debug_lock_anchors(&self, shown: bool) {
+        *self
+            .candidate_shown
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = shown;
+        *self
+            .composition_start
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (100, 200, true);
+        *self
+            .locked_rect_anchor
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (100, 200, true);
+    }
+
+    /// 复位首显延迟状态（候选窗隐藏 / 组合结束）：下次新组合重新延迟首显，并作废未触发的兜底 timer。
+    pub(crate) fn reset_first_show(&self) {
+        // ★ 上屏改变了插入点，缓存里那份是**上屏前**的——五笔满码自动上屏后立刻开新组合时
+        // 尤其明显：缓存是 4 个字母末尾的位置，而上屏的汉字比它们窄（微信实测 20px）。
+        //
+        // 多数宿主靠 probe 在兜底到期前把缓存刷新掉就补救了，但配了 `stale_probe_guard` 的
+        // 宿主 probe 恒陈旧、整条不收，只能等权威 caret_update（微信实测 190ms），兜底早就
+        // 拿旧值把候选窗显示出去了 ⇒ 190ms 后再退回 20px。看起来正好该在这里把「缓存可信」
+        // 清掉、让首显改等权威坐标——**试过，实测灾难，勿再来**。
+        //
+        // 代价是那个死结的第四次复发：**兜底超时长于组合寿命 ⇒ 被本函数作废而永不到期**。
+        // 清 verified ⇒ 下一个组合走 600ms 长兜底，而长按 d 时每个组合只活 ~128ms（typematic
+        // 32ms/键 × 五笔 4 码自动上屏）⇒ 兜底永远等不到自己到期。微信实测：长按十几秒打出几十
+        // 个字，候选窗位置只变了 4 次、一直停在几百像素之外，同一份日志里 600ms 长兜底命中 249
+        // 次、「保持长兜底计时」183 次。
+        //
+        // ★ 而且这个死结在该宿主上**无解**：微信的权威坐标要 190ms 才到，长按的组合寿命是
+        // 128ms——「等得到正确坐标」与「在组合内显示出来」互斥，任何介于两者之间的超时都只是
+        // 换个地方卡住。20px 的一次性抖动 vs 候选窗停在几百像素外不动，取前者。
+        self.first_show_was_provisional
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.first_show_extended
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.first_show_after_commit
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        *self
+            .candidate_shown
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = false;
+        *self
+            .pending_first_show
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = false;
+        let mut t = self
+            .pending_first_show_token
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *t = t.wrapping_add(1);
+        drop(t);
+        // 组合结束：复位组合起点锚定，下一组合重新锁定首个有效 compStart。
+        *self
+            .composition_start
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (0, 0, false);
+        // 矩形那条路的锁同步清掉——它与上面那位是**两把锁**（见字段注释），漏清这一处的后果是
+        // 下一组合的矩形锚点整条失效、候选窗钉在上一组合的位置。
+        *self
+            .locked_rect_anchor
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (0, 0, false);
+        // pre_reflow 基准同理：它描述「**本轮**组合重排前光标在哪」，组合一结束就没有意义，
+        // 留着会让下一轮的 probe 拿上一轮的重排前坐标做比较（多数情况下不等 ⇒ 判据恒放行，
+        // 等于没加；少数情况下恰好相等 ⇒ 无故拖到兜底）。
+        *self
+            .last_pre_reflow_probe
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (0, 0, false);
+        *self
+            .pre_reflow_comp_start
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (0, 0, false);
+        // 候选窗显示锚点同理：它描述的是「这一轮候选窗画在哪」，组合一结束就失效。
+        // 不清会让下一轮的非坐标重绘复用上一轮的位置。
+        *self.shown_anchor.lock().unwrap_or_else(|e| e.into_inner()) = (0, 0, false);
+        *self
+            .caret_baseline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (0, 0, false);
+    }
+
+    /// 推迟首次显示候选窗：标记 pending 并启动兜底 timer。token 比对使后续按键的 arm 自动作废
+    /// 旧 timer。handle_caret_pending 握手会把 wait 档延到 600ms（应对 OnLayoutChange burst 慢的应用）。
+    pub(super) fn arm_pending_first_show(&self) {
+        // ★ 首帧信任门：`fast` 的短兜底建立在「手里的坐标 ≈ 当前插入点」之上，而焦点刚到达 /
+        // 用户刚移动过光标时这个前提不成立（见 `caret_cache_verified`）。此时拿旧坐标首显
+        // 必然是一次可见的错位加一次跳，「快」反而有害，让位给长兜底等权威坐标。
+        //
+        // ⚠⚠ **长等待一旦开始就不因后续按键重置**，这是本门能否成立的关键：闸门在候选窗
+        // 显示前对**每一个字母**都会调到这里（`is_first_frame` 一直为真），而
+        // `arm_pending_first_show_with_timeout` 每次都 bump token 重新计时。若照常重置，
+        // 用户多打几个字母就把这段等待反复推后，长兜底静默退化回短兜底、错位照旧——正是
+        // 「兜底超时长于组合寿命 ⇒ 永不到期」那个死结的镜像。Excel 建单元格编辑上下文要
+        // 558ms，其间用户往往已经敲了三五个字母。
+        //
+        // 反过来，长等待到期后就**不再续**（`pending` 被 fire 消费掉，`extended` 保持置位），
+        // 用旧坐标首显仍优于候选窗一直不出现。
+        if self.first_show_needs_long_wait() {
+            let already_waiting = *self
+                .pending_first_show
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                && self
+                    .first_show_extended
+                    .load(std::sync::atomic::Ordering::Relaxed);
+            if already_waiting {
+                debug!("first_show 闸门 → 保持长兜底计时（坐标缓存仍未验证，不因本次按键重置）");
+                return;
+            }
+            debug!(
+                "first_show 闸门 → 坐标缓存未经当前插入点验证，改 arm {FIRST_SHOW_LONG_FALLBACK_MS}ms 长兜底"
+            );
+            self.first_show_extended
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.arm_pending_first_show_with_timeout(FIRST_SHOW_LONG_FALLBACK_MS);
+            return;
+        }
+        self.arm_pending_first_show_with_timeout(self.first_show_fallback_ms());
+    }
+
+    /// 当前焦点应用**实际生效**的首显档位：per-app 规则优先，未配则回落全局
+    /// `ui.candidate.first_show_mode`（认不出的值再回落到枚举默认档）。
+    ///
+    /// ★ 全局默认档可配之后，「档位是什么」就有了两个来源，必须收成一个函数：判据一旦
+    /// 分散在各消费点（本仓有 5 条首显通路），改一处漏一处的表现是「某条路仍按旧档位
+    /// 走」，而首显逻辑的错都只表现为位置或时机不对，没有任何报错。
+    ///
+    /// ⚠ 先取 `active_compat` 的值并**释放锁**再读配置：`rt()` 内部另有锁，两把锁在此
+    /// 嵌套会引入一个新的持有序。
+    pub(crate) fn effective_first_show_mode(&self) -> aurora_config::app_compat::FirstShowMode {
+        let per_app = self
+            .active_compat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .first_show_mode;
+        per_app.unwrap_or_else(|| {
+            aurora_config::app_compat::FirstShowMode::from_config(
+                &self.rt().config.ui.candidate.first_show_mode,
+            )
+            .unwrap_or_default()
+        })
+    }
+
+    /// 把一帧**不用于显示决策**的试探坐标收进缓存，返回是否真的收下。
+    ///
+    /// 缓存（`state.caret_x/y`）是兜底首显的坐标来源：`reset_first_show` 每次上屏都会把
+    /// `composition_start` 清掉，于是下一轮的兜底走的正是这份缓存（见 `notify_ui_update`
+    /// 里 `in_app && cs.2` 那个三元）。它若陈旧，候选窗就钉在原地。
+    ///
+    /// 实测（2026-09-02 记事本 + 五笔长按 d）：连续快速上屏时宿主的 `OnLayoutChange` 被
+    /// 50ms debounce 压住，整段**一条权威 caret_update 都不来**，缓存停在 456px 之外，
+    /// 每轮兜底都用它首显。试探坐标虽是 reflow 前的（偏差 ~30px），但远好过那份旧值。
+    ///
+    /// 两类不收：
+    /// - 退化帧（`h<=0`）：宿主尚未 reflow 的空 rect，收了会污染缓存。
+    /// - 配了 `stale_probe_guard` 的宿主：它们组合期间上报的 rect 可能停在**上一次组合**
+    ///   的位置（微信实测差 136~419px），收进缓存等于把陈旧值扩散到兜底路径上。
+    pub(super) fn absorb_probe_coords(&self, data: &CaretData) -> bool {
+        if data.height <= 0 {
+            return false;
+        }
+        if self
+            .active_compat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stale_probe_guard
+        {
+            return false;
+        }
+        // 与 handle_caret_update 同口径：state 里存的是变换后的值
+        let mut probe = *data;
+        self.apply_caret_compat(&mut probe);
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.caret_x = probe.x;
+        state.caret_y = probe.y;
+        state.caret_height = probe.height;
+        state.caret_source = probe.source;
+        // ★ 缓存自此装的是试探坐标，不再是「组合前的空闲上报」——那个身份到此为止。
+        // 不清位会让 `caret_cache_is_fresh_idle_report` 继续为真，于是 idle_anchor 逃生口
+        // 拿一份已被 probe 改写的坐标当「按键前光标」用，还会把它锁成组合起点。
+        self.caret_cache_is_idle_report
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    pub(super) fn first_show_mode_is_fast(&self) -> bool {
+        self.effective_first_show_mode() == aurora_config::app_compat::FirstShowMode::Fast
+    }
+
+    /// 首帧信任门是否命中：`fast` 档且坐标缓存未经当前插入点验证。
+    pub(super) fn first_show_needs_long_wait(&self) -> bool {
+        self.first_show_mode_is_fast()
+            && !self
+                .caret_cache_verified
+                .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 缓存里装的是**本次组合开始前、宿主经 TSF 主动上报的空闲光标位置**，可直接当首显锚点。
+    ///
+    /// 这是首显闸门第三个「不必等」的逃生口，补的是 ③ `coords_ready` 在连打时的死角：③ 依赖
+    /// 的组合起点被 `reset_first_show` 每次上屏清掉，重新锁定又要等组合期间的权威 caret_update
+    /// ——正是 fast 档等不到的那个东西（实测各宿主 53~73ms，而 fast 兜底只有 25ms）。
+    ///
+    /// 「不必等」在这里是字面意义上的：兜底到期后用的就是 `state.caret_x/y` 这份缓存，和立即
+    /// 显示用的是同一个坐标。25ms 内既然等不到更好的，等待就只是把首显推迟 25ms。
+    ///
+    /// 两个标志必须同时成立，各自答不同的问题，缺一不可：
+    /// - `caret_cache_is_idle_report`：缓存的**出身**是组合前的空闲上报（不是组合期间的 probe，
+    ///   也不是焦点事件随包携带的坐标）。
+    /// - `caret_cache_verified`：这份缓存**够格直接拿来定位**（限 TSF 通道，且未被切窗口 /
+    ///   点击移光标作废）。
+    ///
+    /// 该宿主的组合期试探坐标（probe）不可信，整条不收（`stale_probe_guard`）。
+    ///
+    /// ★ 它同时是「能不能拿组合前的空闲上报抢跑首显」的判据，两件事是**对偶**的：
+    /// - probe **可信**的宿主：等那 25ms 让 probe 说话更准——它是宿主在本次组合里现测的，
+    ///   而空闲上报是按键之前的。EverEdit 实测空闲上报滞后一拍（点击移光标后既不发
+    ///   caret_update 也不发 selection_changed，缓存停在上一次），probe 却在 1ms 后就给出
+    ///   了正确位置；拿空闲上报抢跑 ⇒ 候选窗恒慢一拍。
+    /// - probe **不可信**的宿主：空闲上报是唯一可信来源，抢跑无损失（微信）。
+    ///
+    /// ⚠ 判据是**结构性**的（这个宿主的 probe 收不收），不是「这一帧准不准」那种位置启发式
+    /// ——后者已被真机连续推翻四次，见 `handle_caret_probe` 第三道判据的注释。
+    pub(super) fn probe_is_untrusted(&self) -> bool {
+        self.active_compat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stale_probe_guard
+    }
+
+    pub(super) fn caret_cache_is_fresh_idle_report(&self) -> bool {
+        self.caret_cache_is_idle_report
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && self
+                .caret_cache_verified
+                .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 本次 arm **实际**会用的超时值。
+    ///
+    /// 存在的唯一理由是给首显闸门的日志用：闸门原本直接打印 `first_show_fallback_ms()`，
+    /// 而信任门命中时真正 arm 的是长兜底——日志说 25ms、实际等 600ms，排查时会被带偏。
+    /// **判据分散在两处（一处算日志、一处定行为）就必然分叉**，故收敛到同一个函数。
+    pub(super) fn planned_first_show_timeout_ms(&self) -> u64 {
+        if self.first_show_needs_long_wait() {
+            FIRST_SHOW_LONG_FALLBACK_MS
+        } else {
+            self.first_show_fallback_ms()
+        }
+    }
+
+    /// 本档位等不到坐标时的兜底超时。fast 档取远小于 wait 的值，理由见
+    /// `fast_first_show_fallback_ms` 的字段注释（150ms 会让 fast 在 Word/记事本上退化成 wait）。
+    pub(super) fn first_show_fallback_ms(&self) -> u64 {
+        if self.first_show_mode_is_fast() {
+            self.rt().config.ui.candidate.fast_first_show_fallback_ms
+        } else {
+            150
+        }
+    }
+
+    pub(super) fn arm_pending_first_show_with_timeout(&self, ms: u64) {
+        *self
+            .pending_first_show
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = true;
+        let token = {
+            let mut t = self
+                .pending_first_show_token
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *t = t.wrapping_add(1);
+            *t
+        };
+        let Some(weak) = self.self_weak.get().cloned() else {
+            return;
+        };
+        first_show_timer().arm(
+            std::time::Instant::now() + std::time::Duration::from_millis(ms),
+            token,
+            weak,
+        );
+    }
+
+    /// 兜底 timer 到期回调。由共享定时器线程调用。
+    pub(super) fn fire_pending_first_show(&self, token: u64) {
+        // token/pending 校验：被新按键的 arm 取代、或已被首显/隐藏消费 → 放弃本次兜底。
+        {
+            let pending = *self
+                .pending_first_show
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let tok = *self
+                .pending_first_show_token
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if !pending || tok != token {
+                return;
+            }
+        }
+        *self
+            .pending_first_show
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = false;
+        // 兜底超时：reflow 坐标迟迟未到，用当前 state 强制首显（坐标可能为按键前旧值，
+        // 属慢应用降级，仍优于候选窗一直不显示）。
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let has_content = !state.candidates.is_empty()
+            || !state.input_buffer.is_empty()
+            || self.mode_indicator_text(&state).is_some();
+        if has_content {
+            // 用的既然是旧坐标，就必须按「非权威」记账，否则随后到达的权威坐标会被 3px 常规容差
+            // 判成需要校正而跳一下——兜底路径本来就是抖动最容易被看见的地方。
+            // 置位在 has_content 内：没真显示就不该留下"用过非权威坐标"的账。
+            // 上屏刚前移过插入点：旧坐标确定陈旧，不留「用过非权威坐标」的账（见字段注释）。
+            let after_commit = self
+                .first_show_after_commit
+                .swap(false, std::sync::atomic::Ordering::Relaxed);
+            self.first_show_was_provisional
+                .store(!after_commit, std::sync::atomic::Ordering::Relaxed);
+            self.show_authorized
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            debug!("first_show 兜底 timer 到期 → 用现有坐标首显（非权威，享放宽容差）");
+            self.notify_ui_update(&state);
+        }
+    }
+}
+
+// ———————————————— 首显兜底 timer（进程内共享单线程）————————————————
+
+/// 一条待办：`(到期时刻, token, 协调器弱引用)`。
+type TimerEntry = (std::time::Instant, u64, std::sync::Weak<Coordinator>);
+
+/// 覆盖式定时器：**每个协调器**只保留最近一次 arm 的待触发任务。首显兜底与焦点气泡的锚点
+/// 超时（`status_placement`）各用一个实例，互不顶替——两者的待办同时存在是常态。
+///
+/// 按协调器分槽（`Weak::ptr_eq`）而不是全进程一个槽：生产里只有一个协调器，两者等价；但
+/// 同进程多个协调器（并行跑的测试）共用一个槽时，后 arm 的会把别人的待办顶掉，那边的超时
+/// 就永远不来。
+///
+/// 此前每次 arm 都 `thread::spawn` 一个线程去 `sleep`，靠 token 让被取代的那些醒来后自行
+/// 放弃——日志实测一小时创建两千余个线程。既然 token 已经保证「只有最新一次有效」，被作废
+/// 的任务就没有理由继续占着线程；改成覆盖式待办后语义反而更直白：每个协调器至多一条待办。
+///
+/// 本线程只做「等到点 + 回调」，**绝不在此执行可能阻塞的调用**（如前台窗口探测）——
+/// 一次慢调用就会拖垮兜底的 150ms 时限。需要后台跑阻塞探测的场景另行处理。
+struct OneShotTimer {
+    /// 各协调器的待办（每个协调器至多一条）；空 = 空闲。
+    pending: Mutex<Vec<TimerEntry>>,
+    cv: std::sync::Condvar,
+    /// 到期回调（token 校验由回调自己做）。
+    fire: fn(&Coordinator, u64),
+}
+
+static FIRST_SHOW_TIMER: std::sync::OnceLock<Arc<OneShotTimer>> = std::sync::OnceLock::new();
+static FOCUS_TIP_TIMER: std::sync::OnceLock<Arc<OneShotTimer>> = std::sync::OnceLock::new();
+
+/// 懒启动一个定时器线程。
+fn spawn_timer(name: &str, fire: fn(&Coordinator, u64)) -> Arc<OneShotTimer> {
+    let timer = Arc::new(OneShotTimer {
+        pending: Mutex::new(Vec::new()),
+        cv: std::sync::Condvar::new(),
+        fire,
+    });
+    let worker = timer.clone();
+    let _ = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || worker.run());
+    timer
+}
+
+/// 取首显兜底的共享定时器，首次调用时懒启动其线程。
+fn first_show_timer() -> &'static Arc<OneShotTimer> {
+    FIRST_SHOW_TIMER
+        .get_or_init(|| spawn_timer("first-show-timer", Coordinator::fire_pending_first_show))
+}
+
+/// 焦点气泡锚点超时的登记入口（`status_placement` 用）：到期回调
+/// [`Coordinator::fire_focus_tip_timeout`]。
+pub(super) fn arm_focus_tip_timer(
+    deadline: std::time::Instant,
+    token: u64,
+    coord: std::sync::Weak<Coordinator>,
+) {
+    FOCUS_TIP_TIMER
+        .get_or_init(|| spawn_timer("focus-tip-timer", Coordinator::fire_focus_tip_timeout))
+        .arm(deadline, token, coord);
+}
+
+impl OneShotTimer {
+    /// 覆盖式登记：同一协调器新的 arm 直接顶掉它旧的那条（与原先"旧线程靠 token 自行作废"
+    /// 等价）；别的协调器的待办不受影响。
+    fn arm(&self, deadline: std::time::Instant, token: u64, coord: std::sync::Weak<Coordinator>) {
+        let mut g = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        g.retain(|(_, _, w)| !w.ptr_eq(&coord));
+        g.push((deadline, token, coord));
+        drop(g);
+        self.cv.notify_one();
+    }
+
+    fn run(&self) {
+        let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            // 最早到期的那条
+            let Some((idx, deadline)) = guard
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (d, _, _))| *d)
+                .map(|(i, (d, _, _))| (i, *d))
+            else {
+                // 空闲：睡到下一次 arm
+                guard = self.cv.wait(guard).unwrap_or_else(|e| e.into_inner());
+                continue;
+            };
+            let now = std::time::Instant::now();
+            if now < deadline {
+                // 等待期间可能被新的 arm 顶掉，醒来后重新取 deadline 判断
+                let (g, _) = self
+                    .cv
+                    .wait_timeout(guard, deadline - now)
+                    .unwrap_or_else(|e| e.into_inner());
+                guard = g;
+                continue;
+            }
+            let (_, token, coord) = guard.swap_remove(idx);
+            // 回调期间释放锁，否则回调里若触发新的 arm 会自锁
+            drop(guard);
+            if let Some(c) = coord.upgrade() {
+                (self.fire)(&c, token);
+            }
+            guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+#[cfg(test)]
+mod first_show_timer_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn idle_timer() -> OneShotTimer {
+        OneShotTimer {
+            pending: Mutex::new(Vec::new()),
+            cv: std::sync::Condvar::new(),
+            fire: |_, _| {},
+        }
+    }
+
+    /// 覆盖式登记：这是取代「spawn 多个线程靠 token 自行作废」的等价语义——
+    /// 待办任何时刻只有一个，且必须是最近一次 arm 的那个。
+    #[test]
+    fn arm_replaces_previous_pending() {
+        let t = idle_timer();
+        let dead = std::sync::Weak::<Coordinator>::new();
+        let base = Instant::now();
+
+        t.arm(base + Duration::from_secs(10), 1, dead.clone());
+        t.arm(base + Duration::from_secs(20), 2, dead.clone());
+        t.arm(base + Duration::from_secs(30), 3, dead);
+
+        let g = t.pending.lock().unwrap();
+        assert_eq!(g.len(), 1, "同一协调器只应有一条待办");
+        let (deadline, token, _) = &g[0];
+        assert_eq!(*token, 3, "只应保留最近一次 arm 的 token");
+        assert_eq!(
+            *deadline,
+            base + Duration::from_secs(30),
+            "到期时刻也应随最近一次 arm 更新"
+        );
+    }
+
+    /// 按协调器分槽：别的协调器的 arm 不得顶掉这一个的待办（并行测试里就是这么丢超时的）。
+    #[test]
+    fn arm_keeps_other_coordinators_pending() {
+        let t = idle_timer();
+        let a = Coordinator::new_headless(Config::default(), None);
+        let b = Coordinator::new_headless(Config::default(), None);
+        let base = Instant::now();
+        t.arm(base + Duration::from_secs(10), 1, Arc::downgrade(&a));
+        t.arm(base + Duration::from_secs(20), 2, Arc::downgrade(&b));
+        t.arm(base + Duration::from_secs(30), 3, Arc::downgrade(&a));
+        let g = t.pending.lock().unwrap();
+        let mut tokens: Vec<u64> = g.iter().map(|(_, tok, _)| *tok).collect();
+        tokens.sort();
+        assert_eq!(tokens, vec![2, 3], "a 的旧待办被 a 自己顶掉，b 的保留");
+    }
+
+    /// 线程真的会在到期后回调；且协调器已释放时安全跳过（不 panic）。
+    #[test]
+    fn fires_after_deadline_and_tolerates_dead_coordinator() {
+        let t = Arc::new(idle_timer());
+        let worker = t.clone();
+        std::thread::spawn(move || worker.run());
+
+        t.arm(
+            Instant::now() + Duration::from_millis(30),
+            7,
+            std::sync::Weak::<Coordinator>::new(), // upgrade 必失败，走"协调器已没了"分支
+        );
+
+        // 到期后待办应被取走（说明线程确实醒来处理了），且不 panic
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(t.pending.lock().unwrap().is_empty(), "到期后待办应已被消费");
+    }
+}

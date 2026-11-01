@@ -1,0 +1,92 @@
+<!-- Parent: ../../AGENTS.md -->
+<!-- Updated: 2026-08-14 -->
+
+# aurora-coordinator
+
+## Purpose
+输入法服务的"大脑"。实现 `aurora_bridge::MessageHandler`，接收 C++ TSF 桥接层的全部事件（按键/焦点/IME 激活/光标/菜单），编排引擎、候选、UI、词库与持久化，维护完整输入状态机。上游是 TSF 桥接（`aurora-bridge`），下游扇出到 `aurora-engine`/`aurora-candidate`/`aurora-store`/`aurora-ui` 等十余个 crate。
+
+## Key Files
+| File | Description |
+|------|-------------|
+| `src/lib.rs` | 模块导出（`Coordinator`/重启信号/设置 URL 提供者）；`is_foreground_fullscreen()` 全屏检测（供工具栏全屏隐藏） |
+| `src/coordinator.rs` | 核心：`State`（全部输入态）/`Coordinator` 定义、`build`（83 字段装配点，私有字段以本模块为界不外迁）、会话键统一分发 `apply_session_action`、配置热重载 `reload_user_config`。平移出去的项经 `pub(crate) use` 保真，handle_* 仍从 `crate::coordinator::` 引用 |
+| `src/coordinator/message_handler.rs` | **子模块**：`impl MessageHandler`（TSF 全部事件入口，含**按键主入口 `handle_key_event`（优先级链）**）+ 失焦归属校验 `is_stale_focus_event` + ext 信封解码。子模块可见父私有字段——重度碰私有态的切片进 `src/coordinator/`，不进平级模块 |
+| `src/coordinator/first_show.rs` | **子模块**：候选窗首显闸门（延迟首显判定/释放 + `OneShotTimer` 共享兜底 timer，按协调器分槽；焦点气泡锚点超时也用它的另一个实例） |
+| `src/coordinator/status_placement.rs` | **子模块**：状态气泡定位（C2-33 / GH#148）——`status_position`（compat 规则优先回落全局，方式与坐标同层）、`placement_for`（坐标不可信时按 `fallback_position` 兜底，`last` = 引入前行为）、焦点气泡挂起的锚点超时（仅兜底为锚点时） |
+| `src/coordinator/push_config.rs` | **子模块**：push 通道推送（activation status / 各配置帧 / `push_state_update`） |
+| `src/coordinator/langbar_icon.rs` | **子模块**：语言栏图标 SHM 发布（`ICON_PUBLISHER` 进程级单例 + 状态角标） |
+| `src/coordinator/app_schema.rs` | **子模块**：按应用方案（compat.toml `schema`）——焦点跨进程切入的轻量切换（冷方案后台加载）、手切分流（规则应用不写 `schema.active`）、全局方案 `AppSchemaState::global`（**不读** `rt().config.schema.active`：手切只写盘、内存 config 不刷新）、`@remember` 记忆表（state.toml `app_schemas`） |
+| `src/coordinator/window_ctx.rs` | **子模块**：compat 规则按窗口上下文解析（设计 `docs/design/compat-window-match.md` P2）——`client_token → 最近 focus_gained 的窗口`记账、**规则查表唯一入口** `with_compat_rule`（焦点 / 按 token / 按 pid 三种取窗口口径）、进入类跨越判据 `entry_crossed`（pid 变或带窗口条件的进入类规则集合变；带标题条件的不计）、换窗口重推 DLL 配置、右键菜单写回目标 `menu_writeback_target`（P4：生效值来自「进程 + 窗口条件」规则时写那条的身份，否则纯进程键；整条启用 / 禁用仍按纯进程键）。新增按应用规则的消费点走这里，别再直调 `AppCompat::get_rule` |
+| `src/construct.rs` | 构造器族：生产构造 `new`（desktop-ui）+ headless 家族（`new_headless*`）+ `open_user_store`；装配核心 `build` 留在 coordinator.rs |
+| `src/ui_sender.rs` | `UiSender`：`ui_tx` 的类型。把「投递 `UiCommand` + 唤醒 UI 线程」绑成一次 `send`——UI 线程是事件驱动的（`aurora_ui::wake`），只投递不唤醒 = 那条命令躺到下一个计时器到期才被看见。50+ 处发送点靠类型守门，不靠纪律 |
+| `src/config_bundle.rs` | `ConfigBundle`（配置 + 轻量派生缓存快照，热重载整体原子替换）+ `parse_pairs`/`parse_jump_out_*` 配置解析 |
+| `src/key_convert.rs` | 键位换算纯函数：`punct_char`/`printable_char`/`numpad_*`/`full_width_source_char`/`en_case_variants`/`wind_mods_to_win32` |
+| `src/candidate_nav.rs` | 候选视图导航：分页/高亮移动/悬停清除/末页检索范围临时放宽（`try_relax_scope_on_page_end`） |
+| `src/schema_residency.rs` | 方案常驻策略（`schema.keep_all_loaded`）：启动预热分「全部常驻」与「只建常驻集合 + 后台校验其余方案缓存」两支、`idle-sweep` 闲置清扫线程（每分钟一拍，30 分钟摘除；§7 懒建缓存——单字全码表、按词查编码用户层——的闲置释放也在这一拍，且不看常驻开关）、运行期改键就地对齐（不进 `engine_reload_needed`） |
+| `src/process_memory.rs` | 进程私有内存读数（Windows `PrivateUsage` / Linux·Android `RssAnon` / macOS 不提供），供 `system.memoryStats` |
+| `src/debug_support.rs` | `debug_*` 测试/诊断支撑方法（生产路径不调用；生产 tooltip 用的 `DebugSchemaCtx` 族名字带 debug 但**不在**此文件） |
+| `src/pipeline.rs` | `ModeKind`（单一活跃独占模式枚举）+ `Rewind`（夺取回退登记）；含与 Go 决策器的**刻意差异说明**（见下） |
+| `src/handle_candidate.rs` | 候选生成/过滤/shadow/词频重排/分页/选词上屏/右键操作 |
+| `src/handle_temp.rs` | 临时拼音 + 临时英文模式（触发判定/进出/候选刷新/上屏） |
+| `src/handle_url.rs` | 网址模式（夺取缓冲 + 边界退格回退）**兼前缀夺取骨架** |
+| `src/handle_email.rs` | 邮箱模式（`@` 后缀触发，共用上面那套骨架） |
+| `src/mode_completion.rs` | 网址/邮箱**共用**的补全候选源与上屏收尾（学习数据在 aurora-store 的 `completion` 表） |
+| `src/handle_direct_aux.rs` | 直接辅助码（双拼）：`build_candidates` 在 `apply_shadow` 前调 `apply_direct_aux`——门卫、前缀候选（取几键前整音节输入的主候选快照 `State.direct_aux_prev`；那一键被截断过 / 过滤状态变了 / 缓冲换段时不可用，改对前缀单独解码并留给下一键）、命中项标整串消费 + `is_direct_aux`、组码区 `direct_aux_body`。纯逻辑在 `aurora-aux-code/src/direct.rs` |
+| `src/handle_special.rs` | 引导键特殊模式（自带码表 + 全码上屏策略） |
+| `src/handle_mode.rs` | 中英 / 简繁 / 方案 / 主题 / mix 融合模式切换 |
+| `src/handle_punct.rs` | 标点编排 + 智能符号同键连按替换状态机（武装/触发/解除） |
+| `src/handle_addword.rs` | 快捷加词 / 选词后自动造词 / `dict.add` |
+| `src/handle_cmdbar.rs` | 命令直通车（cmdbar）集成：`init_cmdbar` + `EvalContext` 适配 + ime/dict 控制器 |
+| `src/handle_menu.rs` | 主菜单 / 候选右键菜单分派、工具栏点击/刷新/位置持久化 |
+| `src/handle_lifecycle.rs` | 配置重载、服务重启、独占模式进入/复位（IME 激活/焦点/composition 终止仍在 coordinator.rs 的 `impl MessageHandler`） |
+| `src/handle_config.rs` | 配置更新处理（引擎/热键/UI/工具栏） |
+| `src/handle_tooltip.rs` | 候选悬停提示（编码/拆字/拼音反查） |
+| `src/hotkey_match.rs` | key_down 热键匹配 |
+| `src/web_host.rs` | `WebDataHost` trait（16 方法）+ 转发 impl：设置页数据 RPC（**独立 crate `aurora-webdata`**）消费宿主能力的窄面。依赖方向 webdata→coordinator，本 crate 因此不依赖 aurora-transfer/fontdb（Android 闭包免 C 依赖、check-android 免 NDK 的关键，Cargo.toml 有⚠注释）。★新增 RPC 需要新宿主能力时**必须加在本 trait 上** |
+| `src/user_words_api.rs` | 用户词管理（分页列表三条分流 / 加词 ü 归一与边界求解 / 删词 / 清空）的**存储域**本体，泛型于 `WebDataHost`。桌面 `dict.*` RPC（aurora-webdata）与移动端门面（aurora-mobile）共用——从 webdata 下沉是因为 Android 闭包不含 webdata。转义与 JSON 形状仍留 webdata |
+| `src/dict_stats_api.rs` | 系统词库统计 `dict.systemStats` 本体：调 `EngineManager::dict_stats`（选库/缓存/single-flight），混输按主码表与拼音两个成员并排，补实时的用户词/临时词条数。泛型于 `WebDataHost`，webdata 只转发；扫 mmap 不扫 redb，不进 `FULL_SCAN_METHODS` |
+| `src/dict_transfer_api.rs` | 词库导出 / 导入（多段 .wdict 与 Rime/TSV）本体：引擎类型写头与跨类型拒收、段交集、拼音准入契约（`EntryContractStats` / 边界补齐）。泛型于 `WebDataHost`，桌面 `dict.export` / `dict.import`（aurora-webdata）与移动端 `dict_export` / `dict_import` 共用，保证两端文件互通。读写盘与 JSON 形状仍留 webdata |
+| `src/freq_learn_tests.rs` | 词频路由/选词记账/自动造词/加词的 crate 内行为测试（白盒零 RPC；原住 webdata 契约测试，按「是否用 web_data_rpc」分拣回归） |
+| `src/host_services.rs` | `HostServices` trait（剪贴板等平台能力注入面）+ 桌面/headless 实现；收录判据见模块文档 |
+| `src/stats.rs` | 输入统计采集 |
+| `src/watchdog.rs` | 看门狗 |
+
+> `src/handle_key.rs` 仅为模块占位（文档注释），实际按键路由在 `coordinator.rs::handle_key_event`。**注意：`keymap` 不在本 crate**，在 `aurora-keys`（`use aurora_keys::keymap`）；根 AGENTS.md 旧引用的 `aurora-coordinator/src/keymap.rs` 已失效。
+
+## For AI Agents
+
+### Working In This Directory
+- **Coordinator 字段（81 个）的锁形态/访问分布/合并禁区**清点在 `docs/design/coordinator-state-inventory.md`——**改动或新增字段前先读**，其 §3「勿动清单」每条都是修过 bug 的结论，§5 是新增字段的归属判据。
+- **按键唯一主入口 `handle_key_event`（coordinator/message_handler.rs）**，优先级链顺序即正确性契约，改动前务必理解：key_up toggle 键切换 → 菜单转发 → key_down 热键 → 候选操作热键（Ctrl+数字）→ 加词模式 → 英文透传 → **夺取回退**（`VK_BACK` + `can_rewind`）→ **`state.active` 单点 match 分派** → 空缓冲模式激活 `try_activate_mode` → Ctrl/Alt 组合清空 → URL 夺取激活 → 以词定字 → `apply_nav_key` 统一导航 → 小键盘 → Esc/Back/Space/Enter/字母数字标点（engine_default）。新增逻辑须想清插在链的哪一环。
+- **独占模式单点真相源**：临时拼音/临英/URL/特殊/mix 收敛为单字段 `State.active: Option<ModeKind>`（pipeline.rs），结构上保证「同一时刻至多一个独占模式」。新增模式 = 加一个 `ModeKind` 变体 + 一条 match 臂 + 一个 `handle_*_key`，**不要**再引入并行 bool。
+- **不移植 Go 决策器**：Rust 各模式按 schema id 独立查引擎（`EngineManager::convert_with`），无被多模式改写的共享引擎，故 pipeline.rs 刻意不引入 Capability/Processor trait 抽象。读 Go 同名模块时勿照搬其 `decider`/`applyEngineDiff` 机制——此处不存在。
+- **导航键走统一入口 `apply_nav_key`**（配置驱动 `keymap::NavKeys`，来自 aurora-keys）：普通模式与所有候选模式共用；`include_printable` 区分码表型（`-`/`=` 作翻页）与文本/表达式型（临英/快捷，`-`/`=` 作输入）。禁止在各模式里各写一套翻页/高亮。
+- **辅助码与翻页共键**：`session_actions` 的 `aux_code:page_next` 是 `aux_code` 这个动词的**参数**（`AuxCodeShare`），不是新动词、不是通用降级链（后者已在 `docs/design/key-resolver-unification.md` §5 否决）。语义「顺序即优先级」：`apply_session_action` 先调 `enter_aux_code`，返回 `None`（已在别的 overlay / 未启用 / 无码表 / 无候选）才降级为 `NavAction::PageNext`，**落到同一段 nav 执行**——别在那条臂里自己写 `page_next` + `notify_ui_update`。模式内翻页、未开启退化成纯翻页键，都是这条降级的副产品，不要为它们各加特判。★ 模式内的键角色由 `aux_code_key_role` 三态裁决（Exit / PageNext / Other），**取 `include_printable = true`**——与 `handle_candidate_nav` 的 false 相反，因为辅助码的码元只有字母（已单独排除），而符号键一律 `printable = true`，用 false 查会漏掉符号键上的绑定、让键落到兜底臂**把首选打出去**（既有缺陷，此前被双拼出厂的 `[key_actions] backtick` 兜住）。两张表都问时**按分派优先级短路**：会话表表了态，`key_actions` 那份就没有发言权。
+- **夺取回退（`pipeline::Rewind`）**：URL 抢前缀、z 抢前导拼音等「夺取式」模式登记快照后，退到前缀边界再退格 → 撤销夺取、把 `snapshot` 回放回正常码表输入流。URL 与 z 共用此机制，勿各写各的回退。
+- **拼音逐步转换不变量**：`committed_text`/`committed_segs` 存「选中汉字累积、留组合区不上屏，全转完才整体上屏」；码表（五笔）选词消费整串、绝不进入此态。`preedit` 仅含输入码/拼音，**绝不含候选列表**。
+- **配置热重载**：读配置统一经 `self.rt()`（`RwLock<Arc<ConfigBundle>>` 原子快照）；`reload_user_config` 整体替换 bundle，轻量项（标点/热键/候选数/导航键/配对）即时生效，重型项（引擎/方案/词典/字体）仍需重启。
+- **锁与线程**：`State` 由单个 `Mutex` 保护，另有多个细粒度 `Mutex`/`Atomic`（pending_first_show、stat_recorded、fullscreen_cached 等）。cmdbar 动作经独立线程异步执行（`self_weak`），故控制器回调自锁的 coordinator 方法是安全的——切勿在持 `state` 锁时调用会再次取锁的方法。
+- **工具栏显隐**是四项合取 `ime_active && has_edit_context && toolbar_visible && !全屏否决`（前三项收在 `State::toolbar_conjunction`，正交理由见 `State` 注释；Go 版只有前两项），隐藏经 UI 层 50ms 防抖；全屏经 `fullscreen_cached` 后台异步刷新，勿在 bridge handler 线程同步调 `foreground_fullscreen_kind`。该缓存除焦点事件外还由 `fullscreen-watch` 线程按固定节拍复查（`coordinator/fullscreen_watch.rs`，节拍值只写在那里的 `WATCH_TICK`）——进出全屏本身不产生任何 TSF 回调，只靠事件刷新会让工具栏在全屏下一直显示。该线程**默认挂起**，由 `notify_toolbar` 在三项合取成立时叫醒；是否启用受 `ui.toolbar.hide_in_fullscreen && ui.toolbar.fullscreen_watch` 合取门控。
+
+### Feature: desktop-ui（headless/Android 形态）
+- `desktop-ui`（默认开）门控桌面渲染路径：生产构造器 `new`、`UiManager`、剪贴板直通、macOS `select_self`。`--no-default-features` 即 headless/Android 形态——入口是 `new_headless_with_ui`（返回 `Receiver<UiCommand>`）+ `inject_ui_event`（反向事件）+ `set_host_services`（剪贴板注入，须在首次使用前）。
+- 编译门（与 CI 同一份命令，alias 见 `aurora_core/.cargo/config.toml`）：`cargo check-headless`（host）与 `cargo check-android`（aarch64-linux-android；⚠ zstd-sys 等 C 依赖的 build script 需 NDK clang，本机无 NDK 时由 CI 承接）。数据类型一律从 `aurora-ui-types` 引；**headless 路径不得新增对 aurora-ui 的引用**（CI 有 `cargo tree` 断言）。
+
+### Testing Requirements
+- **host 可直接 `cargo test -p aurora-coordinator`**（Windows/macOS host 全量；`windows` crate 是 `cfg(windows)` 依赖，非对应平台不参与编译）。历史说法「传递依赖 windows 不能 host 测」已随 aurora-ui 解耦作废。
+- ⚠️ 集成测试依赖 `build_dev/data`，缺失时**静默跳过且计数照绿**——以 `--test input_flow` 耗时 ≥1s 为数据在位判据（见根 AGENTS.md）。
+- 纯逻辑函数（`en_case_variants`/`parse_pairs`/`punct_char` 等）逻辑独立，经无头构造器（`new_headless` 族）覆盖。
+
+## Dependencies
+
+### Internal
+- `aurora-ipc`（协议常量/键 hash）、`aurora-bridge`（MessageHandler/KeyEventData/Push）、`aurora-config`、`aurora-store`（redb 持久化）、`aurora-dict`、`aurora-engine`、`aurora-candidate`、`aurora-transform`、`aurora-theme`、`aurora-ui-types`（UiCommand/UiEvent 等表现层协议）、`aurora-ui`（**optional，desktop-ui feature**：UiManager/剪贴板/macOS forwarder）、`aurora-cmdbar`、`aurora-phrase`、`aurora-keys`（keymap/VK/NavKeys）、`aurora-quick-input`、`aurora-reverse`、`aurora-aux-code`（辅助码来源运行时 `ensure_aux_code_runtime` → `aux_code_source.rs`，文件表懒加载、方案来源查询时取视图/`ModeKind::AuxCode` 筛选态）、`aurora-punct`
+
+### External
+- `tracing`、`anyhow`、`serde`/`serde_json`、`toml`、`chrono`、`fontdb`；`windows`（仅 `cfg(windows)`）。无 tokio（2026-07 移除，全 workspace 同步线程模型）
+
+## 全局约束
+按需引用根 `AGENTS.md`：VK 用 `keymap::VK_*`（来自 aurora-keys，禁裸十六进制）；候选导航键走统一入口（`apply_nav_key`/`NavKeys`）；提交只用显式路径（禁 `git add -A`）；改完在 `aurora_core/` 跑 `cargo fmt` 并与逻辑改动分开提交；日志 INFO 级不得含用户输入/候选/词库内容。
+
+<!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

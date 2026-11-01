@@ -1,0 +1,4416 @@
+# 统一声明式设置清单（native 内置真相源；core 已退役 manifest.toml）。
+# 字段：key(点路径,对应 Config)/group/section/type/label/hint/options/options_source/min/max/step/unit/width/enabled_when/gate_key/global
+#   width：select 下拉像素宽；options_source：动态选项来源（themes/fonts/codetableSchemas/pinyinSchemas）
+# indent：false = 依赖同卡其它项时不缩进（缺省缩进）。
+# 注：默认值不在此声明，统一取自 core capability 快照（capabilities.snapshot.json）。
+#
+# 【对照来源】参考项目 WindInput/aurora_setting（web 配置页）的页面/分区/字段组织与文案；
+#   key 必须与本项目 core 的真实配置点路径逐字一致（见 capabilities.snapshot.json）。
+# 【分组】group → 页面主体；section → 页内子卡片。
+#   前端按 (group, section) 聚合：同 section 的项渲染为一张卡片，section 首次出现序为卡片序，
+#   卡片内项序即 items 出现序——故同 section 的项务必相邻声明，且按「基础/开关在前、细节在后」排列。
+# 【布局对照表】docs/redesign/settings-layout-correspondence.md
+# 【方案页引擎设置】分两级：①全局级（本文件 schema 组「上屏行为/候选行为」，常用通用设置，快捷配置）；
+#   ②per-schema 级（方案设置弹窗，后续实现）。
+# 【动态可选值】select 项可用 options_source（codetableSchemas/pinyinSchemas/fonts/themes）声明选项来源。
+
+
+# ── 分组（→ 页面主体）──
+[[groups]]
+key = "schema"
+label = "方案"
+order = 1
+
+[[groups]]
+key = "input"
+label = "输入"
+order = 2
+
+[[groups]]
+key = "keys"
+label = "按键"
+order = 3
+
+[[groups]]
+key = "ui"
+label = "外观"
+order = 4
+
+[[groups]]
+key = "general"
+label = "常规"
+order = 5
+
+[[groups]]
+key = "advanced"
+label = "高级"
+order = 6
+
+# ═══════════════════════════ 方案 ═══════════════════════════
+# ── 主方案设置 ──
+[[items]]
+key = "schema.primary_codetable"
+group = "schema"
+section = "主方案设置"
+type = "select"
+options_source = "codetableSchemas"               # 选项运行时来自 schema.list（码表类）
+label = "主码表方案"
+hint = "主力码表方案 id（如 wubi86）；拼音方案的反查/编码提示基于此方案的码表"
+
+[[items]]
+key = "schema.primary_pinyin"
+group = "schema"
+section = "主方案设置"
+type = "select"
+options_source = "pinyinSchemas"                                # 选项运行时来自 schema.list（拼音类）
+label = "主拼音方案"
+hint = "临时拼音、快捷输入使用的拼音方案（可选双拼）；留空 = 全拼。混输方案的拼音由方案自身配置决定，不受此项影响"
+
+# ── 上屏行为（码表全局基线；方案可经 schema_overrides 覆盖）──
+[[items]]
+key = "schema.codetable.auto_commit_at_full"
+group = "schema"
+section = "上屏行为"
+type = "toggle"
+label = "全码唯一自动上屏"
+hint = "唯一精确且无更长后继时直接上屏"
+
+# 档位而不是数字步进器：核心里 `0` 的意思是「等于该方案的全码长」，这层语义在一个写着
+# 0 的数字框里读不出来。下拉能把它写成字，顺带挡住比方案全码长还大的取值——编码永远
+# 够不着门槛，等于把自动上屏整个关掉，而界面上看不出异样。
+[[items]]
+key = "schema.codetable.auto_commit_min_len"
+group = "schema"
+section = "上屏行为"
+type = "number_select"
+label = "自动上屏最短码长"
+hint = "打够这个码长，唯一候选就自动上屏；「满码」= 跟随方案自己的全码长"
+width = 160
+options = [
+  { value = "0", label = "满码（跟随方案）" },
+  { value = "1", label = "1 码" },
+  { value = "2", label = "2 码" },
+  { value = "3", label = "3 码" },
+  { value = "4", label = "4 码" },
+  { value = "5", label = "5 码" },
+]
+enabled_when = "schema.codetable.auto_commit_at_full == true"
+
+[[items]]
+key = "schema.codetable.clear_on_empty_max"
+group = "schema"
+section = "上屏行为"
+type = "toggle"
+label = "满码空码清空"
+hint = "编码达到最大码长且无候选时自动清空缓冲"
+
+[[items]]
+key = "schema.codetable.top_code_commit"
+group = "schema"
+section = "上屏行为"
+type = "toggle"
+label = "顶码上屏"
+hint = "编码超过最大码长时自动顶字上屏首选"
+
+[[items]]
+key = "schema.codetable.punct_commit"
+group = "schema"
+section = "上屏行为"
+type = "toggle"
+label = "标点顶码上屏"
+hint = "输入标点时自动上屏首选"
+
+[[items]]
+key = "schema.codetable.show_code_hint"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "toggle"
+label = "显示编码提示"
+hint = "候选旁显示对应编码"
+
+[[items]]
+key = "schema.codetable.single_code_input"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "toggle"
+label = "精确匹配模式"
+hint = "仅显示精确匹配的候选，不显示前缀匹配"
+
+[[items]]
+key = "schema.codetable.single_code_complete"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "toggle"
+label = "精确匹配空码补全"
+hint = "精确匹配模式下无候选时，自动从更长编码中取首个候选"
+enabled_when = "schema.codetable.single_code_input == true"
+
+[[items]]
+key = "schema.codetable.z_key_repeat"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "toggle"
+label = "z 键重复输入"
+hint = "输入z时首选为上一次上屏的内容，快速重复输入"
+
+# z 的两个身份共用一个键，由 core 在运行时裁决：z_key_repeat 开且有上屏历史、
+# 或 z 是本方案的活码前缀时，本项让位（见 core handle_lifecycle.rs 的三重身份裁决）。
+# 融合/特殊模式的实例 id 随已安装方案增删，清单只列内置的 quick_mix；配了其他实例的
+# 用户，其取值由下拉的「保留当前配置」项兜住，不会在保存时被抹掉。
+# `rare_char` 必须列出：输入页「生僻字触发键」的提示语把字母键指路到这里（GH#146）。
+# 出厂 `zz*` 短语让首键 z 恒让位，进模式靠 core 的 z 夺取回路（`try_z_fallback`），
+# 生僻字那一臂与本项同批补上，input_flow 的 test_z_key_action_enters_rare_char 钉住。
+# `reverse` 同 `rare_char`：出厂 `zz*` 短语下靠 core 的 z 夺取进入。
+[[items]]
+key = "schema.codetable.z_key_action"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "select"
+label = "z 键引导功能"
+hint = "z 在本方案是死码时（如五笔 86）可借作引导键，空码状态下按 z 进入所选模式；与「z 键重复输入」冲突时后者优先"
+options = [
+  { value = "", label = "不启用（作编码字母）" },
+  { value = "temp_pinyin", label = "临时拼音" },
+  { value = "temp_english", label = "临时英文" },
+  { value = "mix:quick_mix", label = "快捷输入" },
+  { value = "rare_char", label = "生僻字" },
+  { value = "reverse", label = "反查模式" },
+]
+
+# 通配输入（万能键）。首位 / 非首位的让位规则由 core 裁决（aurora-coordinator/src/wildcard.rs），
+# 键的合法性（单个字母或 ASCII 符号，数字与空格不可用）也由 core 校验，非法值告警并视为关闭。
+[[items]]
+key = "schema.codetable.wildcard"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "toggle"
+label = "通配输入"
+hint = "组码时按通配键代替一个拿不准的码元，候选旁显示完整编码；通配结果不自动上屏、不顶字。符号通配键在首键也作通配（临时拼音等全局引导键让位，方案按键绑定仍优先）；字母通配键首键已有功能（z 键引导、z 键重复、活码）时让位；组码中若是选词、翻页、分隔键也让位，满码后照常顶字。五笔拼音混输方案下，首键和超出五笔码长的串按拼音处理，码长内通配结果与拼音候选一起列出"
+
+# 下拉只列三个常用选项，与出厂键位的关系各不相同：
+#   z      —— 出厂 z 键无绑定，但 z 键重复 / z 键引导开启时首位让位给它们（五笔类以外的方案 z 常是真实码元）；
+#   `      —— 符号键：首位也作通配，出厂临拼的反引号引导随之让位（0.126 起，论坛 t302）；
+#   ?      —— 符号键：首位也作通配；组码中途会先于「标点顶屏」被当通配——要打它本身须另想办法。
+# 符号键首位作通配、全局引导键让位、方案级 [key_actions] 显式绑定仍优先，都是 core 的裁决。
+# 配了其它字符的用户由下拉的「保留当前配置」项兜住。
+[[items]]
+key = "schema.codetable.wildcard_key"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "select"
+label = "通配键"
+hint = "26 码元的方案请选符号键；符号键在首键与组码中都作通配（满码后照常顶字），该符号本身请用快捷输入或短语打出。选了本方案真实用到的码元，该码元会被通配吞掉"
+enabled_when = "schema.codetable.wildcard == true"
+options = [
+  { value = "z", label = "z" },
+  { value = "`", label = "` 反引号" },
+  { value = "?", label = "? 问号" },
+]
+
+# 通配仅单字：行内通配与反查模式都受它管，故不挂 enabled_when（反查模式不看通配主开关）。
+# 单字判据是字素簇（core 的 aurora_candidate::single_markable_char）。
+[[items]]
+key = "schema.codetable.wildcard_single_only"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "toggle"
+label = "通配仅出单字"
+hint = "通配与反查模式的结果只列单字，词组不出。不影响正常打字"
+
+# 档位取「对哪几级简码生效」，故 core 侧判据是「当前码长 > 档位」而非「等于全码长」——
+# 非五笔方案的全码长未必是 4，用码长比较才不必知道方案的最大码长。
+# core 支持 1（仅一简），下拉不列：一简位的字本就只有 25 个，单独成档没有实际用途。
+[[items]]
+key = "schema.codetable.short_code_yield_level"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "number_select"
+label = "出简让全"
+hint = "有简码的字在更长编码上把首选让给词组，自己排到候选末尾"
+width = 160
+options = [
+  { value = "0", label = "关闭" },
+  { value = "2", label = "一、二级简码" },
+  { value = "3", label = "全部简码" },
+]
+
+# 与上面的「出简让全」同属码表专属、同一 subsection：两者都在回答「这个码位该出什么」。
+# 拼音另有一份（schema.pinyin.single_char），刻意不共享取值——码表开它是为了定长盲打，
+# 拼音没有定长、开了只是不出词。
+[[items]]
+key = "schema.codetable.single_char"
+group = "schema"
+section = "上屏行为"
+subsection = "常用功能"
+type = "toggle"
+label = "单字输入"
+hint = "只出单字。同码没有词来争首选，满码唯一即可直接上屏，不必看候选窗"
+
+# 词频调整
+[[items]]
+key = "schema.codetable.frequency.enabled"
+group = "schema"
+section = "上屏行为"
+subsection = "学习与扩展"
+opens_dialog = "ct_freq"
+type = "toggle"
+label = "词频调整"
+hint = "根据使用频次动态调整候选排序"
+
+[[items]]
+key = "schema.codetable.frequency.record_always"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_freq"
+type = "toggle"
+label = "仅记录次数"
+hint = "不调整候选顺序，只记录每个字词的上屏次数，可在词库管理的「词频」中查看和导出。之后若开启词频调整，已记录的次数会立刻参与排序"
+enabled_when = "schema.codetable.frequency.enabled == false"
+
+[[items]]
+key = "schema.codetable.frequency.strategy"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_freq"
+type = "select"
+label = "调频策略"
+hint = "置顶：用过一次即到首位；步进：按累计次数上升；位次渐进：每次前移一半位次，逐步靠前"
+enabled_when = "schema.codetable.frequency.enabled == true"
+options = [
+  { value = "top", label = "置顶" },
+  { value = "step", label = "步进" },
+  { value = "position", label = "位次渐进" },
+]
+
+[[items]]
+key = "schema.codetable.frequency.promote_prefix"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_freq"
+type = "select"
+label = "补全词参与调频"
+hint = "仅「位次渐进」策略下生效。英文等以前缀匹配为主的方案建议选「全部」"
+enabled_when = "schema.codetable.frequency.enabled == true && schema.codetable.frequency.strategy == position"
+options = [
+  { value = "none", label = "不参与" },
+  { value = "single", label = "仅单字/单词" },
+  { value = "all", label = "全部" },
+]
+
+[[items]]
+key = "schema.codetable.frequency.half_life"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_freq"
+type = "number"
+label = "热度衰减半衰期"
+hint = "使用记录衰减到一半所需的时间，仅「位次渐进」策略下生效。0 = 默认 72 小时"
+min = 0
+max = 8760
+step = 12
+unit = "小时"
+enabled_when = "schema.codetable.frequency.enabled == true && schema.codetable.frequency.strategy == position"
+
+[[items]]
+key = "schema.codetable.frequency.protect_top_n_len1"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_freq"
+type = "number"
+label = "一简位保护前 N 项"
+hint = "只输入 1 个编码时（如五笔一简），词典前 N 项不参与调频。一简每个编码通常只有两个字，误选一次就会永久换掉首选，故默认保护"
+min = 0
+max = 100
+enabled_when = "schema.codetable.frequency.enabled == true"
+
+[[items]]
+key = "schema.codetable.frequency.protect_top_n_len2"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_freq"
+type = "number"
+label = "二简位保护前 N 项"
+hint = "输入 2 个编码时，词典前 N 项不参与调频（0 = 不保护）"
+min = 0
+max = 100
+enabled_when = "schema.codetable.frequency.enabled == true"
+
+[[items]]
+key = "schema.codetable.frequency.protect_top_n_len3"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_freq"
+type = "number"
+label = "三简位保护前 N 项"
+hint = "输入 3 个编码时，词典前 N 项不参与调频。默认不保护——三简的固定程度弱于一二简"
+min = 0
+max = 100
+enabled_when = "schema.codetable.frequency.enabled == true"
+
+[[items]]
+key = "schema.codetable.frequency.protect_top_n"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_freq"
+type = "number"
+label = "全码位保护前 N 项"
+hint = "输入 4 个及以上编码时，词典前 N 项不参与调频。默认 0 = 不保护，让调频在全码位正常起作用"
+min = 0
+max = 100
+enabled_when = "schema.codetable.frequency.enabled == true"
+
+# 自动造词
+[[items]]
+key = "schema.codetable.auto_phrase.enabled"
+group = "schema"
+section = "上屏行为"
+subsection = "学习与扩展"
+opens_dialog = "ct_auto_phrase"
+type = "toggle"
+label = "自动造词"
+hint = "打字时自动记下可能的词组，用过一次即存入临时词库"
+
+[[items]]
+key = "schema.codetable.auto_phrase.promote_count"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_auto_phrase"
+type = "number"
+label = "转入用户词库次数"
+hint = "用满几次后永久收录进用户词库；0 = 不收录，一直留在临时词库"
+min = 0
+max = 20
+enabled_when = "schema.codetable.auto_phrase.enabled == true"
+
+# 造词字数上下限（core 有默认 2/10）：隐藏，不对用户开放。
+[[items]]
+key = "schema.codetable.auto_phrase.min_phrase_len"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_auto_phrase"
+type = "number"
+label = "最短造词长度"
+hint = "至少连续选几个字才记为词组"
+min = 2
+max = 10
+hidden = true
+enabled_when = "schema.codetable.auto_phrase.enabled == true"
+
+[[items]]
+key = "schema.codetable.auto_phrase.max_phrase_len"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_auto_phrase"
+type = "number"
+label = "最长造词长度"
+hint = "最多记录几个字的词组"
+min = 2
+max = 20
+hidden = true
+enabled_when = "schema.codetable.auto_phrase.enabled == true"
+
+# ── 英文候选：与混输那三项（schema.mix.*）同名同义，只是作用于码表方案 ──
+# 与拼音那份（schema.pinyin.english_merge）取值独立：码表用户常打命令行、变量名，
+# 拼音用户的英文词与拼音串大面积重叠，是否要开是两个判断。
+[[items]]
+key = "schema.codetable.english_merge.enable"
+group = "schema"
+section = "上屏行为"
+subsection = "学习与扩展"
+opens_dialog = "ct_english"
+type = "toggle"
+label = "英文候选"
+hint = "同时查询英文词库并显示英文候选；整串恰好是一个英文词时给它（打 hello 出 hello），无中文候选时按前缀补全"
+
+# 最小触发长度：只约束「中文侧有候选」那一路，见 hint。
+[[items]]
+key = "schema.codetable.english_merge.min_length"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_english"
+type = "number"
+label = "英文最小触发长度"
+hint = "有中文候选时，编码达到此长度才查英文（0 = 默认 3）；中文候选为空时不受本项约束，2 码起就给英文补全"
+min = 0
+max = 10
+enabled_when = "schema.codetable.english_merge.enable == true"
+
+# 以下各项码表与混输（schema.mix.english_*）同口径，见核心 `english_merge::select`。
+[[items]]
+key = "schema.codetable.english_merge.complete_min_length"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_english"
+type = "number"
+label = "英文补全最小码长"
+hint = "有中文候选时，编码达到此长度也按前缀补全英文（如设 4，打 gith 出 github）；0 = 只在没有中文候选时补全"
+min = 0
+max = 10
+enabled_when = "schema.codetable.english_merge.enable == true"
+
+[[items]]
+key = "schema.codetable.english_merge.exact_position"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_english"
+type = "number"
+label = "英文单词最前位置"
+hint = "整串恰好是英文单词时，英文最靠前排在第几位；仍先让过开头的完整匹配中文，只会更靠后（1 = 不另加限制）"
+min = 1
+max = 10
+enabled_when = "schema.codetable.english_merge.enable == true"
+
+[[items]]
+key = "schema.codetable.english_merge.complete_position"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_english"
+type = "number"
+label = "英文补全最前位置"
+hint = "按前缀补全出来的英文最靠前排在第几位；仍先让过开头的完整匹配中文，且总在英文单词之后"
+min = 1
+max = 10
+enabled_when = "schema.codetable.english_merge.enable == true"
+
+[[items]]
+key = "schema.codetable.english_merge.max_count"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_english"
+type = "number"
+label = "英文最多条数"
+hint = "有中文候选时英文最多显示几条（完整单词优先，再补前缀补全）；没有中文候选时不受此限"
+min = 1
+max = 10
+enabled_when = "schema.codetable.english_merge.enable == true"
+
+[[items]]
+key = "schema.codetable.english_merge.block_commit"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_english"
+type = "toggle"
+label = "有英文候选时否决上屏"
+hint = "满码自动上屏与顶码上屏前，只要有英文词以当前编码开头就不自动上屏（打 gith 时 github 还没出现也算）；关掉的话打 github 到第 4 键就被顶出中文。开启时已涵盖下一项"
+enabled_when = "schema.codetable.english_merge.enable == true"
+
+[[items]]
+key = "schema.codetable.english_merge.block_commit_on_word"
+group = "schema"
+section = "上屏行为"
+dialog_group = "ct_english"
+type = "toggle"
+label = "整串是英文单词时否决上屏"
+hint = "整串恰好是一个英文单词时不自动上屏、不顶码，保留英文供选择；只是英文词开头的编码照常上屏。上一项开启时本项无需单独开"
+enabled_when = "schema.codetable.english_merge.enable == true"
+
+# ── 候选行为（拼音全局基线；方案可经 schema_overrides 覆盖）──
+[[items]]
+key = "schema.pinyin.code_hint_source"
+group = "schema"
+section = "候选行为"
+type = "select"
+label = "编码提示来源"
+hint = "拼音方案（含双拼）下，候选旁显示哪种编码。双拼编码需装有双拼方案（全拼方案下也能显示，用于对照学习）；显示位置与格式由「外观 → 候选注释」的模板决定。临时拼音与快捷输入另设，见「方案 → 临时拼音」；混输方案另设，见「方案 → 混输 → 拼音候选显示码表编码」"
+options = [
+  { value = "auto", label = "自动" },
+  { value = "codetable", label = "码表反查" },
+  { value = "shuangpin", label = "双拼编码" },
+  { value = "off", label = "不显示" },
+]
+
+[[items]]
+key = "schema.pinyin.use_smart_compose"
+group = "schema"
+section = "候选行为"
+opens_dialog = "py_compose"
+type = "toggle"
+label = "智能组词"
+hint = "根据上下文智能拼接候选"
+
+[[items]]
+key = "schema.pinyin.sentence_uses_user_words"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_compose"
+type = "toggle"
+label = "组词时使用自造词"
+hint = "智能组词时把你造过的词也算进去。关闭时整句只用系统词库，自造的词打整句时不认"
+enabled_when = "schema.pinyin.use_smart_compose == true"
+
+[[items]]
+key = "schema.pinyin.sentence_count"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_compose"
+type = "number"
+label = "智能组词显示条数"
+hint = "候选里同时列出几种整句解读。1 = 只出一条；调大后次优的整句也会排在最前面，便于比较"
+min = 1
+max = 8
+
+[[items]]
+key = "schema.pinyin.sentence_max_count"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_compose"
+type = "number"
+label = "智能组词备选条数"
+hint = "一共算几种整句解读，供整句切换键轮换。少于显示条数时按显示条数算"
+min = 1
+max = 8
+
+[[items]]
+key = "schema.pinyin.sentence_cycle_key"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_compose"
+type = "select"
+label = "智能组词切换键"
+hint = "打拼音时按它在几种整句解读间轮换，需把「智能组词备选条数」调到 2 以上。只在算出两条以上整句时占用这个键；它若是当前的音节分隔符（全拼下反引号常是）或被方案按键绑定，则让位不生效"
+# ⚠️ value 必须与核心 `aurora_keys::keymap` 的键名**逐字相同**（跨仓无校验，写错静默失效）。
+# 核心按 `session_key_name_to_vk` 解析：tab 在会话功能键表、backtick 在符号键表。
+[[items.options]]
+value = ""
+label = "不启用"
+[[items.options]]
+value = "tab"
+label = "Tab"
+[[items.options]]
+value = "backtick"
+label = "反引号 `"
+
+# 分隔符是所有拼音方案共用的通用项，必须留在本 section 的**无 subsection 区**（即所有
+# subsection 标题之前）。对话框渲染遇 subsection=None 不插标题、只是继续排在上一个
+# 分组末尾，所以它一旦排到某个 subsection 之后，看起来就成了那个分组的成员。
+[[items]]
+key = "schema.pinyin.separator"
+group = "schema"
+section = "候选行为"
+type = "select"
+label = "拼音分隔符"
+hint = "拼音模式下用于消歧的分隔符，如输入 xi'an 得到「西安」；自动模式默认用 '，当 ' 被选择键占用时改用 `"
+options = [
+  { value = "auto", label = "自动 ( ' / ` )" },
+  { value = "quote", label = "单引号 ( ' )" },
+  { value = "backtick", label = "反引号 ( ` )" },
+  { value = "none", label = "不使用" },
+]
+
+# 词频调整
+# 与码表那份（schema.codetable.single_char）是两件独立的事，互不影响。
+[[items]]
+key = "schema.pinyin.single_char"
+group = "schema"
+section = "候选行为"
+type = "toggle"
+label = "单字输入"
+hint = "只出单字，用来找某个字；拼音没有定长码，日常不必开"
+
+# 简拼（GH#180）
+[[items]]
+key = "schema.pinyin.abbrev.enabled"
+group = "schema"
+section = "候选行为"
+type = "toggle"
+label = "启用简拼"
+hint = "只打声母也能出词，如 nh → 你好、bzd → 不知道，也可与全拼混打（nhao）"
+
+# 整句语法模型：随包的 wanxiang-mini.gram（5.3 MB）给整句里词与词的搭配打分。
+# 开关只写 enabled；weight / model 出厂已备好（core 的 data/config.toml），所以勾上即用，
+# 这两项本身不进清单（见 capabilities.rs ⑲）。
+[[items]]
+key = "schema.pinyin.grammar.enabled"
+group = "schema"
+section = "候选行为"
+type = "toggle"
+label = "整句语法模型"
+hint = "按上下文搭配给整句挑更通顺的结果，如 womenzaigongyuanjianmian 出「我们在公园见面」而非「公元」；实测整句首选约 +5 个点，单次转换多约 2 ms"
+
+# 双拼：allow_full_pinyin 只对双拼方案有意义，但 enabled_when 无法表达「当前方案是双拼」
+# （它只能比较配置键），故常驻可见，由 hint 说明适用范围。
+[[items]]
+key = "schema.pinyin.shuangpin.allow_full_pinyin"
+group = "schema"
+section = "候选行为"
+type = "toggle"
+label = "双拼时允许全拼输入"
+hint = "双拼方案下也能按全拼打字，如 zaijian → 再见。对全拼方案无影响"
+
+[[items]]
+key = "schema.pinyin.frequency.enabled"
+group = "schema"
+section = "候选行为"
+subsection = "学习与扩展"
+opens_dialog = "py_freq"
+type = "toggle"
+label = "词频调整"
+hint = "根据使用频次动态调整候选排序"
+
+[[items]]
+key = "schema.pinyin.frequency.record_always"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_freq"
+type = "toggle"
+label = "仅记录次数"
+hint = "不调整候选顺序，只记录每个字词的上屏次数，可在词库管理的「词频」中查看和导出。之后若开启词频调整，已记录的次数会立刻参与排序"
+enabled_when = "schema.pinyin.frequency.enabled == false"
+
+[[items]]
+key = "schema.pinyin.frequency.promote_prefix"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_freq"
+type = "select"
+label = "补全词参与调频"
+hint = "只打半个音时（如 d），补全出的候选是否也参与调频。「仅单字」让「的/得」这类单字上浮，但不让「东西」这类词组跑到单字前面"
+enabled_when = "schema.pinyin.frequency.enabled == true"
+options = [
+  { value = "none", label = "不参与" },
+  { value = "single", label = "仅单字/单词" },
+  { value = "all", label = "全部" },
+]
+
+[[items]]
+key = "schema.pinyin.frequency.half_life"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_freq"
+type = "number"
+label = "热度衰减半衰期"
+hint = "使用记录衰减到一半所需的时间。0 = 默认 72 小时"
+min = 0
+max = 8760
+step = 12
+unit = "小时"
+enabled_when = "schema.pinyin.frequency.enabled == true"
+
+# 自动学习
+[[items]]
+key = "schema.pinyin.auto_learn.enabled"
+group = "schema"
+section = "候选行为"
+subsection = "学习与扩展"
+opens_dialog = "py_auto_learn"
+type = "toggle"
+label = "自动学习"
+hint = "连续选词后自动组词，存入临时词库（立即可用）"
+
+# 与码表侧 schema.codetable.auto_phrase.promote_count 同语义（两边共用 core 的同一套晋升
+# 判定），⚠️ 但**出厂值自 2026-09-22 起不同**：码表侧 3，本项仍是 0。分叉的是影响面不是
+# 语义——码表侧出厂关闭（只触及主动开启的人），本项出厂就开着（全体用户）。
+# 此前只有码表侧暴露，拼音侧学到的词于是永远停在临时词库，而上面那句 hint 还写着
+# 「加入用户词库」——用户不手改 config.toml 就没有出路。
+[[items]]
+key = "schema.pinyin.auto_learn.promote_count"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_auto_learn"
+type = "number"
+label = "转入用户词库次数"
+hint = "用满几次后永久收录进用户词库；0 = 不收录，一直留在临时词库"
+min = 0
+max = 20
+enabled_when = "schema.pinyin.auto_learn.enabled == true"
+
+[[items]]
+key = "schema.pinyin.auto_learn.min_word_length"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_auto_learn"
+type = "number"
+label = "最短学习词长"
+hint = "至少几个字的词组才记录"
+min = 2
+max = 10
+enabled_when = "schema.pinyin.auto_learn.enabled == true"
+
+[[items]]
+key = "schema.pinyin.auto_learn.max_word_length"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_auto_learn"
+type = "number"
+label = "最长学习词长"
+hint = "超过这个字数就不记录；智能组句的长句主要受它约束"
+min = 2
+max = 20
+enabled_when = "schema.pinyin.auto_learn.enabled == true"
+
+# 辅助码：与「双拼」同理常驻可见——enabled_when 只能比较配置键，表达不出「当前方案是
+# 哪种」，而这里的 enabled 本就是**全局基线**，方案段 [engine.aux_code] 的 tri-state 覆盖
+# 才是那个方案的真开关（「双拼开、全拼关」正是靠它表达）。
+[[items]]
+key = "schema.pinyin.aux_code.enabled"
+group = "schema"
+section = "候选行为"
+subsection = "学习与扩展"
+opens_dialog = "py_aux"
+type = "toggle"
+label = "辅助码"
+hint = "打出候选后按触发键，用字形码进一步筛选；触发键需在按键设置里另配"
+
+[[items]]
+key = "schema.pinyin.aux_code.max_phrase_len"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_aux"
+type = "number"
+label = "参与筛选的最大词长"
+hint = "超过这个字数的词组不参与筛选；0 = 不限。单字始终参与"
+min = 0
+max = 20
+enabled_when = "schema.pinyin.aux_code.enabled == true"
+
+# 直接辅助码：同「启用辅助码」常驻可见——只对双拼生效这件事 enabled_when 表达不了
+# （它比较不了「当前方案是哪种」），由 hint 说清；方案段的三态覆盖只在双拼方案里给。
+[[items]]
+key = "schema.pinyin.aux_code.direct"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_aux"
+type = "toggle"
+label = "直接辅助码"
+hint = "仅双拼：音节后直接敲字形码筛选，不按引导键（如 uidu 再敲 p → 释读）。全拼方案不生效"
+enabled_when = "schema.pinyin.aux_code.enabled == true"
+
+# ── 英文候选：与混输/码表同名同义，只是作用于拼音方案 ──
+# 本段没有「不自动上屏」一项：那一项否决的是满码上屏/顶码，拼音方案两者都没有。
+[[items]]
+key = "schema.pinyin.english_merge.enable"
+group = "schema"
+section = "候选行为"
+subsection = "学习与扩展"
+opens_dialog = "py_english"
+type = "toggle"
+label = "英文候选"
+hint = "同时查询英文词库并显示英文候选；整串恰好是一个英文词时给它（打 hello 出 hello），无中文候选时按前缀补全"
+
+# 最小触发长度：只约束「中文侧有候选」那一路，见 hint。
+[[items]]
+key = "schema.pinyin.english_merge.min_length"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_english"
+type = "number"
+label = "英文最小触发长度"
+hint = "有中文候选时，编码达到此长度才查英文（0 = 默认 3）；中文候选为空时不受本项约束，2 码起就给英文补全"
+min = 0
+max = 10
+enabled_when = "schema.pinyin.english_merge.enable == true"
+
+# 以下各项与码表 / 混输同口径（码长 → 位置 → 条数），见核心 `english_merge::select`。
+# 补全另叠一条拼音判据（核心 `english_merge::prefix_complete_applies`），hint 写的就是它；
+# 双拼不生效同理由核心排除（判据按全拼音节定义）。
+[[items]]
+key = "schema.pinyin.english_merge.complete_min_length"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_english"
+type = "number"
+label = "英文补全最小码长"
+hint = "有中文候选时，输入达到此长度也按前缀补全英文（建议 5），但只在打的不是完整拼音时补：怎么切都切不成完整拼音（templa 补 template，shang 不补）；0 = 只在没有中文候选时补全。双拼方案不生效"
+min = 0
+max = 10
+enabled_when = "schema.pinyin.english_merge.enable == true"
+
+[[items]]
+key = "schema.pinyin.english_merge.exact_position"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_english"
+type = "number"
+label = "英文单词最前位置"
+hint = "整串恰好是英文单词时，英文最靠前排在第几位；0 = 按方案自动：全拼 1、双拼 2。仍先让过开头的完整匹配中文，只会更靠后"
+min = 0
+max = 10
+enabled_when = "schema.pinyin.english_merge.enable == true"
+
+[[items]]
+key = "schema.pinyin.english_merge.complete_position"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_english"
+type = "number"
+label = "英文补全最前位置"
+hint = "按前缀补全出来的英文最靠前排在第几位；仍先让过开头的完整匹配中文，且总在英文单词之后"
+min = 1
+max = 10
+enabled_when = "schema.pinyin.english_merge.enable == true"
+
+[[items]]
+key = "schema.pinyin.english_merge.max_count"
+group = "schema"
+section = "候选行为"
+dialog_group = "py_english"
+type = "number"
+label = "英文最多条数"
+hint = "有中文候选时英文最多显示几条（完整单词优先，再补前缀补全）；没有中文候选时不受此限"
+min = 1
+max = 10
+enabled_when = "schema.pinyin.english_merge.enable == true"
+
+# 词组补全
+[[items]]
+key = "schema.pinyin.completion.min_syllables"
+group = "schema"
+section = "候选行为"
+subsection = "词组补全"
+type = "number"
+label = "最少音节数"
+hint = "输入达到几个音节才给出词组候选。1 = 不限制，单个字母也给"
+min = 1
+# 上限 6：出厂值已是 4（对齐 librime/fcitx5 的预测门槛），旧上限 4 会让这个滑块
+# 只能往下调、无法比出厂更保守。
+max = 6
+unit = "个音节"
+
+[[items]]
+key = "schema.pinyin.completion.max_extra_syllables"
+group = "schema"
+section = "候选行为"
+subsection = "词组补全"
+type = "number"
+label = "词组最多超出"
+hint = "词组最多比已输入的内容多几个音节。数值越小，候选越贴近已打的字"
+min = 0
+# 上限 10：与「最少音节数」配合决定召回上限（started + 本项）。出厂 4 + 5 = 9 音节，
+# 够多数长成语；要召回更长的用户词（如 11 音节的完整句式）需要调到 7 以上，
+# 旧上限 6 够不着。
+max = 10
+unit = "个音节"
+
+# ── 模糊音（拼音对话框内由自定义紧凑网格渲染；列于此供「恢复本页」与覆盖守护）──
+[[items]]
+key = "schema.pinyin.fuzzy.enabled"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "模糊音"
+hint = "勾选下方拼音对，使其互不区分"
+
+[[items]]
+key = "schema.pinyin.fuzzy.zh_z"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "zh ↔ z"
+
+[[items]]
+key = "schema.pinyin.fuzzy.ch_c"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "ch ↔ c"
+
+[[items]]
+key = "schema.pinyin.fuzzy.sh_s"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "sh ↔ s"
+
+[[items]]
+key = "schema.pinyin.fuzzy.n_l"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "n ↔ l"
+
+[[items]]
+key = "schema.pinyin.fuzzy.r_l"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "r ↔ l"
+
+[[items]]
+key = "schema.pinyin.fuzzy.f_h"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "f ↔ h"
+
+[[items]]
+key = "schema.pinyin.fuzzy.an_ang"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "an ↔ ang"
+
+[[items]]
+key = "schema.pinyin.fuzzy.en_eng"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "en ↔ eng"
+
+[[items]]
+key = "schema.pinyin.fuzzy.in_ing"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "in ↔ ing"
+
+[[items]]
+key = "schema.pinyin.fuzzy.ian_iang"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "ian ↔ iang"
+
+[[items]]
+key = "schema.pinyin.fuzzy.uan_uang"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "uan ↔ uang"
+
+[[items]]
+key = "schema.pinyin.fuzzy.un_ong"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "un ↔ ong"
+
+[[items]]
+key = "schema.pinyin.fuzzy.eng_ong"
+group = "schema"
+section = "模糊音"
+type = "toggle"
+label = "eng ↔ ong"
+
+# ── 混输行为（混输全局配置；全局唯一，无方案级 override）──
+#
+# ⚠️ 项序即渲染序，且 `subsection = None` **不会终止**前一个分组（对话框渲染只在
+# subsection 变化且非 None 时插标题）⇒ **无 subsection 的通用项必须全部声明在下面
+# 两个 subsection 之前**，否则会被静默吸附成上一个分组的成员。
+# hidden 项在渲染前就被跳过、不影响游标，但仍按语义就位——将来取消 hidden 才落在对的组里。
+[[items]]
+key = "schema.mix.show_source_hint"
+group = "schema"
+section = "混输行为"
+type = "toggle"
+label = "显示候选来源标记"
+hint = "混输模式下在候选旁显示来源标识（码表/拼音）"
+
+[[items]]
+key = "schema.mix.enable_english"
+group = "schema"
+section = "混输行为"
+opens_dialog = "mix_english"
+type = "toggle"
+label = "启用英文候选"
+hint = "混输模式下同时查询英文词库并显示英文候选"
+
+# 英文最小触发长度：预留配置，暂不对用户开放（默认 3，即 2 字符以内不查英文）。
+[[items]]
+key = "schema.mix.min_english_length"
+group = "schema"
+section = "混输行为"
+dialog_group = "mix_english"
+type = "number"
+label = "英文最小触发长度"
+hint = "编码达到此长度才开始查英文候选（0 表示跟随默认值 3，即 2 字符以内不查）"
+min = 0
+max = 10
+hidden = true
+
+# 以下三项与码表 schema.codetable.english_merge 的同名项同口径。
+[[items]]
+key = "schema.mix.english_complete_min_length"
+group = "schema"
+section = "混输行为"
+dialog_group = "mix_english"
+type = "number"
+label = "英文补全最小码长"
+hint = "有中文候选时，编码达到此长度也按前缀补全英文（如设 4，打 gith 出 github）；0 = 只在没有中文候选时补全"
+min = 0
+max = 10
+enabled_when = "schema.mix.enable_english == true"
+
+[[items]]
+key = "schema.mix.english_exact_position"
+group = "schema"
+section = "混输行为"
+dialog_group = "mix_english"
+type = "number"
+label = "英文单词最前位置"
+hint = "整串恰好是英文单词时，英文最靠前排在第几位；仍先让过开头的完整匹配中文，只会更靠后（1 = 不另加限制）"
+min = 1
+max = 10
+enabled_when = "schema.mix.enable_english == true"
+
+[[items]]
+key = "schema.mix.english_complete_position"
+group = "schema"
+section = "混输行为"
+dialog_group = "mix_english"
+type = "number"
+label = "英文补全最前位置"
+hint = "按前缀补全出来的英文最靠前排在第几位；仍先让过开头的完整匹配中文，且总在英文单词之后"
+min = 1
+max = 10
+enabled_when = "schema.mix.enable_english == true"
+
+[[items]]
+key = "schema.mix.english_max_count"
+group = "schema"
+section = "混输行为"
+dialog_group = "mix_english"
+type = "number"
+label = "英文最多条数"
+hint = "有中文候选时英文最多显示几条（完整单词优先，再补前缀补全）；没有中文候选时不受此限"
+min = 1
+max = 10
+enabled_when = "schema.mix.enable_english == true"
+
+# 与码表 ct_english 里的 block_commit 同位：收进英文候选对话框。
+[[items]]
+key = "schema.mix.auto_commit_block_on_english"
+group = "schema"
+section = "混输行为"
+dialog_group = "mix_english"
+type = "toggle"
+label = "有英文候选时否决上屏"
+hint = "满码自动上屏与顶码上屏前，只要有英文词以当前编码开头就不自动上屏（打 gith 时 github 还没出现也算）。开启时已涵盖下一项"
+enabled_when = "schema.mix.enable_english == true"
+
+[[items]]
+key = "schema.mix.block_commit_on_english_word"
+group = "schema"
+section = "混输行为"
+dialog_group = "mix_english"
+type = "toggle"
+label = "整串是英文单词时否决上屏"
+hint = "整串恰好是一个英文单词时不自动上屏、不顶码，保留英文供选择；只是英文词开头的编码照常上屏。上一项开启时本项无需单独开"
+enabled_when = "schema.mix.enable_english == true"
+
+# ── 拼音相关：拼音候选的范围有多宽 ──
+# 项序即渲染序：先「从第几码开始查拼音」，再「查出来的候选放多宽」。
+[[items]]
+key = "schema.mix.min_pinyin_length"
+group = "schema"
+section = "混输行为"
+subsection = "拼音相关"
+type = "number"
+label = "拼音最小触发长度"
+hint = "编码达到此长度才开始查拼音候选（0 表示跟随方案默认值 2）"
+min = 0
+max = 10
+
+[[items]]
+key = "schema.mix.enable_pinyin_abbrev"
+group = "schema"
+section = "混输行为"
+subsection = "拼音相关"
+type = "toggle"
+label = "启用拼音简拼"
+hint = "拼音支持声母简拼（nh→你好）；关闭则只认全拼、候选更精简，且满码后继续输入才会顶码上屏码表词"
+
+[[items]]
+key = "schema.mix.pinyin_partial_candidates"
+group = "schema"
+section = "混输行为"
+subsection = "拼音相关"
+type = "toggle"
+label = "显示拼音前缀匹配"
+hint = "只有编码开头能读成拼音时（gedw 的 ge），显示这些读不完整的候选"
+
+[[items]]
+key = "schema.mix.pinyin_partial_candidates_overflow"
+group = "schema"
+section = "混输行为"
+subsection = "拼音相关"
+type = "toggle"
+label = "超码长时显示拼音前缀匹配"
+hint = "编码超过最大码长后同上；开着可先选前半段上屏，剩余接着打"
+
+[[items]]
+key = "schema.mix.pinyin_code_hint"
+group = "schema"
+section = "混输行为"
+subsection = "拼音相关"
+type = "toggle"
+label = "拼音候选显示码表编码"
+hint = "编码反查：用拼音打出的字词，旁边显示它的码表编码（如五笔拼音下打 nihao，「你好」旁显示 wqvb），方便记码。只管混输方案；纯拼音方案看「方案 → 拼音 → 编码提示来源」，临时拼音看「方案 → 临时拼音」"
+
+# 超码长仅查拼音（core 默认 true，主流混输行为）：隐藏，不对用户开放。
+[[items]]
+key = "schema.mix.pinyin_only_overflow"
+group = "schema"
+section = "混输行为"
+subsection = "拼音相关"
+type = "toggle"
+label = "超码长时仅查拼音"
+hint = "编码超过最大码长时只显示拼音候选，不再查码表"
+hidden = true
+
+# ── 上屏设置：什么情况下不自动上屏码表词 ──
+[[items]]
+key = "schema.mix.auto_commit_block_on_pinyin"
+group = "schema"
+section = "混输行为"
+subsection = "上屏设置"
+type = "toggle"
+label = "有拼音候选时否决上屏"
+hint = "满码自动上屏与顶码上屏前，若整串仍能查出拼音候选则不自动上屏（不看拼音是否成词）；「顶码优先」开启时无视本项。本项同时管「满码无候选清空」：开启时有拼音候选或拼音还没打完都不清空，关闭则满码无匹配即清空"
+
+[[items]]
+key = "schema.mix.block_commit_on_pinyin_word"
+group = "schema"
+section = "混输行为"
+subsection = "上屏设置"
+type = "toggle"
+label = "整串是拼音词时否决上屏"
+hint = "整串是完整拼音且拼音首选为真实词（如 wangba→网吧）时，不自动/顶码上屏五笔，保留拼音词供选择；aipu→落实 等无强词的仍正常上屏"
+
+# 拼音词强度权重阈值：预留配置，默认 0（仅结构判据：拼音首选须≥2汉字且消费整串）。
+[[items]]
+key = "schema.mix.pinyin_word_min_weight"
+group = "schema"
+section = "混输行为"
+subsection = "上屏设置"
+type = "number"
+label = "拼音词强度阈值"
+hint = "拼音歧义拦截的词权重下限（0 表示仅用结构判据，不设权重门槛；真机误拦时可上调收紧）"
+min = 0
+max = 100000000
+hidden = true
+
+# 顶码歧义裁决（core 默认 false，保护拼音）：隐藏，不对用户开放。
+[[items]]
+key = "schema.mix.top_code_override_pinyin"
+group = "schema"
+section = "混输行为"
+subsection = "上屏设置"
+type = "toggle"
+label = "顶码优先（覆盖拼音）"
+hint = "顶码上屏时优先选择码表词条而非拼音候选"
+hidden = true
+
+[[items]]
+key = "schema.english.raw_candidate"
+group = "schema"
+section = "英文行为"
+type = "select"
+label = "首候选为输入原文"
+hint = "「仅词库词」= 只有输入的字母串本身就是词库里的词时才作首候选：打 hel 不再多出一条占位的 hel，而打 hell 时它恒排第一、不被用得更多的 hello 顶下去。注意打 usa 会出词库里的 USA（想要小写按回车上屏）"
+options = [
+  { value = "always", label = "总是" },
+  { value = "in_dict", label = "仅词库词" },
+  { value = "off", label = "不显示" },
+]
+
+[[items]]
+key = "schema.english.case_variants"
+group = "schema"
+section = "英文行为"
+type = "toggle"
+label = "生成大小写变形候选"
+hint = "补出全小写、首字母大写、全大写三种形态。它们各占一个候选位；临时英文的同名开关另设"
+
+[[items]]
+key = "schema.english.case_follow_input"
+group = "schema"
+section = "英文行为"
+type = "toggle"
+label = "候选跟随输入的大小写"
+hint = "打 Hi 出 Hill，打 WoW 出 WoWed；只跟大写，打小写时 China、iPhone 这类词保持词库原样"
+
+[[items]]
+key = "schema.english.phrase_seg"
+group = "schema"
+section = "英文行为"
+type = "toggle"
+label = "用 ' 分词打英文词组"
+hint = "各段只打前缀：bue'air 出 Buenos Aires，ip'max 出 iPhone 15 Pro Max。可跳词，ip'pro 也能打出 iPhone 15 Pro。开启后 ' 不再是第三候选键，改用数字 3。只管英文方案；临时英文与快捷输入里的英文另设"
+
+[[items]]
+key = "schema.english.commit_space"
+group = "schema"
+section = "英文行为"
+type = "toggle"
+label = "上屏后自动加空格"
+hint = "上屏英文词后补一个空格，连续打词不必手动按；回车上屏不补"
+
+# ── 英文行为（英文方案的全局配置；方案页「英文」卡）──
+# 英文现在是可切换方案，core 侧也有了自己的 [schema.english] 段，不再共用码表那套
+# ——此前英文用户改调频策略会连带改掉五笔的。
+#
+# 临时英文那批（大小写变形 / 符号数字 / 空格作为输入）**刻意不搬**：它们的 key 是
+# input.temp_english.*，只在临英 overlay 里被读取，英文方案走主输入路径根本不经过
+# 那段逻辑。搬过来会让用户以为改的是英文方案，实际改的是另一个模式。
+[[items]]
+key = "schema.english.frequency.enabled"
+group = "schema"
+section = "英文行为"
+subsection = "调频与造词"
+opens_dialog = "en_freq"
+type = "toggle"
+label = "词频调整"
+hint = "按使用频率调整英文候选顺序"
+
+[[items]]
+key = "schema.english.frequency.record_always"
+group = "schema"
+section = "英文行为"
+dialog_group = "en_freq"
+type = "toggle"
+label = "仅记录次数"
+hint = "不调整候选顺序，只记录每个字词的上屏次数，可在词库管理的「词频」中查看和导出。之后若开启词频调整，已记录的次数会立刻参与排序"
+enabled_when = "schema.english.frequency.enabled == false"
+
+[[items]]
+key = "schema.english.frequency.strategy"
+group = "schema"
+section = "英文行为"
+dialog_group = "en_freq"
+type = "select"
+label = "调频策略"
+hint = "位次渐进：每用一次前移一半，久不用回落；一次到顶 / 逐次提升：用过即排到未用过的之前"
+width = 210
+enabled_when = "schema.english.frequency.enabled == true"
+options = [
+  { value = "position", label = "位次渐进" },
+  { value = "top", label = "一次到顶" },
+  { value = "step", label = "逐次提升" },
+]
+
+[[items]]
+key = "schema.english.frequency.promote_prefix"
+group = "schema"
+section = "英文行为"
+dialog_group = "en_freq"
+type = "select"
+label = "补全词参与调频"
+hint = "打 hel 选中 hello 这类前缀补全的候选是否参与调频，仅「位次渐进」策略下生效"
+width = 210
+enabled_when = "schema.english.frequency.enabled == true && schema.english.frequency.strategy == position"
+options = [
+  { value = "all", label = "全部" },
+  { value = "single", label = "仅单词" },
+  { value = "none", label = "不参与" },
+]
+
+[[items]]
+key = "schema.english.frequency.half_life"
+group = "schema"
+section = "英文行为"
+dialog_group = "en_freq"
+type = "number"
+label = "热度衰减半衰期"
+hint = "使用记录衰减到一半所需的时间，仅「位次渐进」策略下生效。0 = 默认 72 小时"
+min = 0
+max = 8760
+step = 12
+unit = "小时"
+enabled_when = "schema.english.frequency.enabled == true && schema.english.frequency.strategy == position"
+
+[[items]]
+key = "schema.english.frequency.code_scope"
+group = "schema"
+section = "英文行为"
+dialog_group = "en_freq"
+type = "select"
+label = "调频记账方式"
+hint = "按整词：打 hel 选过 hello 后，打 he 也受益；按编码：各前缀独立学习"
+width = 210
+enabled_when = "schema.english.frequency.enabled == true"
+options = [
+  { value = "candidate", label = "按整词" },
+  { value = "input", label = "按编码" },
+]
+
+# 英文自动造词（core 的 [schema.english.auto_learn]）。**一个开关管英文方案与临时英文两处**：
+# 两者共用英文词库，临时英文不另设开关——同临时拼音跟随拼音方案的 auto_learn。
+# 快捷输入里的英文不走这条，那边有自己的「快捷输入历史」。
+# temp_max_entries（临时词库容量）是内部字段，不开放，见 capabilities.rs 的 UNCOVERED_BY_DESIGN。
+[[items]]
+key = "schema.english.auto_learn.enabled"
+group = "schema"
+section = "英文行为"
+subsection = "调频与造词"
+opens_dialog = "en_auto_learn"
+type = "toggle"
+label = "自动造词"
+hint = "上屏了词库里没有的原文就记下来（选中原文候选、回车或空格上屏原码、标点顶屏原文都算），先存入临时词库，用够次数再转入用户词库。英文方案与临时英文共用此开关；快捷输入里的英文不在此列（那里有快捷输入历史）"
+
+[[items]]
+key = "schema.english.auto_learn.promote_count"
+group = "schema"
+section = "英文行为"
+dialog_group = "en_auto_learn"
+type = "number"
+label = "转入用户词库次数"
+hint = "用满几次后永久收录进用户词库（含记下的那一次）；0 = 不收录，一直留在临时词库"
+min = 0
+max = 20
+enabled_when = "schema.english.auto_learn.enabled == true"
+
+# ── 临时拼音 / 临时英文（方案页，排在主方案设置之后）──
+# ── 临时拼音 ──
+[[items]]
+key = "input.temp_pinyin.trigger_keys"
+group = "schema"
+section = "临时拼音"
+type = "dialog_button_key_action"
+verb = "temp_pinyin"
+label = "临时拼音触发键"
+hint = "码表模式下按触发键临时切换拼音输入；可多选。只能选符号键——字母键请到方案页的「z 键引导功能」配"
+options = [
+  { value = "backtick", label = "反引号 ( ` )" },
+  { value = "semicolon", label = "分号 ( ; )" },
+  { value = "quote", label = "单引号 ( ' )" },
+  { value = "comma", label = "逗号 ( , )" },
+  { value = "period", label = "句号 ( . )" },
+  { value = "slash", label = "斜杠 ( / )" },
+  { value = "backslash", label = "反斜杠 ( \\ )" },
+  { value = "lbracket", label = "左方括号 ( [ )" },
+  { value = "rbracket", label = "右方括号 ( ] )" },
+]
+
+[[items]]
+key = "input.temp_pinyin.candidate_layout"
+group = "schema"
+section = "临时拼音"
+type = "select"
+label = "候选窗布局"
+hint = "临时拼音期间候选窗的排列方向；退出后自动恢复。跟随全局 = 用外观页的候选布局设置"
+width = 210
+options = [
+  { value = "follow", label = "跟随全局" },
+  { value = "vertical", label = "强制竖排" },
+  { value = "horizontal", label = "强制横排" },
+]
+
+[[items]]
+key = "input.temp_pinyin.code_hint_source"
+group = "schema"
+section = "临时拼音"
+type = "select"
+label = "临时拼音编码提示"
+hint = "临时拼音与快捷输入期间，拼音候选旁显示哪种编码，便于借拼音反查码表编码。与拼音方案的「编码提示来源」互不影响；显示位置与格式由「外观 → 候选注释」的模板决定"
+options = [
+  { value = "auto", label = "自动" },
+  { value = "codetable", label = "码表反查" },
+  { value = "shuangpin", label = "双拼编码" },
+  { value = "off", label = "不显示" },
+]
+
+# ── 临时英文 ──
+# 注：临时英文不再设独立「启用」开关——Shift+字母 始终可进入，触发键可留空。
+# input.temp_english.enabled 由 core 维持默认（不在设置端暴露）。
+[[items]]
+key = "input.temp_english.trigger_keys"
+group = "schema"
+section = "临时英文"
+type = "dialog_button_key_action"
+verb = "temp_english"
+label = "临时英文触发键"
+hint = "中文模式下按触发键进入临时英文模式；可多选，也可留空（仍可用 Shift+字母进入）"
+options = [
+  { value = "backtick", label = "反引号 ( ` )" },
+  { value = "semicolon", label = "分号 ( ; )" },
+  { value = "quote", label = "单引号 ( ' )" },
+  { value = "comma", label = "逗号 ( , )" },
+  { value = "period", label = "句号 ( . )" },
+  { value = "slash", label = "斜杠 ( / )" },
+  { value = "backslash", label = "反斜杠 ( \\ )" },
+  { value = "lbracket", label = "左方括号 ( [ )" },
+  { value = "rbracket", label = "右方括号 ( ] )" },
+]
+
+[[items]]
+key = "input.temp_english.shift_behavior"
+group = "schema"
+section = "临时英文"
+type = "select"
+label = "Shift+字母行为"
+hint = "中文模式下按 Shift+字母时的行为"
+width = 210
+options = [
+  { value = "temp_english", label = "进入临时英文模式" },
+  { value = "direct_commit", label = "直接上屏大写字母" },
+]
+
+[[items]]
+key = "input.temp_english.shift_when_composing"
+group = "schema"
+section = "临时英文"
+type = "select"
+label = "输入编码时按 Shift+字母"
+hint = "已经敲了编码时再按 Shift+字母的行为。「上屏候选并进入临时英文」会先上屏高亮候选，再以该字母进入临时英文；英文方案下不生效"
+width = 210
+options = [
+  { value = "buffer", label = "大写字母进入编码" },
+  { value = "commit_enter", label = "上屏候选并进入临时英文" },
+]
+
+[[items]]
+key = "input.temp_english.show_candidates"
+group = "schema"
+section = "临时英文"
+opens_dialog = "te_cand"
+type = "toggle"
+label = "显示英文候选"
+hint = "临时英文模式下查询英文词库显示候选词"
+
+[[items]]
+key = "input.temp_english.raw_candidate"
+group = "schema"
+section = "临时英文"
+dialog_group = "te_cand"
+type = "select"
+label = "首候选为输入原文"
+hint = "「仅词库词」= 只有输入的字母串本身就是词库里的词时才作首候选。语义同英文方案那份，两边各配各的：临时英文常用来在中文里插一个专名或缩写（词库里多半没有），故这一侧「总是」往往仍是合适的。快捷输入里的英文一并生效（排在英文候选的最前，不抢拼音的位置）"
+options = [
+  { value = "always", label = "总是" },
+  { value = "in_dict", label = "仅词库词" },
+  { value = "off", label = "不显示" },
+]
+
+[[items]]
+key = "input.temp_english.case_variants"
+group = "schema"
+section = "临时英文"
+dialog_group = "te_cand"
+type = "toggle"
+label = "生成大小写变形候选"
+hint = "在候选中补出全小写、首字母大写、全大写三种形态。它们各占一个候选位，只需要词库补全时可关闭。快捷输入里的英文一并生效"
+
+[[items]]
+key = "input.temp_english.case_follow_input"
+group = "schema"
+section = "临时英文"
+dialog_group = "te_cand"
+type = "toggle"
+label = "候选跟随输入的大小写"
+hint = "临时英文由 Shift+字母进入，首字母恒为大写，开启后候选也随之首字母大写；只跟大写，词库自带的大写不受影响"
+
+[[items]]
+key = "input.temp_english.phrase_seg"
+group = "schema"
+section = "临时英文"
+dialog_group = "te_cand"
+type = "toggle"
+label = "用 ' 分词打英文词组"
+hint = "各段只打前缀，规则与英文方案那份相同（可跳词）。开启后 ' 在临时英文与快捷输入里不再是第三候选键，改用数字 3。快捷输入里的英文一并生效"
+
+[[items]]
+key = "input.temp_english.commit_space"
+group = "schema"
+section = "临时英文"
+dialog_group = "te_cand"
+type = "toggle"
+label = "上屏后自动加空格"
+hint = "临时英文选词上屏后补一个空格。与「英文行为」里那份各自独立——中文里插一个英文词时，补上的空格往往还要退格删掉；回车上屏不补。快捷输入里选英文候选一并生效（中文候选不补）"
+
+[[items]]
+key = "input.temp_english.allow_symbols"
+group = "schema"
+section = "临时英文"
+type = "toggle"
+label = "允许输入符号与数字"
+hint = "符号与数字直接进入输入缓冲，而非上屏退出或选词，便于书写标识符与代码。放行哪些字符在右侧设置"
+
+# 字符集专属于上面这个开关（不像英文符号字符集要服务两个场景），故用硬 gate：
+# 开关关闭时集合无意义，置灰是对的。
+[[items]]
+key = "input.temp_english.symbol_chars"
+group = "schema"
+section = "临时英文"
+type = "dialog_button"
+label = "可输入的字符集"
+hint = "逐字符填写，一个字符就是一个字符（不支持 a-z 这类范围写法）。未列入的字符保持原有职责：符号上屏退出、分号与单引号选第 2/3 候选、减号等号方括号逗号句号翻页、数字键选词。留空则一个都不放行"
+gate_key = "input.temp_english.allow_symbols"
+
+[[items]]
+key = "input.temp_english.space_as_input"
+group = "schema"
+section = "临时英文"
+type = "toggle"
+label = "空格作为输入字符"
+hint = "空格不再上屏，可连续输入多个单词，回车上屏"
+
+[[items]]
+key = "input.temp_english.candidate_layout"
+group = "schema"
+section = "临时英文"
+type = "select"
+label = "候选窗布局"
+hint = "临时英文期间候选窗的排列方向；退出后自动恢复。英文候选一行放得下，全局竖排时可设横排省屏幕"
+width = 210
+options = [
+  { value = "follow", label = "跟随全局" },
+  { value = "vertical", label = "强制竖排" },
+  { value = "horizontal", label = "强制横排" },
+]
+
+[[items]]
+key = "input.english_case_cycle_key"
+group = "schema"
+section = "临时英文"
+type = "select"
+label = "切换候选大小写的键"
+hint = "打英文时按它在「跟随输入 → 全大写 → 全小写」间切换，上屏后复位；被选中的键在打英文期间用不出原本的功能"
+# ⚠️ **不标 platform**：macOS 上 Caps Lock 到不了输入法（系统只把锁定态经 toggles 传过来，
+# 按键本身走 flagsChanged 且 toWindowsVK 无映射），但 Tab 那条走正常 keydown、两个平台都通。
+# 故本项在 macOS 可用，只是 Caps Lock 那个选项在那边选了不会生效。
+[[items.options]]
+value = ""
+label = "不启用"
+[[items.options]]
+value = "capslock"
+label = "Caps Lock（macOS 无效）"
+[[items.options]]
+value = "tab"
+label = "Tab"
+# 值域里还有 escape / enter / space（见 core 的 parse_case_cycle_key），但**不列进下拉**：
+# 它们在输入态都有既有语义（Esc 取消组合、回车/空格上屏），推荐给普通用户等于让他丢掉一个
+# 常用键。想用的人手写进 config.toml 仍然生效。
+
+# ═══════════════════════════ 输入 ═══════════════════════════
+# ── 字符与标点 ──
+# 输入页的分节顺序（＝导航顺序）分三段，越靠前越"每天都在起作用"：
+#   ① 字符形态：字符与标点 / 智能符号 / 标点配对 —— 打出来长什么样；
+#   ② 临时模式：快捷输入 / 生僻字 —— 临时换一种打法；
+#   ③ 特殊：简繁转换 / Emoji / 网址输入 / Unicode 输入 —— 候选或上屏结果另有来路；
+#   末尾 联想 / 词频 是候选的后处理与统计口径，两块都不常改。
+# 按键行为、候选无效按键在「按键」页（键按下去做什么集中在一页）；临时拼音、临时英文在
+# 「方案」页（临时换一套方案打字，触发键、候选形态都是方案级的概念）。
+[[items]]
+key = "input.filter_mode"
+group = "input"
+section = "字符与标点"
+type = "select"
+label = "候选检索范围"
+hint = "过滤候选词中的生僻字；「智能」档可在扩展设置里配置临时放宽"
+opens_dialog = "scope_relax"
+options = [
+  { value = "smart", label = "智能" },
+  { value = "general", label = "常用字" },
+  { value = "gb18030", label = "全部字符" },
+]
+
+[[items]]
+key = "input.rare_phrase"
+group = "input"
+section = "字符与标点"
+type = "select"
+indent = false
+label = "含生僻字的词组"
+hint = "词里只要有一个字不在常用字表内，整词就被上面的检索范围滤掉。「保留」＝ 词一律不滤（含手动标为生僻的字），过滤只管单字"
+options = [
+  { value = "keep", label = "保留" },
+  { value = "filter", label = "按检索范围过滤" },
+]
+enabled_when = "input.filter_mode != gb18030"
+
+[[items]]
+key = "input.scope_relax.page_end_key"
+group = "input"
+section = "字符与标点"
+type = "toggle"
+label = "翻到底临时放宽范围"
+hint = "候选翻到最后一页后再按一次向后翻页键，本次输入临时显示全部字符，上屏后自动恢复；用于打出被同码常用字挡住的生僻字。仅「智能」档生效"
+enabled_when = "input.filter_mode == smart"
+dialog_group = "scope_relax"
+
+[[items]]
+key = "input.scope_relax.prefix"
+group = "input"
+section = "字符与标点"
+type = "string"
+label = "放宽候选标记"
+hint = "临时放宽后多出来的候选加的前缀，用于与正常候选区分；留空则不加标记"
+enabled_when = "input.filter_mode == smart && input.scope_relax.page_end_key == true"
+dialog_group = "scope_relax"
+
+[[items]]
+key = "input.punct.smart_after_digit"
+group = "input"
+section = "字符与标点"
+type = "toggle"
+label = "数字后智能标点"
+hint = "数字后句号输出点号、逗号输出英文逗号，可配置参与的标点"
+
+[[items]]
+key = "input.punct.smart_list"
+group = "input"
+section = "字符与标点"
+type = "dialog_button"
+label = "数字后保持英文的标点"
+hint = "数字后保持英文形态的标点集合，默认 .,:"
+gate_key = "input.punct.smart_after_digit"
+
+[[items]]
+key = "input.punct.custom_enabled"
+group = "input"
+section = "字符与标点"
+type = "toggle"
+label = "自定义标点映射"
+hint = "自定义英文标点的中文/全角替换；映射表在「自定义标点映射」对话框中编辑"
+
+[[items]]
+key = "input.punct.custom_mappings"
+group = "input"
+section = "字符与标点"
+type = "dialog_button"
+label = "自定义标点映射"
+hint = "按英文半角/全角、中文半角/全角四态自定义标点替换；在表格对话框中逐格编辑"
+gate_key = "input.punct.custom_enabled"
+
+# 「/ 键输出顿号」：没有自己的配置键，勾选即替用户把上面那张表的 `/` 行配好
+# （只改中文两列，英文标点状态下 `/` 仍是 `/`），并顺手打开自定义标点映射总开关。
+# 视图 key（`<配置路径>#<视图名>`）——同一配置路径的第二个清单项，`Manifest.items` 按 key
+# 索引，直接用同一个 key 会静默挤掉表格那项。
+[[items]]
+key = "input.punct.custom_mappings#slash_dun"
+group = "input"
+section = "字符与标点"
+type = "toggle_slash_dun"
+label = "/ 键输出顿号"
+hint = "中文标点状态下按 / 输出「、」；英文标点状态不变，仍是 /。开启会一并启用上面的自定义标点映射"
+
+# ── 智能符号 ──
+# 三个开关各管一种场景、互相独立，都默认关。上屏方案与时限**不挂 enabled_when**：
+# 它们是三个开关共用的公共参数，挂在任何单个开关上都会造成「另外两个开着却调不了」。
+[[items]]
+key = "input.symbol.smart_mode"
+group = "input"
+section = "智能符号"
+type = "toggle"
+label = "中文标点智能符号"
+hint = "连按两次同一中文标点转英文；数字后的标点方向相反（先出英文，再按转中文）"
+
+# gate_soft：按钮不随「启用」置灰——对话框里还寄居着「英文标点智能符号」开关，
+# 置灰会让只想用那一项的用户彻底够不着它。
+[[items]]
+key = "input.symbol.smart_chars"
+group = "input"
+section = "智能符号"
+type = "dialog_button"
+label = "中文符号字符集"
+hint = "参与转换的中文标点集合"
+gate_key = "input.symbol.smart_mode"
+gate_soft = true
+
+# 寄居在上面那个对话框里（不独立成行）：它与中文智能符号同属「中文输入模式下」的标点行为，
+# 单开一行会让卡片又多一个顶层开关。
+[[items]]
+key = "input.symbol.english_punct_mode"
+group = "input"
+section = "智能符号"
+type = "toggle"
+label = "英文标点智能符号"
+hint = "标点切到英文时，连按两次同一英文标点转中文。符号列表使用下方的「英文符号字符集」，不是本对话框的中文集合"
+dialog_extra_for = "input.symbol.smart_chars"
+
+[[items]]
+key = "input.symbol.english_mode"
+group = "input"
+section = "智能符号"
+type = "toggle"
+label = "英文模式智能符号"
+hint = "英文输入模式下，连按两次同一英文标点转中文。开启后输入法会接管这些标点键（原本直接交给应用），故默认关闭"
+
+# gate_soft：字符集同时服务于「英文标点智能符号」（在上面的对话框里），
+# 跟着 english_mode 置灰会让只开那一项的用户改不了集合。
+[[items]]
+key = "input.symbol.english_chars"
+group = "input"
+section = "智能符号"
+type = "dialog_button"
+label = "英文符号字符集"
+hint = "两个英文场景共用的标点集合，填按键本身的英文标点（如 . 而非 。）。不建议放括号引号：英文模式下这些键被接管后，Tab 跳出配对会失效"
+gate_key = "input.symbol.english_mode"
+gate_soft = true
+
+[[items]]
+key = "input.symbol.smart_method"
+group = "input"
+section = "智能符号"
+type = "select"
+label = "智能符号上屏方案"
+hint = "直接替换：第一次按键直接上屏符号，再次按键删改为另一形态，所见即所得、没有中间预览态，实际体感更好（推荐）；组合态预览：第一次按键先以预览态显示，超时或再次按键才真正定型，全程不做删改，兼容性更好，适合在直接替换下表现异常的应用。三种场景共用"
+options = [
+  { value = "delete_replace", label = "直接替换（推荐）" },
+  { value = "hold_composition", label = "组合态预览（兼容性好）" },
+]
+
+[[items]]
+key = "input.symbol.smart_timeout_ms"
+group = "input"
+section = "智能符号"
+type = "slider"
+label = "智能符号时限"
+hint = "两次按键的最大间隔（毫秒）；三种场景共用"
+min = 100
+max = 2000
+step = 50
+unit = "ms"
+
+# ── 标点配对 ──
+[[items]]
+key = "input.auto_pair.chinese"
+group = "input"
+section = "标点配对"
+type = "toggle"
+label = "中文标点自动配对"
+hint = "输入左括号类标点时自动补全右标点"
+
+[[items]]
+key = "input.auto_pair.chinese_pairs"
+group = "input"
+section = "标点配对"
+type = "dialog_button"
+label = "中文配对字符"
+hint = "勾选参与自动配对的中文标点对"
+gate_key = "input.auto_pair.chinese"
+[[items.options]]
+value = "（）"
+label = "（ ）圆括号"
+[[items.options]]
+value = "【】"
+label = "【 】方括号"
+[[items.options]]
+value = "《》"
+label = "《 》书名号"
+[[items.options]]
+value = "〈〉"
+label = "〈 〉单书名号"
+[[items.options]]
+value = "｛｝"
+label = "｛ ｝花括号"
+[[items.options]]
+value = "〔〕"
+label = "〔 〕六角符号"
+[[items.options]]
+value = "「」"
+label = "「 」单角引号"
+[[items.options]]
+value = "『』"
+label = "『 』双角引号"
+[[items.options]]
+value = "“”"
+label = "“ ” 双引号"
+[[items.options]]
+value = "‘’"
+label = "‘ ’ 单引号"
+
+[[items]]
+key = "input.auto_pair.english"
+group = "input"
+section = "标点配对"
+type = "toggle"
+label = "英文标点自动配对"
+hint = "英文模式或英文标点下自动配对括号"
+
+[[items]]
+key = "input.auto_pair.english_pairs"
+group = "input"
+section = "标点配对"
+type = "dialog_button"
+label = "英文配对字符"
+hint = "勾选参与自动配对的英文括号对"
+gate_key = "input.auto_pair.english"
+[[items.options]]
+value = "()"
+label = "( ) 圆括号"
+[[items.options]]
+value = "[]"
+label = "[ ] 方括号"
+[[items.options]]
+value = "{}"
+label = "{ } 花括号"
+[[items.options]]
+value = "<>"
+label = "< > 尖括号"
+[[items.options]]
+value = '""'
+label = '" " 双引号'
+[[items.options]]
+value = "''"
+label = "' ' 单引号"
+
+[[items]]
+key = "input.auto_pair.jump_out_keys"
+group = "input"
+section = "标点配对"
+type = "dialog_button"
+label = "配对跳出键"
+hint = "配对状态下按这些键跳到右符号之后；可多选，留空则不启用。引号等左右同形的配对不支持「右符号本身」跳出（无法区分是要跳出还是要嵌套新的一对），只能用 Tab/Enter"
+[[items.options]]
+value = "right_symbol"
+label = "右符号本身"
+[[items.options]]
+value = "tab"
+label = "Tab 制表键"
+[[items.options]]
+value = "enter"
+label = "Enter 回车键"
+
+# ── 快捷输入 ──
+[[items]]
+key = "schema.mix_modes"
+group = "input"
+section = "快捷输入"
+type = "dialog_button_key_action"
+verb = "mix:quick_mix"
+label = "快捷输入触发键"
+hint = "按触发键进入快捷（日期/计算/拼音/英文融合）模式，打字中按下会先把已输入内容上屏；可多选。全部取消勾选即禁用快捷输入"
+options = [
+  { value = "backtick", label = "反引号 ( ` )" },
+  { value = "semicolon", label = "分号 ( ; )" },
+  { value = "quote", label = "单引号 ( ' )" },
+  { value = "comma", label = "逗号 ( , )" },
+  { value = "period", label = "句号 ( . )" },
+  { value = "slash", label = "斜杠 ( / )" },
+  { value = "backslash", label = "反斜杠 ( \\ )" },
+  { value = "lbracket", label = "左方括号 ( [ )" },
+  { value = "rbracket", label = "右方括号 ( ] )" },
+]
+
+# 候选来源：与触发键读写同一个 core 键（schema.mix_modes 里 quick_mix 的 members），
+# 故用视图 key `#members` 另立一项——清单按 key 索引，同 key 两项后者会覆盖前者。
+# value = core 成员 id；声明序 = 新增成员的插入位置，须与 core 的 default_mix_modes() 一致
+# （由 mix_members_options_match_core_default_order 守护）。
+# 「可选但出厂不启用」的成员（quick_input.history / $rare_char）也声明在此：它们不在
+# default_mix_modes() 里，界面按声明序补位、显示为未勾选，用户自己勾上才生效。
+[[items]]
+key = "schema.mix_modes#members"
+group = "input"
+section = "快捷输入"
+type = "dialog_button_mix_members"
+label = "快捷候选来源"
+hint = "快捷输入模式下出哪些候选。关掉的来源不再产出候选；列表顺序即候选优先级，按住行首手柄上下拖动即可调整"
+options = [
+  { value = "quick_input.calc", label = "计算", hint = "算式求值，如 1+2*3、5^2、(1+2)/4" },
+  { value = "quick_input.number", label = "数字 / 金额", hint = "中文数字、财务大写、千分位；算式结果也会转换" },
+  { value = "quick_input.date", label = "日期 / 年月", hint = "如 2026.3.5 → 2026年3月5日；12.25 → 12月25日。只有一个点时数字候选在前，多打一个点（12.25.）使日期优先" },
+  { value = "quick_input.repeat", label = "重复上次上屏", hint = "仅在刚进入、尚未输入时出现，空格即再上屏一次" },
+  { value = "$primary_pinyin", label = "拼音", hint = "跟随主拼音方案（全拼/双拼）" },
+  { value = "english", label = "英文", hint = "英文词库候选" },
+  { value = "quick_input.history", label = "快捷输入历史", hint = "按前缀补全以前在快捷输入里上屏过的文本，如 ${reset_time}、RESET_TIME。所打内容带符号或大写时，历史排在原文之前；回车仍上屏原文。出厂不启用" },
+  { value = "$rare_char", label = "生僻字", hint = "用当前方案的编码打生僻字，只出单字。排在拼音之后时，同一个字会先被拼音取走；需要优先显示则前移" },
+]
+
+# 候选布局：与触发键、候选来源读写同一个 core 键（schema.mix_modes 里 quick_mix 的
+# candidate_layout），故用视图 key `#candidate_layout` 另立一项。
+# 取代旧的 schema.quick_input.force_vertical——那个布尔挂在与实例无关的全局段，
+# 且表达不了「全局竖排但本模式横排」。三个模式的选项须一致（见下方临拼/临英/网址）。
+[[items]]
+key = "schema.mix_modes#candidate_layout"
+group = "input"
+section = "快捷输入"
+type = "select_mix_layout"
+label = "候选窗布局"
+hint = "快捷输入期间候选窗的排列方向；退出后自动恢复。跟随全局 = 用外观页的候选布局设置"
+width = 210
+options = [
+  { value = "follow", label = "跟随全局" },
+  { value = "vertical", label = "强制竖排" },
+  { value = "horizontal", label = "强制横排" },
+]
+
+# 自由（字面）输入：与上面三项读写同一个 core 键（schema.mix_modes 里 quick_mix 的
+# free_input），故用视图 key `#free_input` 另立一项。
+[[items]]
+key = "schema.mix_modes#free_input"
+group = "input"
+section = "快捷输入"
+type = "select_mix_free_input"
+label = "自由输入"
+hint = "开启后把不可能是编码的按键（大写字母、多数符号）作字面输入，原样上屏，标点不再顶屏候选。一个候选都没有时的数字 / 字母选词键不论开关都作字面输入"
+width = 210
+options = [
+  { value = "off", label = "关闭" },
+  { value = "auto", label = "自动判断" },
+  { value = "always", label = "始终字面输入" },
+]
+
+# 夺取二三候选键：同上，视图 key `#free_input_takes_select_keys`。
+# enabled_when 用 `!=` —— 该算子是为本项加的（parse_conds 原先只有 == 与 contains）。
+[[items]]
+key = "schema.mix_modes#free_input_takes_select_keys"
+group = "input"
+section = "快捷输入"
+type = "checkbox_mix_free_select_keys"
+indent = false
+label = "; ' 作字面字符"
+hint = "自由输入时 ; ' 不再选第 2/3 候选。数字键 1-9 只在一个候选都没有时才作字面"
+enabled_when = "schema.mix_modes#free_input != off"
+
+# 数字透镜下字母选词：视图 key `#numeric_letter_select`，同 `#free_input_takes_select_keys`。
+[[items]]
+key = "schema.mix_modes#numeric_letter_select"
+group = "input"
+section = "快捷输入"
+type = "checkbox_mix_numeric_letter_select"
+indent = false
+label = "以数字开始时用字母选词"
+hint = "以数字或符号开头时 a、b、c 选第 1、2、3 个候选，序号显示为字母。关闭后字母直接输入（如 2fa、1.5x），序号显示为数字，改用按键页的「快捷输入选词」或空格选；「快捷输入选词」设为不使用时只能用空格、方向键选"
+
+[[items]]
+key = "schema.quick_input.decimal_places"
+group = "input"
+section = "快捷输入"
+type = "number"
+label = "小数保留位数"
+hint = "计算结果最多保留的小数位数（0 表示取整）"
+min = 0
+max = 6
+
+# 候选来源「快捷输入历史」的条数上限，与网址历史 input.url.history_max 同一套裁剪。
+[[items]]
+key = "schema.quick_input.history_max"
+group = "input"
+section = "快捷输入"
+type = "number"
+label = "历史条数上限"
+hint = "快捷输入历史最多保留的条数，超出后按「用得少、用得旧」自动清理。0 = 不限"
+min = 0
+max = 10000
+step = 50
+unit = "条"
+
+# ── 生僻字 ──
+# 没有「启用」开关：不绑触发键就进不去，那已经是关闭态，再加个开关就是两个真相源
+# （core 的 RareCharConfig 刻意没有 enabled 字段，理由同）。
+[[items]]
+key = "input.rare_char.trigger_keys"
+group = "input"
+section = "生僻字模式"
+type = "dialog_button_key_action"
+verb = "rare_char"
+label = "生僻字触发键"
+hint = "空码时按触发键进入，用当前方案的编码打生僻字，只出单字；出厂不绑任何键。只能选符号键——字母键请到方案页的「z 键引导功能」配"
+options = [
+  { value = "backtick", label = "反引号 ( ` )" },
+  { value = "semicolon", label = "分号 ( ; )" },
+  { value = "quote", label = "单引号 ( ' )" },
+  { value = "comma", label = "逗号 ( , )" },
+  { value = "period", label = "句号 ( . )" },
+  { value = "slash", label = "斜杠 ( / )" },
+  { value = "backslash", label = "反斜杠 ( \\ )" },
+  { value = "lbracket", label = "左方括号 ( [ )" },
+  { value = "rbracket", label = "右方括号 ( ] )" },
+]
+
+# 值域开放：区块表 50 项，这里只列常用的几组，配置里其余的区块名原样保留
+# （dialog_button_open_pairs 的写回只增删自己列出的项）。
+[[items]]
+key = "input.rare_char.include_blocks"
+group = "input"
+section = "生僻字模式"
+type = "dialog_button_open_pairs"
+label = "生僻字范围"
+hint = "默认只出生僻汉字。emoji、符号这些既不算常用也不算生僻，要它们出现就在这里勾上"
+options = [
+  { value = "emoji", label = "emoji", hint = "表情、旗帜与各类图形符号（😀 ⚽ ✅ ⌚ 🇨🇳）" },
+  { value = "符号", label = "符号", hint = "标点、数学、箭头、图形、带圈数字、全角形式（— ∞ → ① ￥ ⿰）" },
+  { value = "其它", label = "其它", hint = "新版 Unicode 新增的、本程序还不认识的区块。区块表是逐块列举的，漏掉的都归这一档" },
+]
+
+# ── 反查模式 ──
+# 进入方式不在这里：绑键走「全局自定义按键」（动词 reverse）或方案页「z 键引导功能」。没有总开关——不绑键就是不启用。
+[[items]]
+key = "input.reverse.candidate_layout"
+group = "input"
+section = "反查模式"
+type = "select"
+label = "候选窗布局"
+hint = "反查模式期间候选窗的排列方向；退出后自动恢复。反查模式要先绑进入键才能用：在「按键 → 全局自定义按键」里给一个键选「反查模式」，或在方案页「z 键引导功能」选它"
+width = 210
+options = [
+  { value = "follow", label = "跟随全局" },
+  { value = "vertical", label = "强制竖排" },
+  { value = "horizontal", label = "强制横排" },
+]
+
+# 反查模式专属：模式内也查未启用的扩展词库（core 的 DisabledDictLayers，开关开时后台预热）。
+# 行内通配、普通候选、候选注释里的编码反查都不受影响。
+[[items]]
+key = "input.reverse.lookup_disabled_dicts"
+group = "input"
+section = "反查模式"
+type = "toggle"
+label = "反查含扩展词库"
+hint = "仅反查模式里查没启用的扩展词库（如五笔的行政区域），排在已启用词库之后；不影响行内通配与普通候选；需先绑定反查进入键才用得上"
+
+# ── 简繁转换 ──
+# 两个方向合一节：它们互斥（`exclusive_with`，开一个自动关另一个），分成两张卡时
+# 「开了这个那个就灭了」跨卡发生，看着像 bug；同卡三行才看得出是一个二选一开关。
+[[items]]
+key = "input.s2t.enabled"
+group = "input"
+section = "简繁转换"
+type = "toggle"
+label = "启用简入繁出"
+hint = "候选与上屏均输出繁体（基于 OpenCC 词典）。开启会自动关闭「繁入简出」"
+exclusive_with = "input.t2s.enabled"
+
+[[items]]
+key = "input.s2t.variant"
+group = "input"
+section = "简繁转换"
+type = "select"
+indent = false
+label = "转换变体"
+hint = "选择目标繁体字形与词汇风格"
+enabled_when = "input.s2t.enabled == true"
+options = [
+  { value = "s2t", label = "标准繁体" },
+  { value = "s2tw", label = "台湾繁体" },
+  { value = "s2twp", label = "台湾繁体（含词汇）" },
+  { value = "s2hk", label = "香港繁体" },
+]
+
+[[items]]
+key = "input.t2s.enabled"
+group = "input"
+section = "简繁转换"
+type = "toggle"
+label = "启用繁入简出"
+hint = "词库和候选是繁体时，上屏转成简体。开启会自动关闭「简入繁出」"
+exclusive_with = "input.s2t.enabled"
+
+# ── Emoji/OpenCC ──
+# 按候选文字查表，与编码无关，所有方案通用。词表随程序附带（data/emoji/），首次开启时
+# 在本机建立索引缓存。
+[[items]]
+key = "input.emoji.enabled"
+group = "input"
+section = "Emoji/OpenCC"
+opens_dialog = "emoji"
+type = "toggle"
+label = "启用 Emoji/OpenCC 候选"
+hint = "打出词语后，在候选中追加对应的 emoji（如「开心」→ 😄）。首次开启时建立索引，稍候片刻"
+
+# 不列 comment（只在注释区显示）：注释区目前没有上屏入口，选了等于什么都看不到。
+# core 侧保留该取值，待注释上屏功能落地后加回选项即可（见 capabilities.rs 的
+# NARROWED_ON_PURPOSE）。
+[[items]]
+key = "input.emoji.show_as"
+group = "input"
+section = "Emoji/OpenCC"
+dialog_group = "emoji"
+type = "select"
+label = "显示位置"
+hint = "紧随词后：插在对应词之后，其后候选的序号顺延；列表末尾：追加在常用候选之后，原有序号不变"
+enabled_when = "input.emoji.enabled == true"
+options = [
+  { value = "after", label = "紧随词后" },
+  { value = "tail", label = "列表末尾" },
+]
+
+[[items]]
+key = "input.emoji.scope"
+group = "input"
+section = "Emoji/OpenCC"
+dialog_group = "emoji"
+type = "select"
+label = "适用范围"
+hint = "仅完整词：只为完整匹配的词追加；全部候选：补全与部分匹配的候选也追加"
+enabled_when = "input.emoji.enabled == true"
+options = [
+  { value = "exact", label = "仅完整词" },
+  { value = "all", label = "全部候选" },
+  { value = "off", label = "不追加" },
+]
+
+[[items]]
+key = "input.emoji.max_hosts"
+group = "input"
+section = "Emoji/OpenCC"
+dialog_group = "emoji"
+type = "number"
+label = "追加范围"
+hint = "只为列表前 N 个候选追加 emoji。1 = 仅首选"
+min = 0
+max = 20
+enabled_when = "input.emoji.enabled == true"
+
+[[items]]
+key = "input.emoji.max_per_word"
+group = "input"
+section = "Emoji/OpenCC"
+dialog_group = "emoji"
+type = "number"
+label = "每词上限"
+hint = "一个词最多追加的 emoji 个数"
+min = 1
+max = 10
+enabled_when = "input.emoji.enabled == true"
+
+[[items]]
+key = "input.emoji.min_word_chars"
+group = "input"
+section = "Emoji/OpenCC"
+dialog_group = "emoji"
+type = "number"
+label = "最少字数"
+hint = "候选少于此字数时不追加。默认 2，即不为单字追加"
+min = 1
+max = 8
+enabled_when = "input.emoji.enabled == true"
+
+[[items]]
+key = "input.emoji.categories"
+group = "input"
+section = "Emoji/OpenCC"
+dialog_group = "emoji"
+type = "toggle"
+label = "启用分类词"
+hint = "「动物」「水果」等分类词会带出整组 emoji，数量受每词上限约束"
+enabled_when = "input.emoji.enabled == true"
+
+[[items]]
+key = "input.emoji.block_auto_commit"
+group = "input"
+section = "Emoji/OpenCC"
+dialog_group = "emoji"
+type = "toggle"
+label = "有追加时不自动上屏"
+hint = "全码唯一自动上屏时，若候选追加了 emoji 或附加模块的符号（如「提手旁」→ 扌），不自动上屏，留出选择的机会"
+enabled_when = "input.emoji.enabled == true"
+
+# 附加模块（core 的 EMOJI_MODULES + 用户放进用户目录 emoji\ 的 OpenCC 表）：条数不定，走对话框，
+# 整张 input.emoji.modules 表读写。
+[[items]]
+key = "input.emoji.modules"
+group = "input"
+section = "Emoji/OpenCC"
+type = "dialog_button_emoji_modules"
+indent = false
+label = "附加模块"
+hint = "按模块加挂 emoji 与符号表（偏旁、希腊字母、单位等）；同样只为前 N 个候选追加，见「追加范围」。也可在用户目录 emoji\\ 下放 OpenCC 格式的 .txt 自行扩充"
+enabled_when = "input.emoji.enabled == true"
+
+# ── 网址/邮箱输入 ──
+# 两个模式合成一个分区：它们共用同一个补全候选源（core 的 mode_completion.rs），
+# 开关、触发条件、候选行为逐条对位，用户学一次即可。历史与后缀的「查看/清空」入口
+# 都在词库页（那里有现成的列表 + 逐条删 + 清空确认），本分区的 hint 里指路过去。
+[[items]]
+key = "input.url.enabled"
+group = "input"
+section = "网址/邮箱输入"
+opens_dialog = "url"
+type = "toggle"
+label = "网址输入模式"
+hint = "打出完整前缀（如 http、www.）即进入网址输入模式，可自由输入网址，空格或回车上屏"
+
+[[items]]
+key = "input.url.prefixes"
+group = "input"
+section = "网址/邮箱输入"
+dialog_group = "url"
+type = "strlist_text"
+label = "触发前缀"
+hint = "识别为网址的前缀（如 www. http https ftp.），按空格分隔"
+
+[[items]]
+key = "input.url.history_enabled"
+group = "input"
+section = "网址/邮箱输入"
+dialog_group = "url"
+type = "toggle"
+label = "记住输入过的网址"
+hint = "把上屏过的网址记下来，下次打前几个字符即可补全。记录可在「词库 → 网址历史」查看和清空"
+enabled_when = "input.url.enabled == true"
+
+[[items]]
+key = "input.url.history_max"
+group = "input"
+section = "网址/邮箱输入"
+dialog_group = "url"
+type = "number"
+label = "历史条数上限"
+hint = "超出后按「用得少、用得旧」自动清理。0 = 不限"
+min = 0
+max = 10000
+step = 50
+unit = "条"
+enabled_when = "input.url.enabled == true && input.url.history_enabled == true"
+
+# 网址模式开始产出候选（历史补全）后，这一项才有可观察的效果，故此前的 hidden 已删。
+[[items]]
+key = "input.url.candidate_layout"
+group = "input"
+section = "网址/邮箱输入"
+dialog_group = "url"
+type = "select"
+label = "网址候选窗布局"
+hint = "网址输入期间候选窗的排列方向；退出后自动恢复。跟随全局 = 用外观页的候选布局设置"
+width = 210
+enabled_when = "input.url.enabled == true"
+options = [
+  { value = "follow", label = "跟随全局" },
+  { value = "vertical", label = "强制竖排" },
+  { value = "horizontal", label = "强制横排" },
+]
+
+[[items]]
+key = "input.email.enabled"
+group = "input"
+section = "网址/邮箱输入"
+opens_dialog = "email"
+type = "toggle"
+label = "邮箱输入模式"
+hint = "打了字之后按 @ 即进入，候选给出常用后缀拼成的完整邮箱。空缓冲按 @ 不触发，照常出标点"
+
+[[items]]
+key = "input.email.suffixes"
+group = "input"
+section = "网址/邮箱输入"
+dialog_group = "email"
+type = "strlist_text"
+label = "邮箱后缀"
+hint = "预置的后缀列表（写 @ 之后的部分，如 qq.com gmail.com），按空格分隔。表外的后缀也能直接打，用过一次就会被记住并排到前面"
+
+[[items]]
+key = "input.email.candidate_layout"
+group = "input"
+section = "网址/邮箱输入"
+dialog_group = "email"
+type = "select"
+label = "邮箱候选窗布局"
+hint = "邮箱输入期间候选窗的排列方向；退出后自动恢复。跟随全局 = 用外观页的候选布局设置"
+width = 210
+enabled_when = "input.email.enabled == true"
+options = [
+  { value = "follow", label = "跟随全局" },
+  { value = "vertical", label = "强制竖排" },
+  { value = "horizontal", label = "强制横排" },
+]
+
+# ── Unicode 输入 ──
+# 与网址输入同属「前缀夺取式」模式（core 侧 docs/design/prefix-hijack-modes.md），
+# 故三项的形态与上面那组刻意一致——同类东西在设置页里长得一样，用户少学一次。
+[[items]]
+key = "input.unicode.enabled"
+group = "input"
+section = "Unicode 输入"
+opens_dialog = "unicode"
+type = "toggle"
+label = "Unicode 输入模式"
+hint = "打出 u+ 再接十六进制码点即可出该字符（u+4e00 → 一），空格或回车上屏"
+
+[[items]]
+key = "input.unicode.prefixes"
+group = "input"
+section = "Unicode 输入"
+dialog_group = "unicode"
+type = "strlist_text"
+label = "触发前缀"
+hint = "识别为码点输入的前缀（如 u+ U+），按空格分隔。区分大小写；不要填单个字母，那会占掉该字母开头的所有编码"
+
+# 与网址那项不同，**这一项不隐藏**：码点输入会实实在在出一条候选，布局设置有可观察的效果。
+[[items]]
+key = "input.unicode.candidate_layout"
+group = "input"
+section = "Unicode 输入"
+dialog_group = "unicode"
+type = "select"
+label = "候选窗布局"
+hint = "Unicode 输入期间候选窗的排列方向；退出后自动恢复。跟随全局 = 用外观页的候选布局设置"
+width = 210
+enabled_when = "input.unicode.enabled == true"
+options = [
+  { value = "follow", label = "跟随全局" },
+  { value = "vertical", label = "强制竖排" },
+  { value = "horizontal", label = "强制横排" },
+]
+
+# ── 联想 ──
+# 上屏之后按刚上屏的内容再给一批候选。core 侧设计见 WindInput/docs/design/association.md。
+# 注：四个「来源开关」(history/bigram/prefix/punct) 不在此暴露，理由见 capabilities.rs 的
+#     UNCOVERED_BY_DESIGN ⑱。
+# 注：本段对应 core 的 [input.association]，那是**桌面基线**；移动端取值在 core 的
+#     [mobile.association] 里，本程序只在桌面端运行故不涉及（已登记 ⑳）。
+[[items]]
+key = "input.association.kind"
+group = "input"
+section = "联想输入"
+opens_dialog = "assoc"
+type = "select"
+label = "联想类型"
+hint = "从词库里找以刚上屏内容开头的更长的词：输入「中」提示「中国」「中间」，选中只补出多出来的部分"
+width = 210
+# ⚠️ **不列 smart（智能联想）**：它设计上有四个来源，已实现的只有词库前缀与标点，而标点
+#    在桌面默认关 ⇒ 桌面上选 smart 拿到的与 word 完全相同。摆一个和隔壁没区别的选项，
+#    用户只会反复试。等 history/bigram 落地、两档真正分开了再放出来。
+#    core 侧值域仍有 smart（移动端出厂就是它），手改 config.toml 照样能启用；
+#    已配 smart 的用户打开设置页会看到「smart（当前配置）」——select_index_for 的兜底，
+#    不会在「打开设置页、点一次保存」之间被静默换成 word。
+options = [{ value = "off", label = "关闭" }, { value = "word", label = "词语联想" }]
+
+[[items]]
+key = "input.association.mode"
+group = "input"
+section = "联想输入"
+dialog_group = "assoc"
+type = "select"
+label = "连续联想"
+hint = "持续联想 = 选中联想词后拿它当新的上文接着给（「中」→「中国」→ 以「中国」开头的词）；一次性 = 只出一次，任何非选词动作即退出"
+width = 210
+enabled_when = "input.association.kind != off"
+options = [
+  { value = "one_shot", label = "一次性" },
+  { value = "continuous", label = "持续联想" },
+]
+
+[[items]]
+key = "input.association.max_count"
+group = "input"
+section = "联想输入"
+dialog_group = "assoc"
+type = "number"
+label = "候选条数上限"
+hint = "联想候选最多显示几条"
+min = 1
+max = 20
+enabled_when = "input.association.kind != off"
+
+[[items]]
+key = "input.association.space_commits"
+group = "input"
+section = "联想输入"
+dialog_group = "assoc"
+type = "toggle"
+label = "空格上屏联想候选"
+hint = "空格上屏当前高亮的联想词，多数输入法如此。关掉则空格照常出空格，联想窗同时收起"
+enabled_when = "input.association.kind != off"
+
+[[items]]
+key = "input.association.select_keys_commit"
+group = "input"
+section = "联想输入"
+dialog_group = "assoc"
+type = "toggle"
+label = "二三候选键选联想"
+hint = "开启（默认）时 ; ' 等二三候选键照常选第 2、3 条联想词。关掉则联想窗出来后按这些键不选联想：联想窗收起，该键照常输入（如出分号；若它另是快捷输入等模式的引导键，则照常进该模式）"
+enabled_when = "input.association.kind != off"
+
+# 回车与退格的默认值**相反**（回车透传、退格吃键）：回车的透传是把正事办了，退格的透传
+# 是删掉刚上屏的字、不可逆。core 侧理由见 AssociationConfig 两个字段的文档。
+[[items]]
+key = "input.association.enter_cancels_only"
+group = "input"
+section = "联想输入"
+dialog_group = "assoc"
+type = "toggle"
+label = "回车仅取消联想"
+hint = "开启后回车只收起联想窗，要再按一次才换行或发送。关闭（默认）则收窗的同时回车照常生效"
+enabled_when = "input.association.kind != off"
+
+[[items]]
+key = "input.association.backspace_cancels_only"
+group = "input"
+section = "联想输入"
+dialog_group = "assoc"
+type = "toggle"
+label = "退格仅取消联想"
+hint = "开启（默认）后退格只收起联想窗，要再按一次才删字。关闭则收窗的同时直接删掉前一个字"
+enabled_when = "input.association.kind != off"
+
+[[items]]
+key = "input.association.hide_after_ms"
+group = "input"
+section = "联想输入"
+dialog_group = "assoc"
+type = "number"
+label = "自动隐藏"
+hint = "联想窗显示多久后自动收起。0 = 不自动隐藏；联想候选几乎一直挂着，久留会挡住正文"
+min = 0
+max = 60000
+step = 500
+unit = "毫秒"
+enabled_when = "input.association.kind != off"
+
+# 注：input.association.hint（编码栏标识）不在此暴露，见 capabilities.rs 的
+#     UNCOVERED_BY_DESIGN ㉑。
+
+# ── 词频 ──
+# key 前缀是 schema.* 而落在「输入」页：它是**三个引擎都照办的同一条规则**（core 的
+# [schema.frequency] 段），不属于任何单个引擎的方案配置，放进码表/拼音/英文任一段
+# 都是在说一件不成立的事。group 与 key 前缀本就不必一致（schema.mix_modes#members
+# 同样在 input 页）。
+[[items]]
+key = "schema.frequency.exclude_blocks"
+group = "input"
+section = "词频"
+type = "dialog_button_open_pairs"
+label = "不参与词频的字符"
+hint = "这些字符选中后不记录、也不受已有记录影响。emoji 多是一次性点缀，让它参与调频会把常用字挤下去"
+options = [
+  { value = "emoji", label = "emoji", hint = "表情、旗帜与各类图形符号（😀 ⚽ ✅ ⌚ 🇨🇳）" },
+  { value = "符号", label = "符号", hint = "标点、数学、箭头、图形、带圈数字、全角形式（— ∞ → ① ￥ ⿰）" },
+  { value = "其它", label = "其它", hint = "新版 Unicode 新增的、本程序还不认识的区块" },
+]
+
+# ── 纠错与提示 ──
+# 「拼写纠错」一行与「提示来源」一行是手写的（`correction_ui`）：前者是总开关 + 扩展设置，
+# 对话框里 8 条内置规则排成紧凑网格（仿模糊音），下接自定义规则列表；后者把三个来源勾选
+# 挤在一行。各键仍逐项登记在此，供搜索、覆盖守护与「恢复默认」。
+# 规则的 label / hint 与 `correction_ui::RULES` 逐项一致（hint = 冲突说明），由测试守住。
+[[items]]
+key = "input.correction.enabled"
+group = "input"
+section = "纠错与提示"
+opens_dialog = "correction"
+type = "toggle"
+label = "拼写纠错"
+hint = "打错的拼音按纠正后的拼写也出候选，如漏了 g 的 gonping 出「公平」"
+
+[[items]]
+key = "input.correction.rules.gn_ng"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "toggle"
+label = "ng 打成 gn（ogn→ong）"
+hint = "冲突：简拼下 xign 也可是 xi+g+n"
+
+[[items]]
+key = "input.correction.rules.on_ong"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "toggle"
+label = "漏 g：on→ong"
+hint = "冲突：lone 也可是 lo+ne"
+
+[[items]]
+key = "input.correction.rules.vowel_swap"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "toggle"
+label = "韵母字母颠倒"
+hint = "无已知冲突"
+
+[[items]]
+key = "input.correction.rules.legacy_spelling"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "toggle"
+label = "旧式拼写 uei/iou/uen"
+hint = "冲突：liou 也可是 li+ou"
+
+[[items]]
+key = "input.correction.rules.h_misplaced"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "toggle"
+label = "h 错位（hz→zh、zih→zhi）"
+hint = "冲突：h+zi 是简拼"
+
+[[items]]
+key = "input.correction.rules.mg_ng"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "toggle"
+label = "ng 打成 mg"
+hint = "冲突：m 是简拼首字母"
+
+[[items]]
+key = "input.correction.rules.n_before_g"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "toggle"
+label = "ng 打成 nag 类"
+hint = "冲突：nage 也可是 na+ge"
+
+[[items]]
+key = "input.correction.rules.ai_ia"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "toggle"
+label = "简拼冲突类"
+hint = "冲突：x'ai 喜爱 会被纠成 xia"
+
+[[items]]
+key = "input.correction.custom"
+group = "input"
+section = "纠错与提示"
+dialog_group = "correction"
+type = "strlist_text"
+label = "自定义规则"
+hint = "每条「错误=正确」，如 uen=un；作用于单个音节内的片段"
+
+[[items]]
+key = "input.correction.marker"
+group = "input"
+section = "纠错与提示"
+type = "string"
+enabled_when = "input.correction.enabled == true"
+label = "纠错候选标记"
+hint = "加在只经纠错才得到的候选前，如「*公平」；留空不加"
+
+[[items]]
+key = "input.correction.hint.enabled"
+group = "input"
+section = "纠错与提示"
+type = "toggle"
+label = "显示正确拼音"
+hint = "带提示的候选在正文里内嵌正确拼音并着色，如「苹(ping)果」；上屏不受影响"
+
+[[items]]
+key = "input.correction.hint.fuzzy"
+group = "input"
+section = "纠错与提示"
+type = "toggle"
+label = "模糊音提示"
+hint = "提示来源：靠模糊音匹配上的字提示正确拼音（模糊音开着才有）"
+
+[[items]]
+key = "input.correction.hint.misread"
+group = "input"
+section = "纠错与提示"
+type = "toggle"
+label = "误读提示"
+hint = "提示来源：易读错的词提示正确拼音，并在打出错误读音时带出该词，如 tiaoyan 带出「调(diao)研」"
+
+[[items]]
+key = "input.correction.hint.correction"
+group = "input"
+section = "纠错与提示"
+type = "toggle"
+label = "纠错提示"
+hint = "提示来源：经拼写纠错得到的候选提示正确拼音（拼写纠错开着才有）"
+
+[[items]]
+key = "input.correction.hint.scope"
+group = "input"
+section = "纠错与提示"
+type = "select"
+label = "提示范围"
+hint = "只标第一个带提示的候选，或每个带提示的候选都标"
+enabled_when = "input.correction.hint.enabled == true"
+width = 180
+options = [
+  { value = "first", label = "首个带提示的候选" },
+  { value = "all", label = "全部带提示的候选" },
+]
+
+[[items]]
+key = "input.correction.hint.tone"
+group = "input"
+section = "纠错与提示"
+type = "toggle"
+label = "提示带声调"
+hint = "作用于正文提示与注释变量 ${correct_pinyin}：正确拼音带声调，如「苹(píng)果」；同音异调的字取最常用读音"
+
+[[items]]
+key = "local.misread_table"
+group = "input"
+section = "纠错与提示"
+type = "open_misread_table"
+label = "误读表"
+hint = "用户追加的易读错词（YAML，每项写词、错误拼音、正确拼音），同词同错读覆盖内置表；改完后，下次保存任一设置或重启输入法时生效"
+
+# ═══════════════════════════ 按键 ═══════════════════════════
+# 注：键位字符串理想用「热键合成器」对话框编辑；此处先以 string 暴露，便于查看/直填。
+# ── 中英文切换 ──
+[[items]]
+key = "keys.toggle_mode_keys"
+group = "keys"
+section = "中英文切换"
+type = "checkbox_group"
+label = "切换按键"
+hint = "勾选用于切换中英文的按键（可多选，按下任意一个即切换）。Caps Lock 仅 Windows 支持：短按切换，按住半秒以上松开才开关大写锁定。想用 Ctrl+Space 这类组合键，到「按键 → 全局自定义按键」里把它绑成「中英文切换」"
+[[items.options]]
+value = "lshift"
+label = "左 Shift"
+[[items.options]]
+value = "rshift"
+label = "右 Shift"
+[[items.options]]
+value = "lctrl"
+label = "左 Ctrl"
+[[items.options]]
+value = "rctrl"
+label = "右 Ctrl"
+[[items.options]]
+value = "capslock"
+label = "Caps Lock"
+
+[[items]]
+key = "keys.commit_on_switch"
+group = "keys"
+section = "中英文切换"
+type = "toggle"
+label = "切换时编码上屏"
+hint = "中文切换为英文、或切换输入方案时，将已输入的编码直接上屏"
+
+[[items]]
+key = "input.punct.follow_mode"
+group = "keys"
+section = "中英文切换"
+type = "toggle"
+label = "标点随中英文切换"
+hint = "切换到中文模式时自动切换中文标点"
+
+# 不常改的四项收进「中英文切换高级设置」对话框，卡片上只留一行入口。
+[[items]]
+key = "input.capslock.commit_upper"
+group = "keys"
+section = "中英文切换"
+# 不点名 Windows 专属的三项：Linux 上框里只有本项。
+dialog_hint = "CapsLock 切换时大写上屏等不常改的选项"
+dialog_title = "中英文切换高级设置"
+type = "toggle"
+label = "CapsLock 切换时编码转大写上屏"
+hint = "打字时按 CapsLock，正在打的编码转成大写上屏（打 wps 得 WPS）：开大写时如此，CapsLock 设为切换按键、用它切到英文时也如此。已选定的字词不转。只管大小写，上不上屏看「切换时编码上屏」（临时英文总会上屏）"
+# 不挂 enabled_when = commit_on_switch：临英缓冲不看那一项、总会上屏，本项在那里照样生效。
+# macOS 前端不上报 CapsLock keyup，这一支没有触发点。
+platform = "windows, linux"
+
+[[items]]
+key = "keys.ctrl_space_toggle"
+group = "keys"
+section = "中英文切换"
+dialog_extra_for = "input.capslock.commit_upper"
+type = "toggle"
+label = "Ctrl+空格 切换中英文"
+hint = "关闭后 Ctrl+空格 原样交给应用（如 IDEA、Android Studio 的代码提示）。在「全局自定义按键」里把 Ctrl+空格 设为「不启用」效果相同。若 Windows 也开着同名系统热键，应用仍收不到这个键，需到 系统设置 → 时间和语言 → 输入 → 高级键盘设置 → 输入语言热键 里关闭「输入法/非输入法切换」"
+# GH#172。落点是 TSF DLL 的吃键判定 + 系统热键翻 compartment 后的服务端拒绝，都是 Windows 专属；
+# macOS 的中英切换走系统输入源快捷键，与本项无关。
+platform = "windows"
+
+[[items]]
+key = "input.capslock.cancel_on_mode_switch"
+group = "keys"
+section = "中英文切换"
+dialog_extra_for = "input.capslock.commit_upper"
+type = "toggle"
+label = "切换中英文时取消大写锁定"
+hint = "切换中英文模式时自动取消大写锁定状态；切换方案不受此项影响，一律取消"
+# macOS 无落点：实现手段是合成一次 CapsLock 敲击（`key_inject::tap_caps_lock`），而
+# 大写锁定态在 macOS 由 HID 层维护，CGEvent 合成的 CapsLock 改不动它（要走
+# IOHIDSetModifierLockState 那条完全不同的路）。补 VK→CGKeyCode 映射也没用。
+platform = "windows"
+
+[[items]]
+key = "input.capslock.mode_after_cancel"
+group = "keys"
+section = "中英文切换"
+dialog_extra_for = "input.capslock.commit_upper"
+type = "select"
+label = "取消大写后进入"
+hint = "上一项开着时，切换中英文取消了大写锁定之后落到哪个模式。「中文」是原有行为：Shift 回到中文，Ctrl+空格 按它自己的切换方向"
+width = 210
+enabled_when = "input.capslock.cancel_on_mode_switch == true"
+# 平台门控同上一项：它没有落点，本项也就无从生效。
+platform = "windows"
+options = [
+  { value = "chinese", label = "中文" },
+  { value = "english", label = "英文" },
+  { value = "toggle", label = "照常切换" },
+]
+
+# ── 候选词管理 ──
+[[items]]
+key = "keys.pin_candidate"
+group = "keys"
+section = "候选词管理"
+type = "select"
+label = "置顶词条"
+hint = "将候选词固定到首位。快捷输入里另有专用的选词键（见下方「快捷输入选词」），同一组合键在那里归选词"
+width = 180
+options = [
+  { value = "ctrl+number", label = "Ctrl + 数字" },
+  { value = "ctrl+shift+number", label = "Ctrl + Shift + 数字" },
+  { value = "ctrl+alt+number", label = "Ctrl + Alt + 数字" },
+  { value = "none", label = "不使用" },
+]
+
+[[items]]
+key = "keys.delete_candidate"
+group = "keys"
+section = "候选词管理"
+type = "select"
+label = "删除词条"
+hint = "隐藏候选词（单字不可删除）"
+width = 180
+options = [
+  { value = "ctrl+number", label = "Ctrl + 数字" },
+  { value = "ctrl+shift+number", label = "Ctrl + Shift + 数字" },
+  { value = "ctrl+alt+number", label = "Ctrl + Alt + 数字" },
+  { value = "none", label = "不使用" },
+]
+
+# 快捷输入专用选词键：模板值域同置顶/删除，只在快捷输入里生效、优先于那两项。
+[[items]]
+key = "keys.quick_input_select"
+group = "keys"
+section = "候选词管理"
+type = "select"
+label = "快捷输入选词"
+hint = "快捷输入里按所选组合键加 1 至 9 上屏当前页第 1 至 9 个候选、加 0 上屏第 10 个，数字被算式占用时也能选。选「Ctrl + 数字」时，开着 NumLock 的小键盘数字同样可用。只在快捷输入里生效，优先于置顶、删除词条"
+width = 180
+options = [
+  { value = "ctrl+number", label = "Ctrl + 数字" },
+  { value = "ctrl+shift+number", label = "Ctrl + Shift + 数字" },
+  { value = "ctrl+alt+number", label = "Ctrl + Alt + 数字" },
+  { value = "none", label = "不使用" },
+]
+
+# ── 候选操作 ──
+[[items]]
+key = "keys.select_key_groups"
+group = "keys"
+section = "候选操作"
+type = "checkbox_group"
+label = "次选/三选快捷键"
+hint = "选中第 2、3 位候选词的快捷键；选修饰键时按下松开（轻敲）才生效"
+[[items.options]]
+value = "semicolon_quote"
+label = "分号/引号 ; '"
+[[items.options]]
+value = "comma_period"
+label = "逗号/句号 , ."
+[[items.options]]
+value = "lrshift"
+label = "左/右 Shift"
+[[items.options]]
+value = "lrctrl"
+label = "左/右 Ctrl"
+
+[[items]]
+key = "keys.highlight_keys"
+group = "keys"
+section = "候选操作"
+type = "checkbox_group"
+label = "高亮移动按键"
+hint = "在候选列表中移动选中项"
+[[items.options]]
+value = "arrows"
+label = "方向键 ↑ ↓"
+[[items.options]]
+value = "tab"
+label = "Tab / Shift+Tab"
+
+[[items]]
+key = "keys.page_keys"
+group = "keys"
+section = "候选操作"
+type = "checkbox_group"
+label = "翻页快捷键"
+hint = "同时启用多组翻页键"
+[[items.options]]
+value = "pageupdown"
+label = "PageUp / PageDown"
+[[items.options]]
+value = "minus_equal"
+label = "减号/等号 - ="
+[[items.options]]
+value = "brackets"
+label = "方括号 [ ]"
+[[items.options]]
+value = "shift_tab"
+label = "Shift+Tab / Tab"
+[[items.options]]
+value = "comma_period"
+label = "逗号/句号 , ."
+
+[[items]]
+key = "keys.select_char_keys"
+group = "keys"
+section = "候选操作"
+type = "checkbox_group"
+label = "以词定字"
+hint = "输入词组后按指定键只取第 1 或第 2 个字"
+[[items.options]]
+value = "comma_period"
+label = "逗号/句号 , ."
+[[items.options]]
+value = "minus_equal"
+label = "减号/等号 - ="
+[[items.options]]
+value = "brackets"
+label = "方括号 [ ]"
+
+# ── 按键行为 ──
+[[items]]
+key = "input.enter_behavior"
+group = "keys"
+section = "按键行为"
+type = "select"
+label = "回车键功能"
+hint = "有编码时按回车键的处理方式"
+options = [
+  { value = "commit", label = "上屏编码" },
+  { value = "clear", label = "清空编码" },
+]
+
+[[items]]
+key = "input.space_on_empty_behavior"
+group = "keys"
+section = "按键行为"
+type = "select"
+label = "空码时空格键功能"
+hint = "无候选词时按空格键的处理方式"
+options = [
+  { value = "commit", label = "上屏编码" },
+  { value = "clear", label = "清空编码" },
+]
+
+[[items]]
+key = "input.punct_on_empty_behavior"
+group = "keys"
+section = "按键行为"
+type = "select"
+label = "空码时标点键功能"
+hint = "无候选词时按标点符号键怎么处理编码；前两项标点本身照常上屏"
+options = [
+  { value = "commit", label = "上屏编码" },
+  { value = "clear", label = "清空编码" },
+  { value = "clear_no_input", label = "清空编码，标点也不上屏" },
+]
+
+[[items]]
+key = "input.buffer_symbol_chars"
+group = "keys"
+section = "按键行为"
+type = "string"
+label = "编码中可直接输入的符号"
+hint = "打 sun-panel 这类带连字符的英文时，这些符号直接进入编码；留空关闭。该键此刻另有功能时一般让位，边界见文档"
+
+[[items]]
+key = "input.numpad_behavior"
+group = "keys"
+section = "按键行为"
+type = "select"
+label = "数字小键盘功能"
+hint = "控制小键盘数字键的行为，选择「同主键盘区数字」后可用于候选选择和快捷输入"
+options = [
+  { value = "direct", label = "直接输入数字" },
+  { value = "follow_main", label = "同主键盘区数字" },
+]
+
+[[items]]
+key = "input.numpad_half_width"
+group = "keys"
+section = "按键行为"
+type = "toggle"
+label = "全角时小键盘半角输出"
+hint = "全角状态下小键盘的数字和符号使用半角输出"
+
+# 键不可配（能用的数字组合只剩 Alt），故本项同时是开关与内容选择。冲突处置见 core
+# docs/design/alt-commit.md：只在有候选时吃键，自定义按键里已绑的 Alt 组合优先。
+[[items]]
+key = "input.alt_commit"
+group = "keys"
+section = "按键行为"
+type = "select"
+label = "Alt+数字上屏注释/拼音"
+hint = "有候选时按 Alt+数字 上屏该候选的拼音或注释而不是候选字，Alt+空格 上屏首选的；没有可上屏的内容时什么都不做。自定义按键里已绑的 Alt 组合优先"
+width = 180
+options = [
+  { value = "off", label = "关闭" },
+  { value = "pinyin", label = "带调拼音" },
+  { value = "pinyin_plain", label = "不带调拼音" },
+  { value = "comment", label = "候选注释" },
+]
+
+# ── 候选无效按键 ──
+[[items]]
+key = "keys.overflow.number_key"
+group = "keys"
+section = "候选无效按键"
+type = "select"
+label = "数字键无效时"
+hint = "按的数字超出当前页候选数量时的处理方式；联想候选出来后按超出联想条数的数字，则固定为收起联想并输出该数字"
+options = [
+  { value = "ignore", label = "不起作用" },
+  { value = "commit", label = "上屏编码" },
+  { value = "commit_and_input", label = "上屏并继续输入" },
+  { value = "clear_and_input", label = "清空输入并上屏数字" },
+]
+
+[[items]]
+key = "keys.overflow.select_key"
+group = "keys"
+section = "候选无效按键"
+type = "select"
+label = "次选三选键无效时"
+hint = "候选数量不足时按次选或三选键的处理方式"
+options = [
+  { value = "ignore", label = "不起作用" },
+  { value = "commit", label = "上屏编码" },
+  { value = "commit_and_input", label = "上屏并继续输入" },
+]
+
+[[items]]
+key = "keys.overflow.select_char_key"
+group = "keys"
+section = "候选无效按键"
+type = "select"
+label = "以词定字键无效时"
+hint = "候选词长度不足时按以词定字键的处理方式"
+options = [
+  { value = "ignore", label = "不起作用" },
+  { value = "commit", label = "上屏编码" },
+  { value = "commit_and_input", label = "上屏并继续输入" },
+]
+
+[[items]]
+key = "keys.overflow.page_key"
+group = "keys"
+section = "候选无效按键"
+type = "select"
+label = "翻页键翻不动时"
+hint = "首页按上翻、末页按下翻时的处理方式。只对 - = , . [ ] 这类能出字的翻页键、且本批候选还没翻过页时生效；- 要先清空「编码中可直接输入的符号」才会生效"
+options = [
+  { value = "ignore", label = "不起作用" },
+  { value = "commit_and_input", label = "上屏并继续输入" },
+]
+
+# ── 自定义按键：两张表的完整逐键编辑入口 ──
+#
+# 与上面「候选操作」那四项勾选框的关系：那四项是**常用形态**（按组勾选），本节是**完整
+# 形态**（逐键指定）。两者在 core 侧合流——四项会被折算进 session_actions 同一张表，本表
+# 里显式配的键优先。故放在勾选项之后：先给常用的，再给需要时才展开的。
+#
+# ⚠️ 两项的分野**不是**「空闲时 vs 输入中」。`key_actions` 的三条通路（组合键热键、
+# 修饰键 keyup、单字符引导键）在输入中同样触发——「按 Shift 切中英文」走的正是第二条。
+# 真正的差别是：前者给键指定一个功能（进模式 / 切方案 / 切状态），后者**只**在有会话时
+# 生效、管的是对当前这段输入与候选的操作（翻页 / 选词 / 放弃）。同一个键在两张表里可以
+# 是两个动作（Tab 输入中翻页、没在输入时仍是宿主的制表符），所以是两张表。
+[[items]]
+key = "keys.key_actions"
+group = "keys"
+section = "自定义按键"
+type = "dialog_button"
+label = "全局自定义按键"
+hint = "为按键指定功能，如临时拼音、切换方案"
+
+[[items]]
+key = "keys.session_actions"
+group = "keys"
+section = "自定义按键"
+type = "dialog_button"
+label = "全局自定义输入中按键"
+hint = "指定按键在输入中的功能，如翻页、选择候选"
+
+# ── 功能快捷键（hotkey 控件：修饰键+主键编辑对话框；部分支持「全局」）──
+# 注：全局开关汇总写入 keys.global_hotkeys（strlist），不再有独立「全局热键」项。
+[[items]]
+key = "keys.switch_engine"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "切换输入方案"
+hint = "在已启用的输入方案间循环切换"
+
+[[items]]
+key = "keys.toggle_full_width"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "切换全角/半角"
+hint = "切换字符宽度模式"
+
+[[items]]
+key = "keys.toggle_punct"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "切换中/英文标点"
+hint = "切换标点符号类型"
+
+[[items]]
+key = "keys.toggle_s2t"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "切换简入繁出"
+hint = "开关简体输入→繁体输出（变体在「输入 → 简入繁出」中选择）"
+
+[[items]]
+key = "keys.toggle_t2s"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "切换繁入简出"
+hint = "开关繁体输入→简体输出。出厂不绑，点开设置一个组合键即可用"
+
+[[items]]
+key = "keys.toggle_toolbar"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "显示/隐藏工具栏"
+hint = "切换工具栏的显示状态"
+
+# 不设 global：softkeyboard 不在 build_global_hotkey_entries 的 supported 表里
+# （那 7 个动作都不需要按键上下文，而软键盘开启后要接管整个主键区）。
+[[items]]
+key = "keys.softkeyboard"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "显示/隐藏软键盘"
+hint = "开关软键盘面板；面板也可从工具栏与主菜单打开"
+
+[[items]]
+key = "keys.open_settings"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "打开设置"
+hint = "打开设置窗口"
+global = true
+
+[[items]]
+key = "keys.open_dictionary"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "打开词库管理"
+hint = "直接跳到设置窗口的词库管理页（当前方案域）。出厂不绑，点开设置一个组合键即可用"
+global = true
+
+# 截的是输入法自己的窗口（候选窗/工具栏/状态提示…），不是屏幕截图——label 与 hint
+# 都要说清，否则用户会当成系统截图工具去按。core 侧见 aurora-ui/manager.rs 的
+# `UiCommand::TakeScreenshot` 分支：逐个窗口存 PNG，候选窗那张顺带进剪贴板。
+[[items]]
+key = "keys.take_screenshot"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "截图输入法窗口"
+hint = "把候选窗、工具栏等输入法窗口存成图片（用户目录 screenshots 下），候选窗同时复制到剪贴板；反馈问题时用"
+global = true
+
+[[items]]
+key = "keys.add_word"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "快捷加词"
+hint = "快速将输入的内容加入用户词库"
+
+[[items]]
+key = "keys.open_add_word_dialog"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "打开加词界面"
+hint = "优先取剪贴板，为空时取最近输入，直接弹出加词窗口"
+
+[[items]]
+key = "keys.activate_ime"
+group = "keys"
+section = "功能快捷键"
+type = "hotkey"
+label = "切换到本输入法"
+hint = "在任意应用中一键切换到本输入法（Windows 只切当前应用，macOS 为系统级切换）"
+# 不设 global：两平台都不经 keys.global_hotkeys 这条路，该动作名不在
+# build_global_hotkey_entries 的 supported 表里。
+#   Windows：写 DirectSwitchHotkeys 注册表，由 ctfmon 原生处理（系统层面天然全局，且是
+#            per-app 切换——只改当前前台应用的输入法）。
+#   macOS：  无对应机制，由服务进程自己注册 Carbon 全局热键 + TISSelectInputSource。
+#            系统没有「只改这个 app」的公开 API，故只能全局切换——差异不可消除，
+#            上面的 hint 已如实写明。
+#   Linux：  无落点。协调器的 `activate_ime` 臂只在 target_os = "macos" 下编译，Linux 落进
+#            `Unhandled hotkey` 兜底；Fcitx5 的输入法切换归它自己的触发键管。
+platform = "windows, macos"
+
+# ═══════════════════════════ 外观 ═══════════════════════════
+# ── 主题（主题选择下拉：options_source=themes，显示主题名、保存 slug 到 ui.theme.name）──
+[[items]]
+key = "ui.theme.name"
+group = "ui"
+section = "主题"
+type = "select"
+options_source = "themes"
+label = "主题选择"
+hint = "候选窗与工具栏的主题样式"
+
+[[items]]
+key = "ui.theme.style"
+group = "ui"
+section = "主题"
+type = "select"
+label = "主题风格"
+hint = "选择亮色、暗色或跟随系统设置"
+options = [
+  { value = "system", label = "跟随系统" },
+  { value = "light", label = "浅色" },
+  { value = "dark", label = "深色" },
+]
+
+
+# ── 候选字体 ──
+# 原先字体、窗口、排版、注释四类共 28 项挤在一张「候选窗口」卡里（折叠掉两个对话框
+# 宿主后仍有 21 行），一屏装不下、也扫不出层次。按「改哪一维」拆成四张卡，manifest
+# 里的顺序即卡片顺序，故同一 section 的条目必须连续。
+[[items]]
+key = "ui.candidate.font_size"
+group = "ui"
+section = "候选字体"
+type = "number"
+label = "候选字号"
+hint = "候选词字体大小"
+min = 0
+max = 72
+# 跟随主题（R8.1）：不勾 = 落盘 0，勾选行显示主题当前字号。见 MItem::follow。
+follow = "theme"
+
+[[items]]
+key = "ui.font.family"
+group = "ui"
+section = "候选字体"
+type = "select"
+options_source = "fonts"
+label = "候选窗字体"
+hint = "候选窗全部文字的字体，设置后覆盖主题字体"
+follow = "theme"
+
+# 字重独立于字体：下拉列的是 DirectWrite 的字体家族名（不含字重），旧版列表里
+# 「思源宋体 SemiBold」这类带字重的名字由 core 解析兼容（论坛 t95）。
+[[items]]
+key = "ui.font.weight"
+group = "ui"
+section = "候选字体"
+type = "number_select"
+label = "候选窗字重"
+hint = "候选窗文字的粗细；字体没有该字重时取最接近的。主题里的普通粗细改用这里的值，主题加粗的地方（如选中项）取两者中更粗的"
+width = 160
+# 0 = 跟随主题，由勾选行表达，不再列成下拉的一档（存量配置里的 0 打开时即未勾选）。
+follow = "theme"
+options = [
+  { value = "100", label = "极细 100" },
+  { value = "200", label = "特细 200" },
+  { value = "300", label = "细 300" },
+  { value = "350", label = "半细 350" },
+  { value = "400", label = "常规 400" },
+  { value = "500", label = "中等 500" },
+  { value = "600", label = "半粗 600" },
+  { value = "700", label = "粗 700" },
+  { value = "800", label = "特粗 800" },
+  { value = "900", label = "黑 900" },
+]
+
+[[items]]
+key = "ui.font.fallback"
+group = "ui"
+section = "候选字体"
+type = "dialog_button"
+label = "字体回退顺序"
+hint = "候选窗字体缺某个字时，按此顺序找下一个字体；一行一个字体名，留空则由系统决定"
+
+[[items]]
+key = "ui.font.scripts"
+group = "ui"
+section = "候选字体"
+type = "dialog_button"
+label = "按文字类别指定字体"
+hint = "主字体不含某类文字、或那类字形不理想时，给它单独指定字体"
+
+# 注：ui.font.path（自定义字体文件）当前平台不支持，已隐藏（由 core 维持默认）。
+# 注：ui.font.render_mode（字体渲染方式）当前不支持，已移除（由 core 维持默认）。
+
+# ── 候选窗口（数量/显隐/位置/尺寸下限）──
+[[items]]
+key = "ui.candidate.per_page"
+group = "ui"
+section = "候选窗口"
+type = "number_select"
+label = "每页候选数"
+hint = "每页显示的候选词数量"
+width = 120
+options = [
+  { value = "2", label = "2" },
+  { value = "3", label = "3" },
+  { value = "4", label = "4" },
+  { value = "5", label = "5" },
+  { value = "6", label = "6" },
+  { value = "7", label = "7" },
+  { value = "8", label = "8" },
+  { value = "9", label = "9" },
+  { value = "10", label = "10" },
+]
+
+[[items]]
+key = "ui.candidate.per_page_extended"
+group = "ui"
+section = "候选窗口"
+type = "number_select"
+label = "扩展档每页候选数"
+hint = "临拼/快捷/短语等场景的每页候选数；0 = 与上面相同（关闭分档）"
+width = 180
+options = [
+  { value = "0", label = "0（与每页相同）" },
+  { value = "1", label = "1" },
+  { value = "2", label = "2" },
+  { value = "3", label = "3" },
+  { value = "4", label = "4" },
+  { value = "5", label = "5" },
+  { value = "6", label = "6" },
+  { value = "7", label = "7" },
+  { value = "8", label = "8" },
+  { value = "9", label = "9" },
+  { value = "10", label = "10" },
+]
+
+[[items]]
+key = "ui.candidate.hide_window"
+group = "ui"
+section = "候选窗口"
+type = "toggle"
+label = "隐藏候选窗"
+hint = "盲打/自动上屏场景不显示候选窗口；隐藏后仍可输入"
+
+[[items]]
+key = "ui.candidate.position_mode"
+group = "ui"
+section = "候选窗口"
+opens_dialog = "cand_position"
+type = "select"
+label = "定位方式"
+hint = "跟随光标=候选窗随输入位置移动；固定位置=停在屏幕固定处，不再随光标跑动。固定位置下直接拖动候选窗即可摆放，位置自动记住"
+options = [
+  { value = "follow_caret", label = "跟随光标" },
+  { value = "fixed", label = "固定位置" },
+]
+
+[[items]]
+key = "ui.candidate.offset_x"
+group = "ui"
+section = "候选窗口"
+dialog_group = "cand_position"
+type = "number"
+label = "水平偏移"
+hint = "在主题自带的定位基础上再微调候选窗的水平位置（正=向右）。仅「跟随光标」时生效"
+min = -400
+max = 400
+enabled_when = "ui.candidate.position_mode == follow_caret"
+
+[[items]]
+key = "ui.candidate.offset_y"
+group = "ui"
+section = "候选窗口"
+dialog_group = "cand_position"
+type = "number"
+label = "垂直偏移"
+hint = "在主题自带的定位基础上再微调候选窗与光标的距离（正=远离光标：在下方时向下、翻到上方时向上）。仅「跟随光标」时生效"
+min = -400
+max = 400
+enabled_when = "ui.candidate.position_mode == follow_caret"
+
+[[items]]
+key = "ui.candidate.first_show_mode"
+group = "ui"
+section = "候选窗口"
+subsection = "显示"
+dialog_hint = "首次显示时机、主题阴影、最小尺寸、双击截图"
+dialog_title = "候选窗口高级设置"
+type = "select"
+label = "首次显示时机"
+hint = "每串新输入的候选窗多快出现；应用给不出准确位置时，「快速」与「立即」会先按上次的位置显示。可在右键菜单里为单个应用单独设"
+options = [
+  { value = "fast", label = "快速显示" },
+  { value = "wait", label = "等待精确坐标（较慢）" },
+  { value = "instant", label = "立即显示（最快，可能抖动）" },
+]
+
+[[items]]
+key = "ui.candidate.shadow"
+group = "ui"
+section = "候选窗口"
+subsection = "显示"
+dialog_extra_for = "ui.candidate.first_show_mode"
+type = "select"
+label = "主题阴影"
+hint = "个别应用里候选窗周围出现多余的透明边、遮挡或显示异常时，可选「关闭」；关闭后窗口与内容等大，定位自动跟着调整，主题自带的位置偏移仍保留"
+platform = "windows"
+options = [
+  { value = "follow", label = "跟随主题" },
+  { value = "off", label = "关闭阴影" },
+]
+
+# 候选窗尺寸下限段：五项都是「窗口别缩得比这更小」的同一件事，且都不常改——摊在卡片上
+# 五行连排会把「每页候选数」「定位方式」这些天天要动的项挤没。故卡片上只占一行
+# 「候选窗口最小大小 …… [设置]」，五项全在对话框里（`dialog_title` 宿主 + `dialog_extra_for`
+# 寄居，见 manifest.rs 的 build_grouped_dialog_row）。
+#
+# 宿主取**横排最小宽度**：它是对话框里第一个字段，也是最常配的一项——横排候选窗随候选
+# 字数忽宽忽窄，"宽度别再跳"是这组设置最主要的用途。
+#
+# 下限量的是整个窗口（含翻页栏、编码栏），候选照常紧凑排列、凑不满的部分留空。
+# 横排/竖排各配一套——两种排布的可用空间差一个数量级。
+[[items]]
+key = "ui.candidate.min_window_width_horizontal"
+group = "ui"
+section = "候选窗口"
+subsection = "最小尺寸"
+dialog_extra_for = "ui.candidate.first_show_mode"
+type = "number"
+label = "横排最小宽度（dp）"
+hint = "窗口不足此宽时右侧留空，候选本身不拉伸；0 = 不限，跟随内容"
+min = 0
+max = 1200
+# 单位「（dp）」写进 label 而不是 hint：对话框只有 460 宽，hint 会被截成一行（截断处
+# 有 tooltip 兜底看全文），单位藏在截断后面等于没写——而不知道填的是像素还是字数，
+# 这一格根本没法填。清单的 `unit` 字段目前无人消费（见 manifest.rs 的 MItem::unit）。
+
+[[items]]
+key = "ui.candidate.min_window_width_vertical"
+group = "ui"
+section = "候选窗口"
+subsection = "最小尺寸"
+type = "number"
+label = "竖排最小宽度（dp）"
+hint = "窗口不足此宽时右侧留空，候选高亮跟随窗口铺满；0 = 不限，跟随内容"
+min = 0
+max = 1200
+dialog_extra_for = "ui.candidate.first_show_mode"
+
+[[items]]
+key = "ui.candidate.min_window_height_horizontal"
+group = "ui"
+section = "候选窗口"
+subsection = "最小尺寸"
+type = "number"
+label = "横排最小高度（dp）"
+hint = "窗口不足此高时留空；窗口在光标上方时空白补在顶部；0 = 不限，跟随内容"
+min = 0
+max = 1200
+dialog_extra_for = "ui.candidate.first_show_mode"
+
+[[items]]
+key = "ui.candidate.min_window_height_vertical"
+group = "ui"
+section = "候选窗口"
+subsection = "最小尺寸"
+type = "number"
+label = "竖排最小高度（dp）"
+hint = "窗口不足此高时留空，翻页栏的出现消失一并吸收；0 = 不限，跟随内容"
+min = 0
+max = 1200
+dialog_extra_for = "ui.candidate.first_show_mode"
+
+[[items]]
+key = "ui.candidate.min_rows"
+group = "ui"
+section = "候选窗口"
+subsection = "最小尺寸"
+type = "number"
+label = "竖排最小行数"
+hint = "候选数不足时补透明空行以保持候选区高度；自动钳到每页候选数；0 = 不限。仅竖排生效"
+min = 0
+max = 9
+dialog_extra_for = "ui.candidate.first_show_mode"
+
+# 只认空白处（编码栏 / 内边距）：候选项按下即选词上屏、候选窗随之消失，落不到第二下。
+# macOS 候选窗由 .app 自绘，没有接这条鼠标交互，故限 Windows。
+[[items]]
+key = "ui.candidate.double_click_screenshot"
+group = "ui"
+section = "候选窗口"
+subsection = "其它"
+dialog_extra_for = "ui.candidate.first_show_mode"
+type = "toggle"
+label = "双击候选窗截图"
+hint = "双击候选窗的编码栏或空白处，把候选窗当前画面复制到剪贴板；点候选词仍是选词"
+platform = "windows"
+
+# ── 候选排版（编码栏位置、横竖排、上方时的顺序）──
+[[items]]
+key = "ui.candidate.preedit_display"
+group = "ui"
+section = "候选排版"
+type = "select"
+label = "编码显示方式"
+hint = "编码（组合区）的显示位置；「内嵌应用光标处」时候选窗不显示编码栏，另两种依赖候选窗、在全屏游戏等宿主自绘候选的场合自动按内嵌显示"
+options = [
+  { value = "app_inline", label = "内嵌应用光标处" },
+  { value = "candidate_top", label = "候选窗顶部独立栏" },
+  { value = "candidate_inline", label = "候选窗首单元内联" },
+]
+
+[[items]]
+key = "ui.candidate.layout"
+group = "ui"
+section = "候选排版"
+type = "segmented"
+label = "候选窗排列"
+hint = "候选词的排列方式"
+[[items.options]]
+value = "horizontal"
+label = "横排"
+[[items.options]]
+value = "vertical"
+label = "竖排"
+
+[[items]]
+key = "ui.candidate.max_chars"
+group = "ui"
+section = "候选排版"
+type = "number"
+label = "候选文本最大字数"
+hint = "候选文本超过此字数时截断并追加省略号；0 = 不限。只管候选词本身，注释的字数上限在下方「候选注释」的设置里"
+min = 0
+max = 64
+
+# 展开候选（卷轴）：开关排在「候选排版」高级设置之上，细节进它自己的对话框并随它置灰。
+# 核心设计见 core 仓 docs/design/candidate-grid-expand.md。
+[[items]]
+key = "ui.candidate.grid_expand"
+group = "ui"
+section = "候选排版"
+opens_dialog = "grid"
+type = "toggle"
+label = "翻页时展开候选"
+hint = "候选多于一页时，按翻页键把候选窗原地展开成多行，一行就是一页；方向键在各行间移动，数字键选高亮行，Esc 先收起。仅横排生效"
+
+[[items]]
+key = "ui.candidate.grid_rows"
+group = "ui"
+section = "候选排版"
+dialog_group = "grid"
+type = "number"
+label = "可见行数"
+hint = "展开后一屏显示几行，PageUp/PageDown 翻整屏时一次滚动这么多行"
+enabled_when = "ui.candidate.grid_expand == true"
+min = 2
+max = 10
+
+[[items]]
+key = "ui.candidate.grid_cell_max_chars"
+group = "ui"
+section = "候选排版"
+dialog_group = "grid"
+type = "number"
+label = "每格最多字数"
+hint = "展开后各列对齐，长词会撑宽整列，超出部分以省略号截断，悬停提示里可看全文；0 = 只受「候选文本最大字数」约束"
+enabled_when = "ui.candidate.grid_expand == true"
+min = 0
+max = 64
+
+[[items]]
+key = "ui.candidate.grid_index_fill"
+group = "ui"
+section = "候选排版"
+dialog_group = "grid"
+type = "select"
+label = "序号顺延"
+hint = "一行用不完 1~0 十个数字键时，序号怎么往下一行顺延；数字键跟着序号选"
+enabled_when = "ui.candidate.grid_expand == true"
+options = [
+  { value = "rows", label = "只补整行" },
+  { value = "cells", label = "逐格编满十个" },
+  { value = "off", label = "只编高亮行" },
+]
+
+[[items]]
+key = "ui.candidate.grid_pageupdown_screen"
+group = "ui"
+section = "候选排版"
+dialog_group = "grid"
+type = "toggle"
+label = "PageUp/PageDown 翻整屏"
+hint = "其余翻页键（如 -=）逐行移动"
+enabled_when = "ui.candidate.grid_expand == true"
+
+[[items]]
+key = "ui.candidate.grid_categories"
+group = "ui"
+section = "候选排版"
+dialog_group = "grid"
+type = "checkbox_group"
+label = "分类标签"
+hint = "展开后在候选下方（与翻页箭头同一行）显示的分类，按 Tab / Shift+Tab 或点击切换；只有当前候选里有这一类时才出现，「生僻」按常用字表划分；勾选不足两个时不显示标签栏"
+enabled_when = "ui.candidate.grid_expand == true"
+[[items.options]]
+value = "all"
+label = "全部"
+[[items.options]]
+value = "single"
+label = "单字"
+[[items.options]]
+value = "phrase"
+label = "词组"
+[[items.options]]
+value = "rare"
+label = "生僻"
+[[items.options]]
+value = "symbol"
+label = "符号"
+
+[[items]]
+key = "ui.candidate.flip_when_above"
+group = "ui"
+section = "候选排版"
+subsection = "候选窗在光标上方时"
+dialog_hint = "候选窗在光标上方时的排列、翻页栏与页码"
+dialog_title = "候选排版高级设置"
+type = "toggle"
+label = "反转候选顺序"
+hint = "候选窗显示在光标上方时，反转候选项的排列顺序（使第一候选靠近光标）；可与「编码栏置底」叠加。仅竖排 +「跟随光标」定位下生效"
+
+[[items]]
+key = "ui.candidate.swap_preedit_when_above"
+group = "ui"
+section = "候选排版"
+subsection = "候选窗在光标上方时"
+dialog_extra_for = "ui.candidate.flip_when_above"
+type = "toggle"
+label = "编码栏置底"
+hint = "候选窗显示在光标上方时，将编码栏与候选栏上下调换，使编码栏沉到底部贴近光标。仅「跟随光标」定位下生效"
+
+[[items]]
+key = "ui.candidate.pager_in_preedit"
+group = "ui"
+section = "候选排版"
+subsection = "翻页栏"
+dialog_extra_for = "ui.candidate.flip_when_above"
+type = "toggle"
+label = "并入编码栏"
+hint = "将翻页栏右对齐显示在编码所在行（竖排可省一行）；「编码显示方式」取「候选窗顶部独立栏」或「候选窗首单元内联」时均生效，横排下无影响"
+
+[[items]]
+key = "ui.candidate.pager_bar_display"
+group = "ui"
+section = "候选排版"
+subsection = "翻页栏"
+dialog_extra_for = "ui.candidate.flip_when_above"
+type = "select_by_layout"
+label = "翻页栏显示"
+hint = "覆盖主题配置中翻页栏的显示方式；隐藏时整个翻页栏（含箭头）不渲染。横排、竖排可分别设——横排的翻页栏要挤占候选共享的那一行，竖排多一行代价小"
+# 加宽到装得下最长的跟随档「跟随主题（大于一页时显示）」，200 会折成两行。
+width = 232
+# 空值档 = 跟随主题（R8.2），渲染时文案换成「跟随主题（当前主题的档位）」。
+follow = "theme"
+options = [
+  { value = "", label = "跟随主题" },
+  { value = "hide", label = "隐藏" },
+  { value = "auto", label = "大于一页时显示" },
+  { value = "always", label = "总是显示" },
+]
+
+[[items]]
+key = "ui.candidate.page_number_display"
+group = "ui"
+section = "候选排版"
+subsection = "翻页栏"
+dialog_extra_for = "ui.candidate.flip_when_above"
+type = "select_by_layout"
+label = "显示页码"
+hint = "翻页栏可见时，是否显示页码文字；横排、竖排可分别设"
+# 与翻页栏同宽，两行的横 / 竖下拉上下对齐。
+width = 232
+follow = "theme"
+options = [
+  { value = "", label = "跟随主题" },
+  { value = "show", label = "显示" },
+  { value = "hide", label = "隐藏" },
+]
+
+# ── 候选标注（附在候选项上的文字：注释、序号、命令前缀）──
+# 总开关置于卡片首行，只有「候选注释」（模板对话框）随它置灰。不挂的：
+# - 序号标签、命令栏前缀：与注释无关；
+# - 「自动使用词库自带的注释」「注释词库」：它们供 `${dict}` 查询，悬停提示的段也用
+#   （设置端自带的「词库注释」悬停预设就是），而 enabled_when 表达不了
+#   「注释开 或 悬停开」这种或条件——挂上只看注释开关，会在悬停仍要用时把它们误置灰。
+[[items]]
+key = "ui.candidate.comment_enabled"
+group = "ui"
+section = "候选标注"
+type = "toggle"
+label = "显示候选注释"
+hint = "候选词右侧的编码、注音等小字；用不到可关掉以省内存"
+
+# 候选注释段（候选右侧的小字）：卡片上只占一行「候选注释 …… [设置]」，三个字段与模板参考
+# 全在对话框里（专用 builder，见 manifest.rs 的 COMMENT_HOST_KEY）。
+# 宿主取**横排**模板：它是对话框里第一个出现的字段，而横排宽度由全部候选共享、最需斟酌。
+# 卡片行的 hint 保持一句话——模板语法属于对话框里的事，摊在卡片上没人看得完。
+[[items]]
+key = "ui.candidate.comment_template_horizontal"
+group = "ui"
+section = "候选标注"
+gate_key = "ui.candidate.comment_enabled"
+gate_soft = true
+type = "dialog_button"
+label = "候选注释"
+hint = "候选词右侧小字的内容与最大字数，横排、竖排可分别设置"
+
+[[items]]
+key = "ui.candidate.comment_template_vertical"
+group = "ui"
+section = "候选标注"
+type = "string"
+label = "竖排注释"
+hint = "竖排候选窗每行独占一行，可放较长的注音或字根；换行写 \\n"
+dialog_extra_for = "ui.candidate.comment_template_horizontal"
+
+[[items]]
+key = "ui.candidate.comment_above"
+group = "ui"
+section = "候选标注"
+type = "toggle"
+label = "注释首行显示在候选上方"
+hint = "开启后，模板里第一个换行（\\n）之前的内容显示在候选上方一行，其余仍在候选右侧；换行要写在 { … } 之外。"
+dialog_extra_for = "ui.candidate.comment_template_horizontal"
+
+[[items]]
+key = "ui.candidate.comment_max_chars_horizontal"
+group = "ui"
+section = "候选标注"
+type = "number"
+label = "横排最大字数"
+hint = "超过此字数时截断并加省略号；0 = 不限"
+min = 0
+max = 64
+dialog_extra_for = "ui.candidate.comment_template_horizontal"
+
+[[items]]
+key = "ui.candidate.comment_max_chars_vertical"
+group = "ui"
+section = "候选标注"
+type = "number"
+label = "竖排最大字数"
+hint = "竖排每行独占，通常可比横排放宽；0 = 不限（行宽放不下时注释仍会截断，先保候选词完整）"
+min = 0
+max = 64
+dialog_extra_for = "ui.candidate.comment_template_horizontal"
+
+[[items]]
+key = "ui.candidate.auto_comment_dicts"
+group = "ui"
+section = "候选标注"
+type = "toggle"
+label = "自动使用词库自带的注释"
+hint = "词库声明 comment 列时将其作为 ${dict} 的查询源，供注释模板与悬停提示使用；可在「注释词库」中单独启停与排序"
+
+[[items]]
+key = "ui.comment_dicts"
+group = "ui"
+section = "候选标注"
+type = "dialog_button_comment_dicts"
+label = "注释词库"
+hint = "供注释模板与悬停提示中的 ${dict} 变量查询；词库文件放在 schemas/comments/ 下"
+
+[[items]]
+key = "ui.candidate.index_labels"
+group = "ui"
+section = "候选标注"
+type = "dialog_button"
+label = "自定义序号标签"
+hint = "为序号 1-10 自定义标签（每框一个完整标签，可多字符）；在对话框中逐框填写，留空用默认 1-9"
+
+# 注：ui.candidate.custom_x / custom_y（固定位置坐标）刻意不在此暴露——与 ui.status 同一决策：
+# 固定位置由「拖动候选窗」直接设定并自动落盘，手填屏幕绝对坐标既不直观、又与拖动结果互相覆盖。
+# 主流输入法（搜狗、Google 拼音）同样只提供「是否跟随光标」开关，不提供坐标输入。
+# 尚未拖动过时（坐标为 0,0）候选窗落在屏幕下方居中的默认锚点。配置键仍在 config.toml 中保留。
+
+# 注：input.cmdbar.enabled（命令栏开关）不在设置端暴露——命令栏始终开启（core 默认 true），
+# 不提供关闭入口；故仅保留前缀配置。
+[[items]]
+key = "input.cmdbar.candidate_prefix"
+group = "ui"
+section = "候选标注"
+type = "string"
+label = "命令栏候选前缀"
+hint = "命令候选前的提示符号"
+
+# ── 候选项提示 ──
+# 总开关置于卡片首行，其余各行随它置灰。
+[[items]]
+key = "ui.tooltip.enabled"
+group = "ui"
+section = "候选项提示"
+opens_dialog = "tooltip"
+type = "toggle"
+label = "悬停提示"
+hint = "鼠标停在候选上时弹出的编码、拼音等提示；用不到可关掉以省内存"
+
+[[items]]
+key = "ui.tooltip.delay"
+group = "ui"
+section = "候选项提示"
+dialog_group = "tooltip"
+type = "number"
+label = "悬停延时"
+hint = "鼠标停留在候选上多久后弹出提示框（毫秒）；越大越不易误触"
+enabled_when = "ui.tooltip.enabled == true"
+min = 0
+max = 2000
+step = 50
+unit = "ms"
+
+# 提示内容：有序段列表（StructList），每段 = 段名 + 内容模板，整表读写走专用对话框。
+# 取代了旧的 code_enabled / pinyin_enabled / pinyin_heteronyms / pinyin_max_readings /
+# chaizi_enabled / debug_enabled 六个开关（core 加载时迁移，设计见 core 仓
+# docs/design/candidate-tooltip-sections.md）。
+[[items]]
+key = "ui.tooltip.sections"
+group = "ui"
+section = "候选项提示"
+type = "dialog_button_tooltip_sections"
+indent = false
+label = "提示内容"
+hint = "悬停提示由若干段自上而下组成，每段可启停、排序、改写内容，或按预设添加"
+enabled_when = "ui.tooltip.enabled == true"
+
+[[items]]
+key = "ui.tooltip.max_chars"
+group = "ui"
+section = "候选项提示"
+dialog_group = "tooltip"
+type = "number"
+label = "单行最大字数"
+hint = "超出部分以省略号截断；0 = 不限。复制、上屏取的仍是完整内容。只管悬停提示，候选右侧注释的字数在「外观 → 候选注释」里设"
+min = 0
+max = 2000
+step = 10
+enabled_when = "ui.tooltip.enabled == true"
+
+[[items]]
+key = "ui.tooltip.wrap_width"
+group = "ui"
+section = "候选项提示"
+dialog_group = "tooltip"
+type = "number"
+label = "折行宽度"
+hint = "一行超过这个宽度就换行，汉字计 2、字母计 1；0 = 不折行"
+min = 0
+max = 200
+step = 2
+enabled_when = "ui.tooltip.enabled == true"
+
+# ── 状态提示（行为/位置类；纯视觉如颜色/字号/透明度/圆角由主题 theme.toml 处理，不在此）──
+[[items]]
+key = "ui.status.enabled"
+group = "ui"
+section = "状态提示"
+opens_dialog = "status"
+type = "toggle"
+label = "状态提示气泡"
+hint = "切换输入状态时显示提示气泡"
+
+# ── 模式指示 ──
+[[items]]
+key = "ui.mode_indicator.style"
+group = "ui"
+section = "状态提示"
+type = "select"
+label = "模式指示样式"
+hint = "进入临拼/双拼/快符/英文等模式时的标识；短称即 拼/双/快/英/符"
+options = [
+  { value = "short", label = "短称" },
+  { value = "full", label = "全称" },
+  { value = "none", label = "不显示" },
+]
+
+[[items]]
+key = "ui.status.display_mode"
+group = "ui"
+section = "状态提示"
+subsection = "显示"
+dialog_group = "status"
+type = "select"
+label = "显示模式"
+hint = "临时显示在切换时闪现后自动消失，常驻显示在有输入焦点时始终显示；右键气泡可快速切换"
+enabled_when = "ui.status.enabled == true"
+options = [
+  { value = "temp", label = "临时显示" },
+  { value = "always", label = "常驻显示" },
+]
+
+[[items]]
+key = "ui.status.show_on_focus"
+group = "ui"
+section = "状态提示"
+subsection = "显示"
+dialog_group = "status"
+type = "toggle"
+label = "焦点切换时显示"
+hint = "切换到别的输入框时也提示一次当前状态；跟随光标定位下，取不到精确插入点的应用不显示，避免弹在错误位置"
+# 常驻显示本就在获焦时显示，此项对它没有额外效果，故仅在临时显示下可用（与「显示时长」同条件）。
+enabled_when = "ui.status.enabled == true && ui.status.display_mode == temp"
+
+[[items]]
+key = "ui.status.duration"
+group = "ui"
+section = "状态提示"
+subsection = "显示"
+dialog_group = "status"
+type = "number"
+label = "显示时长"
+hint = "气泡停留时间；鼠标悬停、拖动或打开右键菜单期间会顺延，不会中途消失"
+min = 0
+max = 5000
+unit = "ms"
+enabled_when = "ui.status.enabled == true && ui.status.display_mode == temp"
+
+[[items]]
+key = "ui.status.items"
+group = "ui"
+section = "状态提示"
+subsection = "显示"
+dialog_group = "status"
+type = "checkbox_group"
+label = "显示内容"
+hint = "勾选状态气泡里显示哪些内容；全部取消则不显示气泡"
+enabled_when = "ui.status.enabled == true"
+[[items.options]]
+value = "schema"
+label = "输入方案"
+[[items.options]]
+value = "punct"
+label = "标点状态"
+[[items.options]]
+value = "full_width"
+label = "全半角状态"
+[[items.options]]
+value = "s2t"
+label = "简繁状态"
+[[items.options]]
+value = "caps"
+label = "大写锁定"
+
+[[items]]
+key = "ui.status.schema_name_style"
+group = "ui"
+section = "状态提示"
+subsection = "显示"
+dialog_group = "status"
+type = "select"
+label = "方案名显示样式"
+hint = "上方勾选「输入方案」后生效；图标短称取方案 icon_label，无则回退全名"
+enabled_when = "ui.status.enabled == true && ui.status.items contains schema"
+options = [
+  { value = "full", label = "全名" },
+  { value = "short", label = "图标短称" },
+]
+
+[[items]]
+key = "ui.status.position_mode"
+group = "ui"
+section = "状态提示"
+subsection = "位置"
+dialog_group = "status"
+type = "select"
+label = "定位方式"
+hint = "固定位置下可直接拖动气泡摆放，右键气泡可切换定位方式或恢复默认位置"
+enabled_when = "ui.status.enabled == true"
+options = [
+  { value = "follow_caret", label = "跟随光标" },
+  { value = "fixed", label = "固定位置" },
+  { value = "screen_center", label = "屏幕中央" },
+  { value = "screen_top_left", label = "屏幕左上角" },
+  { value = "screen_top_right", label = "屏幕右上角" },
+  { value = "screen_bottom_left", label = "屏幕左下角" },
+  { value = "screen_bottom_right", label = "屏幕右下角" },
+  { value = "window_center", label = "窗口中央" },
+  { value = "window_bottom_left", label = "窗口左下角" },
+]
+
+# 锚点文案与 core 右键菜单「应用独立配置 → 状态提示位置」逐字一致（handle_menu.rs 的
+# status_anchor_label）。「屏幕」= 当前窗口所在显示器，「窗口」= 当前窗口的边框。
+[[items]]
+key = "ui.status.fallback_position"
+group = "ui"
+section = "状态提示"
+subsection = "位置"
+dialog_group = "status"
+type = "select"
+label = "坐标不可用时"
+hint = "仅在「跟随光标」下生效：应用报不出光标位置（如部分设计软件）时气泡显示在哪里；「上次位置」即最近一次拿到光标的地方"
+enabled_when = "ui.status.enabled == true && ui.status.position_mode == follow_caret"
+options = [
+  { value = "last", label = "上次位置" },
+  { value = "hide", label = "不显示" },
+  { value = "screen_center", label = "屏幕中央" },
+  { value = "screen_top_left", label = "屏幕左上角" },
+  { value = "screen_top_right", label = "屏幕右上角" },
+  { value = "screen_bottom_left", label = "屏幕左下角" },
+  { value = "screen_bottom_right", label = "屏幕右下角" },
+  { value = "window_center", label = "窗口中央" },
+  { value = "window_bottom_left", label = "窗口左下角" },
+]
+
+[[items]]
+key = "ui.status.offset_x"
+group = "ui"
+section = "状态提示"
+subsection = "位置"
+type = "number"
+label = "水平偏移"
+hint = "相对光标下方（左边缘对齐光标）的水平偏移（像素，正=右）"
+min = -400
+max = 400
+enabled_when = "ui.status.position_mode == follow_caret"
+dialog_group = "status"
+
+[[items]]
+key = "ui.status.offset_y"
+group = "ui"
+section = "状态提示"
+subsection = "位置"
+type = "number"
+label = "垂直偏移"
+hint = "相对光标下方的垂直偏移（像素，正=下）"
+min = -400
+max = 400
+enabled_when = "ui.status.position_mode == follow_caret"
+dialog_group = "status"
+
+# 注：ui.status.custom_x / custom_y（固定位置坐标）刻意不在此暴露——固定位置由「拖动气泡」
+# 直接设定，右键菜单「固定位置」开关会以气泡当前实际位置落盘，「恢复默认位置」可复位。
+# 让用户手填屏幕绝对坐标既不直观、又与拖动结果互相覆盖。配置键本身仍在 config.toml 中保留。
+
+# ── 工具栏 ──
+[[items]]
+key = "ui.toolbar.visible"
+group = "ui"
+section = "工具栏"
+type = "toggle"
+label = "显示工具栏"
+# 文案刻意写成平台中立：本项在 Windows 上控制可拖动的浮动工具栏，在 macOS 上控制
+# 菜单栏指示器——两者形态不同但语义一致（“输入法的常驻状态显示”），故不提“可拖动”
+# 之类只在一边成立的描述。清单当前不支持分平台文案，写通用的即可。
+hint = "常驻显示输入法当前状态（中英、全半角、标点、方案）"
+
+[[items]]
+key = "ui.toolbar.vertical"
+group = "ui"
+section = "工具栏"
+type = "toggle"
+label = "纵向排列"
+hint = "工具栏竖着摆放；适合把它靠在屏幕左右两侧"
+platform = "windows, linux"
+
+# 带 platform = "windows, linux" 的几项：macOS 用菜单栏指示器，既不是浮动窗口也无法排列/自动隐藏。
+# （ui.toolbar.visible 不在此列——它在 macOS 上控制指示器的显示与否，是有落点的。）
+# fullscreen_watch 仍只限 windows：它开关的是 Windows 的定时轮询，Linux 没有对应机制。
+[[items]]
+key = "ui.toolbar.hide_in_fullscreen"
+group = "ui"
+section = "工具栏"
+dialog_hint = "全屏时、英文状态时或闲置一段时间后隐藏工具栏"
+dialog_title = "自动隐藏"
+type = "toggle"
+label = "全屏时隐藏工具栏"
+hint = "当前台应用进入全屏（游戏、视频、演示等）时自动隐藏工具栏。Linux 的 Wayland 会话拿不到前台全屏状态，只是把工具栏放在全屏应用之下，效果是近似的"
+platform = "windows, linux"
+
+# 受 hide_in_fullscreen 门控：那项关着时「怎么发现全屏」无从谈起。引用同卡片内的 key，
+# 渲染上自动成为它的从属行。
+[[items]]
+key = "ui.toolbar.fullscreen_watch"
+group = "ui"
+section = "工具栏"
+dialog_extra_for = "ui.toolbar.hide_in_fullscreen"
+type = "toggle"
+label = "主动检测全屏状态"
+hint = "定期主动查询前台是否全屏。关掉后，像在输入框里按 F11 这种不伴随焦点切换的全屏，输入法收不到通知，工具栏不会自动隐藏"
+enabled_when = "ui.toolbar.hide_in_fullscreen == true"
+platform = "windows"
+
+# 论坛 t167。「英文状态」= 中英切到英文；临时英文 / 大写锁定仍算中文态。
+[[items]]
+key = "ui.toolbar.hide_in_english"
+group = "ui"
+section = "工具栏"
+dialog_extra_for = "ui.toolbar.hide_in_fullscreen"
+type = "toggle"
+label = "英文状态时隐藏工具栏"
+hint = "切换到英文时隐藏工具栏，切回中文即重新显示"
+platform = "windows, linux"
+
+# 显示哪些格 + 顺序。用 ordered_pairs 而非 checkbox_group：core 侧**数组顺序即渲染顺序**，
+# 而 checkbox_group 恒按声明序写回，会静默改写用户拖出来的顺序（config-design-rules §R3）。
+# value = core 的条目键，声明序 = 出厂顺序，须与主仓 TOOLBAR_ITEM_KEYS 一致。
+[[items]]
+key = "ui.toolbar.items"
+group = "ui"
+section = "工具栏"
+type = "dialog_button_ordered_pairs"
+label = "显示内容"
+hint = "工具栏上显示哪些内容、按什么顺序；按住行首手柄上下拖动即可调整"
+platform = "windows, linux"
+options = [
+  { value = "mode", label = "中英 / 方案", hint = "显示当前是中文还是英文，中文时显示方案标签（拼、五等）；点击切换中英，右键选方案，中键切换到下一个方案" },
+  { value = "punct", label = "标点", hint = "中文标点还是英文标点；点击切换，右键可一并调整全半角与简繁" },
+  { value = "full_width", label = "全 / 半角", hint = "满月＝全角、弯月＝半角；点击切换，右键可一并调整标点与简繁" },
+  { value = "s2t", label = "简 / 繁", hint = "简入繁出的开关，点击切换；出厂关着" },
+  { value = "t2s", label = "繁 → 简", hint = "繁入简出的开关，点击切换；格里恒显「简」，亮起表示正在转换。出厂关着" },
+  { value = "soft_keyboard", label = "软键盘", hint = "键盘按钮，点击开关软键盘面板；右键可直接选一种键盘" },
+  { value = "settings", label = "设置", hint = "齿轮按钮，点击打开功能菜单。隐藏它也不影响使用——右键工具栏任意位置同样能打开菜单" },
+]
+
+[[items]]
+key = "ui.toolbar.auto_hide"
+group = "ui"
+section = "工具栏"
+dialog_extra_for = "ui.toolbar.hide_in_fullscreen"
+type = "toggle"
+label = "自动隐藏工具栏"
+hint = "工具栏显示一段时间无交互后淡出隐藏；鼠标悬停不隐藏，切换中英等状态变化时重新显示"
+platform = "windows, linux"
+
+[[items]]
+key = "ui.toolbar.auto_hide_delay"
+group = "ui"
+section = "工具栏"
+dialog_extra_for = "ui.toolbar.hide_in_fullscreen"
+type = "number"
+label = "自动隐藏延时"
+hint = "工具栏显示多久后开始淡出（秒）"
+min = 1
+max = 60
+unit = "s"
+enabled_when = "ui.toolbar.auto_hide == true"
+platform = "windows, linux"
+
+# 论坛 t167「假隐藏」：淡出后窗口仍留在原位（几乎透明、可命中），悬停即唤回。
+[[items]]
+key = "ui.toolbar.auto_hide_hover_reveal"
+group = "ui"
+section = "工具栏"
+dialog_extra_for = "ui.toolbar.hide_in_fullscreen"
+type = "toggle"
+label = "悬停原位时重新显示"
+hint = "隐藏后工具栏仍占着原来的位置，鼠标移过去就重新显示、移开后再次淡出；关掉则彻底隐藏，只在切换中英等状态变化时出现"
+enabled_when = "ui.toolbar.auto_hide == true"
+platform = "windows, linux"
+
+# 非中文态的模式主字。中文态的主字不在这里——它是**方案**的属性（方案文件 [schema]
+# icon_label），一个全局项表达不了「每个方案各显示什么」。
+#
+# 出厂「英」既给英文半角态、也是英文方案的标签，两者只靠颜色区分，辨识度不高；
+# 把半角态改成 En 之类即可拉开距离（论坛 #154）。
+[[items]]
+key = "ui.labels.english"
+group = "ui"
+section = "工具栏"
+dialog_hint = "英文半角、大写锁定时工具栏上显示的字"
+dialog_title = "状态主字"
+type = "string"
+label = "英文半角主字"
+hint = "左右 Shift 切出的英文半角态，在工具栏（Windows 上还有任务栏图标）显示的字；最多 2 个字符，留空用「英」"
+platform = "windows, linux"
+
+[[items]]
+key = "ui.labels.caps_lock"
+group = "ui"
+section = "工具栏"
+dialog_extra_for = "ui.labels.english"
+type = "string"
+label = "大写锁定主字"
+hint = "大写锁定打开时显示的字；最多 2 个字符，留空用「A」"
+platform = "windows, linux"
+
+# 宿主行 = 角标总开关下拉 + 「设置…」按钮，尺寸与不透明度进分组对话框；
+# 规则表另起一行（它自己就是个带增删的列表，塞不进分组对话框）。
+# 宿主行必须带一个值控件（build_dialog_group_row 恒调 build_control），做不出纯标签+按钮
+# 的行；总开关是这组里最常改的一项，故由它当宿主。
+[[items]]
+key = "ui.langbar.badge"
+group = "ui"
+section = "任务栏图标"
+type = "select"
+label = "状态角标"
+hint = "在任务栏图标的角上叠加状态标记；关掉则全不显示"
+options = [
+  { value = "none", label = "不显示" },
+  { value = "corner", label = "角标" },
+]
+opens_dialog = "langbar_badge"
+platform = "windows"
+
+[[items]]
+key = "ui.langbar.badge_scale"
+group = "ui"
+section = "任务栏图标"
+type = "slider"
+label = "角标大小"
+hint = "所有角标的大小倍率；单条可在规则里再调"
+min = 0.1
+max = 3.0
+step = 0.1
+dialog_group = "langbar_badge"
+platform = "windows"
+
+# 步长 0.02 而不是 0.05 / 0.1：出厂值 0.88 必须落在格子上（0.3 + 0.02×29），
+# 否则从默认值点一下就跳到一个"回不去"的值。
+# ⚠️ hint 必须一行装得下（约 24 字），超出会被省略号截掉——而末端 1.0 的跳变
+# （变实心并挖字）正是调之前必须知道的一句，被截等于没写。
+[[items]]
+key = "ui.langbar.badge_alpha"
+group = "ui"
+section = "任务栏图标"
+type = "slider"
+label = "角标透明度"
+hint = "越小越透；调到 1 变实心，并挖掉周围一圈主字"
+min = 0.3
+max = 1.0
+step = 0.02
+dialog_group = "langbar_badge"
+platform = "windows"
+
+[[items]]
+key = "ui.langbar.badges"
+group = "ui"
+section = "任务栏图标"
+type = "dialog_button_langbar_badges"
+indent = false
+label = "角标规则"
+hint = "哪些状态画角标、画在哪个角、什么颜色"
+enabled_when = "ui.langbar.badge != none"
+platform = "windows"
+
+# 任务栏图标主字颜色：用户值 > 主题值 > 内置（浅黑深白），四格各自回落（R3「外观覆盖主题」）。
+# 卡片一行（四枚缩略色样 + [设置]），对话框里 2×2 取色（auroraui color_picker，带透明度）。
+# 宿主挂在 cn_light 上，另外三键**没有自己的清单项**，登记在 capabilities.rs 的
+# UNCOVERED_BY_DESIGN（与 `ui.toolbar.buttons` 同一先例：同一对话框一并读写）。不用
+# R6 那两种折叠机制：「宿主行 + 附属对话框」要一个带值控件当宿主，而这组四键平级，
+# 硬挑一格放卡片上就不对称，再造一个开关当宿主是 R3 禁止的「开关 + 值」双写法；
+# `dialog_extra_for` 已冻结。四格平铺四行则是这次要消掉的「大量同类控件」。
+[[items]]
+key = "ui.langbar.text_color_cn_light"
+group = "ui"
+section = "任务栏图标"
+type = "dialog_button_langbar_text_colors"
+label = "主字颜色"
+hint = "中、英两字在浅色/深色任务栏上的颜色，默认跟随主题"
+platform = "windows"
+
+# ═══════════════════════════ 常规（并入「输入」页首「默认状态」）═══════════════════════════
+# 本段在文件里排最后只影响 `manifest.order`（搜索结果次序），不影响页面：
+# `input_page` 把 general 整批排在输入页最前，与二级导航一致。
+[[items]]
+key = "input.default.state_scope"
+group = "general"
+section = "默认状态"
+type = "select"
+label = "中英状态作用域"
+hint = "全局统一：所有应用共享同一中英状态；按应用独立：每个应用各自记忆中英文（适合游戏等需保持英文的场景，重启输入法后重置）"
+options = [
+  { value = "global", label = "全局统一" },
+  { value = "app", label = "按应用独立" },
+]
+
+[[items]]
+key = "input.default.remember_last_state"
+group = "general"
+section = "默认状态"
+type = "toggle"
+label = "记忆前次状态"
+hint = "启用后恢复上次的中英文、全半角和标点状态"
+
+[[items]]
+key = "input.default.chinese_mode"
+group = "general"
+section = "默认状态"
+type = "segmented"
+label = "初始语言模式"
+hint = "每次激活输入法时的默认语言（开启「记忆前次状态」后此项不生效）"
+enabled_when = "input.default.remember_last_state == false"
+options = [{ value = "false", label = "英文" }, { value = "true", label = "中文" }]
+
+[[items]]
+key = "input.default.full_width"
+group = "general"
+section = "默认状态"
+type = "segmented"
+label = "初始字符宽度"
+hint = "每次激活输入法时的默认字符宽度（开启「记忆前次状态」后此项不生效）"
+enabled_when = "input.default.remember_last_state == false"
+options = [{ value = "false", label = "半角" }, { value = "true", label = "全角" }]
+
+[[items]]
+key = "input.default.chinese_punct"
+group = "general"
+section = "默认状态"
+type = "segmented"
+label = "初始标点模式"
+hint = "每次激活输入法时的默认标点类型（开启「记忆前次状态」后此项不生效）"
+enabled_when = "input.default.remember_last_state == false"
+options = [
+  { value = "false", label = "英文标点" },
+  { value = "true", label = "中文标点" },
+]
+
+# ═══════════════════════════ 统计 ═══════════════════════════
+# 统计页的图表区不由清单驱动（见 pages/stats），仅这两个开关走通用行渲染。
+[[items]]
+key = "stats.enabled"
+group = "stats"
+section = "统计设置"
+type = "toggle"
+label = "启用输入统计"
+hint = "开关输入统计功能"
+
+[[items]]
+key = "stats.track_english"
+group = "stats"
+section = "统计设置"
+type = "toggle"
+label = "统计英文输入"
+hint = "是否统计英文模式下的输入"
+enabled_when = "stats.enabled == true"
+# macOS 无落点：英文模式下的输入由 Windows 侧 TSF DLL 经 CMD_INPUT_STATS 上报，
+# macOS 的 `.app` 没有对应采集点，开关无论开关都统计不到。
+platform = "windows"
+
+# ═══════════════════════════ 高级 ═══════════════════════════
+# ── 性能与诊断 ──
+# 卡片里在本项之后另接一行手写的「内存占用」摘要 +「诊断信息…」对话框（只读诊断，
+# `system.memoryStats`），见 `pages/memory.rs`；拼接在 `advanced_page` 里做。
+# 分区名与 `memory::SECTION` 必须一致，改一处要同改另一处。
+[[items]]
+key = "schema.keep_all_loaded"
+group = "advanced"
+section = "性能与诊断"
+type = "toggle"
+label = "常驻所有方案"
+hint = "开启：所有方案预先加载并留在内存里，切换方案零等待。关闭：只加载用到的方案，30 分钟不用自动卸载，省内存"
+
+# ── 游戏兼容 ──
+[[items]]
+key = "system.dota2_compat"
+group = "advanced"
+section = "游戏兼容"
+type = "toggle"
+label = "Valve 游戏兼容模式（Dota2 等）"
+# 落点是 Windows 注册表（TSF 输入法显示名，dota2_compat::apply），Linux 无从谈起。
+# ⚠️ macOS 同样无落点（probe 恒 None、apply 恒报错），但门控它会改变 mac 现有行为，
+# 不在 Linux 适配的范围内，故暂按 "windows, macos" 保持 mac 原样。
+platform = "windows, macos"
+hint = "部分 Valve 游戏（如 Dota 2）只给内置名单里的输入法绘制候选，本输入法不在名单内，因此游戏里看不到候选、还会多出一个左上角小窗。开启后本输入法在系统里登记的名称会改为下面填的那个，语言栏与 Windows 设置里也显示该名称；需管理员权限，重启游戏后生效"
+
+# ⚠️ 刻意**不加** enabled_when：用户多半是「先把名字改成想试的那条，再开开关」，
+# 跟着开关置灰会逼出「先开 → 弹一次 UAC 写错名字 → 改名 → 再弹一次」的两遍提权。
+# 名称本身不生效于系统，真正落地的动作挂在上面那个开关上。
+[[items]]
+key = "system.dota2_compat_name"
+group = "advanced"
+section = "游戏兼容"
+type = "string"
+label = "登记名称"
+platform = "windows, macos"
+hint = "开启上面的开关后向系统登记的名称，必须与游戏内置名单里的某一条逐字一致，差一个字符就不生效且没有任何报错（名单里多数条目形如「中文 (简体) - 郑码」，抄的时候当心全角括号与多余空格）。留空则用默认的「拼音输入法」。换成名单里别的名字可能改变游戏内的行为（例如上屏后的第一个退格会不会被吞），需自行实测"
+
+# ── 日志设置 ──
+# 放在本页**最后**：三项都只在排查时才动，日常使用频度极低。
+#
+# 三个模块的落点各不相同（理由见 manifest.rs 的 `local_field`）：
+#   输入法服务 → core config.toml 的 debug.log_level（普通 select）
+#   TSF DLL    → <日志根>/tsf_log_config（local_select，DLL 在 DllMain 里就要读到）
+#   设置程序   → aurora_setting.toml 的 [log] level（local_select，logger 早于 RPC）
+# 但三者的日志文件都落在同一个 logs 目录下，故「打开」入口只要一个，不必每行挂一个。
+
+[[items]]
+key = "local.log_privacy_note"
+group = "advanced"
+section = "日志设置"
+# 只在某个级别被调到 debug/trace 时才出现（橙色），平时整行不占位。
+# 恒常的灰字提示会被整片略读掉，而这是这一屏唯一需要用户停下来看的一句。
+type = "log_privacy_warning"
+label = "隐私提示"
+hint = "当前级别会把输入内容记进日志，存在信息泄露风险；排查完请调回 info 或关闭"
+
+[[items]]
+key = "debug.log_level"
+group = "advanced"
+section = "日志设置"
+type = "log_level_select"
+label = "输入法服务日志级别"
+hint = "重启输入法服务后生效；关闭后连启动轨迹文件也不再写入"
+options = [
+  { value = "off", label = "关闭" },
+  { value = "error", label = "error" },
+  { value = "warn", label = "warn" },
+  { value = "info", label = "info" },
+  { value = "debug", label = "debug" },
+  { value = "trace", label = "trace" },
+]
+
+[[items]]
+key = "local.tsf_log_level"
+group = "advanced"
+section = "日志设置"
+type = "local_select"
+label = "TSF 端日志级别"
+hint = "重启使用中的程序后生效（DLL 常驻在各宿主进程内）"
+# macOS 没有 TSF：那边的输入法层是 IMKit，日志随主程序走，没有对应落点。
+platform = "windows"
+options = [
+  { value = "off", label = "关闭" },
+  { value = "error", label = "error" },
+  { value = "warn", label = "warn" },
+  { value = "info", label = "info" },
+  { value = "debug", label = "debug" },
+  { value = "trace", label = "trace" },
+]
+
+[[items]]
+key = "local.tsf_log_mode"
+group = "advanced"
+section = "日志设置"
+type = "local_select"
+label = "TSF 端日志输出方式"
+hint = "DebugString 需配合 DebugView.exe 查看"
+platform = "windows"
+# 仅 dev 变体可见：DebugString 那一档要靠外部工具才看得见，正式版里只会让人选中一个
+# 「看起来没生效」的选项。正式版恒为「写入文件」（tsf_log_config 里手写 mode 仍然有效）。
+variant = "dev"
+options = [
+  { value = "file", label = "写入文件" },
+  { value = "debugstring", label = "DebugString" },
+]
+
+[[items]]
+key = "local.setting_log_level"
+group = "advanced"
+section = "日志设置"
+type = "local_select"
+label = "设置程序日志级别"
+hint = "重启设置程序后生效"
+options = [
+  { value = "off", label = "关闭" },
+  { value = "error", label = "error" },
+  { value = "warn", label = "warn" },
+  { value = "info", label = "info" },
+  { value = "debug", label = "debug" },
+  { value = "trace", label = "trace" },
+]
+
+[[items]]
+key = "local.open_dirs"
+group = "advanced"
+section = "日志设置"
+type = "open_dirs"
+label = "打开目录"
+hint = "用户数据含配置与词库；TSF 端日志在日志目录的 tsf_log 子目录"
+
+[[items]]
+key = "local.log_archive"
+group = "advanced"
+section = "日志设置"
+type = "log_archive"
+label = "日志打包"
+hint = "反馈问题时把整个日志目录打成一个 zip 发给维护者；清理会删除全部日志"

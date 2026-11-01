@@ -1,0 +1,2903 @@
+//! 软键盘面板窗口。
+//!
+//! 一块常驻的符号面板：按物理键盘布局画出当前面的键位，鼠标可点、物理按键会高亮。
+//!
+//! # 布局零配置
+//!
+//! **软键盘的布局就是键盘的布局**——键位坐标由键名唯一决定，配置里没有行列。
+//! 本文件的 [`ROW_SLOTS`] 是那份坐标表在渲染端的镜像：它只描述「第几行有几个键位」，
+//! 键位名本身随 [`SoftKeyCap`] 一起从协调器下发，两边不各存一份名字。
+//!
+//! # 绘制成本
+//!
+//! 面板内容几乎恒定，每帧只有一两个键在变（hover / 按下 / 切层），但当前实现是
+//! **每次都重建整棵 View 树再整块重绘**——没有做「底板烘焙 + 单键重绘」。
+//!
+//! 这样够用的前提是文本测量在 `TextRenderer` 里已有缓存：47 个键帽都是
+//! `fixed_w`/`fixed_h`，重排只是算矩形，真正贵的字形测量走的是缓存。
+//! ⚠️ 若哪天把键帽改成按内容自适应宽度，或去掉测量缓存，这条前提就不成立了，
+//! 鼠标划过面板会明显发烫——那时再上单键重绘，别提前优化。
+//!
+//! # 不抢焦点是承重墙
+//!
+//! 窗口沿用浮层那组样式（Windows 的 `WS_EX_NOACTIVATE`，macOS 的
+//! `NSWindowStyleMask::NonactivatingPanel`）。「切换焦点自动关闭」这条行为完全依赖它：
+//! 面板一旦可激活，用户点它上面任何一个键都是在改变焦点，它会把自己关掉。
+//!
+//! # 三个平台共用这一份
+//!
+//! 布局、绘制、命中、交互状态机全部在本文件里且不带 `cfg`——它们建立在 tiny-skia 与
+//! [`View`] 之上，本就与平台无关。分叉只有两处，都收在文件末尾：
+//!
+//! - **窗口壳**：`PanelWindow` 别名。Windows 是 `LayeredWindow`（`UpdateLayeredWindow`），
+//!   macOS 是 [`crate::mac_panel::MacPanel`]（服务进程自己的 NSPanel），Linux 是 mock。
+//! - **鼠标来源**：Windows 走 `mouse_impl`（Win32 消息），macOS 走 `mouse_macos`
+//!   （AppKit 事件）。两者写的是同一个 [`SoftMouse`] 状态机，只是喂法不同。
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::mpsc::Sender;
+
+use crate::text::dwrite::TextRenderer;
+use crate::view::{Align, Edges, Layout, Rect, View};
+
+/// 面板的窗口壳。三个平台的方法集**逐位同形**，故本文件其余部分无需分叉。
+///
+/// ⚠️ macOS 上刻意**不**复用 `window::LayeredWindow`：那个类型在 macOS 上是纯像素
+/// 缓冲（`candidate_window.rs` 正靠它光栅化后写 SHM），把它改成真窗口会给候选窗凭空
+/// 开出一个 NSPanel，砸掉现有的 host-render 管线。
+#[cfg(target_os = "macos")]
+use crate::mac_panel::MacPanel as PanelWindow;
+#[cfg(not(target_os = "macos"))]
+use crate::window::LayeredWindow as PanelWindow;
+use aurora_ui_types::{
+    SOFT_FN_CAPS_INDEX, SOFT_FN_KEYS, SOFT_TAG_CLOSE, SOFT_TAG_CTRL, SOFT_TAG_ESC,
+    SOFT_TAG_FN_BASE, SOFT_TAG_PAGE_BASE, SOFT_TAG_PAGE_NEXT, SOFT_TAG_PAGE_PREV, SOFT_TAG_SHIFT,
+    SOFT_TAG_TAB_LEFT, SOFT_TAG_TAB_RIGHT, SOFT_TAG_TAB_VIEWPORT, SoftKeyCap, UiEvent,
+    fn_key_repeats, slot_layer,
+};
+
+/// 每行的键位个数，与 `aurora_softkeyboard::KEY_ROWS` 同构（数字行 / QWERTY / ASDF / ZXCV）。
+///
+/// 只存**个数**不存键位名：名字随 `SoftKeyCap` 下发，渲染端再存一份就会分叉。
+const ROW_SLOTS: [usize; 4] = [13, 13, 11, 10];
+
+/// 键位单元（dp）。设计稿定的 42，下限约 34——再小 CJK 符号就不准了。
+const UNIT_DP: f32 = 42.0;
+/// 键间距（dp）。
+const GAP_DP: f32 = 5.0;
+/// 面板内边距（dp）。
+const PAD_DP: f32 = 12.0;
+/// 键盘区宽度（单位数 + 间隙数）：最宽的是第一行（13 键位 + 2u 退格 = 15u，13 个间隙）。
+/// 标签行与底行都按它对齐，面板宽度就只由键盘决定。
+const KBD_UNITS: f32 = 16.0;
+const KBD_GAPS: f32 = 14.0;
+/// 标签行度量（dp）。**必须是模块常量而不是两个函数各写一份**——
+/// [`SoftKeyboard::visible_tabs`] 与 [`SoftKeyboard::build_tabs`] 靠它们算出同一个可见集。
+const TAB_GAP_DP: f32 = 2.0;
+const TAB_PAD_X_DP: f32 = 9.0;
+const TAB_FONT_DP: f32 = 12.5;
+const TAB_ARROW_W_DP: f32 = 22.0;
+const TAB_CLOSE_W_DP: f32 = 27.0;
+/// 顶部拖动条：行高与条本身的尺寸（dp）。
+const GRIP_ROW_H_DP: f32 = 9.0;
+/// 关闭按钮悬停框的高度（dp）。
+///
+/// ⚠️ 它**比拖动条行高**（`GRIP_ROW_H_DP`）——后者是给那根横线定的，拿它当亮框的
+/// 基准会得到一个又扁又偏上的框。亮框靠向上溢出到面板的顶部内边距里补足高度。
+const CLOSE_H_DP: f32 = 16.0;
+const GRIP_W_DP: f32 = 46.0;
+const GRIP_H_DP: f32 = 3.5;
+
+/// 长按重复：首次延迟与间隔（毫秒）。
+///
+/// ⚠️ 真实实现应读 `SPI_GETKEYBOARDDELAY` / `SPI_GETKEYBOARDSPEED`——自定常数一定会和
+/// 物理键长按的手感对不上。这里取一组接近 Windows 默认的值，读系统设置见 [`repeat_params`]。
+const REPEAT_DELAY_MS: u64 = 500;
+const REPEAT_RATE_MS: u64 = 33;
+/// 物理按键高亮的持续时间（毫秒）。长按时被连发的 keydown 不断续期。
+const KEY_FLASH_MS: u64 = 140;
+/// 物理 Shift / 大写锁定的跟随节奏（毫秒）。**仅面板可见期间生效**。
+const MODIFIER_POLL_MS: u64 = 40;
+/// 本平台读得到物理 Shift / 大写锁定（见 [`read_shift_caps`]）。读不到时不登记上面那个节奏——
+/// 醒来也无事可做，只是白白把线程叫起来（Linux 外部宿主形态）。
+const MODIFIER_POLLS: bool = cfg!(any(windows, target_os = "macos"));
+
+/// 面板上的 Caps 键点了能不能翻转系统大写锁定。
+///
+/// ⛔ **macOS 上恒为 false，且不是我们漏改了什么**：大写锁定的状态由 HID 层持有，
+/// 而合成按键是从它**上面**的 CGEvent tap 层注进去的，够不着——这一层差别只影响这一个键，
+/// 别的键全都照常。三条路都实测过（见 `docs/design/soft-keyboard.md` §11.9）：
+/// CGEvent 敲 `kVK_CapsLock` 无效（由**有**辅助功能授权的 `.app` 实测，不是假阴性）；
+/// `IOHIDSetModifierLockState` 受理了然后忽略——返回 `KERN_SUCCESS` 而状态纹丝不动；
+/// `kIOHIDServerConnectType` 要 root，服务不以 root 跑。真要做到只剩装虚拟 HID 驱动
+/// （Karabiner 那条路：DriverKit 系统扩展 + 用户批准），为一个键帽不值当。
+///
+/// ⚠️ 禁掉的**只是「点它去翻转」这一半**：读是好的，物理 CapsLock 的状态照常轮询回来
+/// 并高亮，所以禁用态下它仍是个如实的指示灯——见 [`SoftKeyboard::caps_key`]。
+const CAPS_CLICKABLE: bool = !cfg!(target_os = "macos");
+
+/// 面板配色（全部走主题键，未配则回落到与候选窗同族的中性色）。
+#[derive(Clone)]
+struct Colors {
+    panel: [u8; 4],
+    keycap: [u8; 4],
+    keycap_fn: [u8; 4],
+    keycap_dead: [u8; 4],
+    line: [u8; 4],
+    ink: [u8; 4],
+    /// 角标色。**必须比正文更淡**，又要在深色底上仍可读——直接沿用 `dim` 会偏亮。
+    hint: [u8; 4],
+    accent: [u8; 4],
+    accent_soft: [u8; 4],
+    on_accent: [u8; 4],
+    /// 顶部拖动条的颜色。取工具栏那根同款（`toolbar_grip`）——两处是同一件事：
+    /// 「这块东西可以拖」。
+    grip: [u8; 4],
+    /// 悬停底色。**必须比按下态轻得多**——悬停只是「鼠标在这」，按下才是「就是它」。
+    /// 两者都用主色系会让人分不清自己有没有点下去。取主题的 `toolbar_hover`：
+    /// 一层很淡的半透明叠加，深浅主题各有其值。
+    hover: [u8; 4],
+    /// 功能键（Tab/Enter/Shift/空格…）的文字色。
+    ///
+    /// 比正文淡一档、但比角标深：功能键是**能按的键**，用角标那种淡色会让整排看着像
+    /// 禁用状态。这正是「Enter / 空格这类显得突兀」的一半原因，另一半是底色。
+    fn_ink: [u8; 4],
+}
+
+impl Default for Colors {
+    fn default() -> Self {
+        Self {
+            panel: [251, 253, 253, 250],
+            keycap: [243, 247, 248, 255],
+            keycap_fn: [228, 235, 238, 255],
+            keycap_dead: [233, 238, 239, 255],
+            line: [213, 223, 226, 255],
+            ink: [21, 34, 42, 255],
+            hint: [143, 163, 171, 255],
+            accent: [44, 110, 141, 255],
+            accent_soft: [217, 233, 241, 255],
+            on_accent: [255, 255, 255, 255],
+            grip: [184, 190, 204, 255],
+            // 很淡的一层叠加：悬停只是「鼠标在这」，不该有主色的分量。
+            hover: [0, 0, 0, 13],
+            fn_ink: [82, 100, 110, 255],
+        }
+    }
+}
+
+impl Colors {
+    /// 从主题取色（见 [`SoftKeyboard::set_theme`] 的文档）。抽成纯函数是为了让取色链能被测到：
+    /// `SoftKeyboard` 要真窗口才能构造。
+    fn from_theme(theme: &aurora_theme::Resolved) -> Self {
+        let d = Colors::default();
+        // 专用覆盖 → 键盘域语义色 → 候选窗同类色 → 硬编码兜底。
+        let pick =
+            |own: &str, kbd: &str, fallback: [u8; 4]| theme.color(own, theme.color(kbd, fallback));
+        Colors {
+            panel: pick(
+                "softkb_bg",
+                "keyboard_bg",
+                theme.color("candidate_bg", d.panel),
+            ),
+            keycap: pick("softkb_key_bg", "key_bg", d.keycap),
+            keycap_fn: pick("softkb_fnkey_bg", "key_special_bg", d.keycap_fn),
+            keycap_dead: pick("softkb_dead_bg", "surface", d.keycap_dead),
+            line: pick("softkb_border", "border", d.line),
+            ink: pick(
+                "softkb_text",
+                "key_text",
+                theme.color("candidate_text", d.ink),
+            ),
+            hint: pick("softkb_hint", "key_hint", d.hint),
+            accent: pick(
+                "softkb_active_bg",
+                "accent",
+                theme.color("candidate_selected_bg", d.accent),
+            ),
+            accent_soft: pick(
+                "softkb_hover_bg",
+                "key_pressed_bg",
+                theme.color("accent_soft", d.accent_soft),
+            ),
+            // 激活键是「强调色底上的字」：第二级取 on_accent，不取 accent_text。
+            // accent_text 是「在普通底上可读的强调色文字」，拿来压强调色底就是同色字压同色底——
+            // _base 提供了 accent_text（= accent，分段着色的标准色契约）之后，_base / msime 的
+            // 激活键字会整个消失在底色里；清风系此前就是 accent_text 字压 accent 底。
+            on_accent: pick(
+                "softkb_active_text",
+                "on_accent",
+                theme.color("candidate_selected_text", d.on_accent),
+            ),
+            grip: pick("softkb_grip", "toolbar_grip", d.grip),
+            hover: pick("softkb_hover_soft", "toolbar_hover", d.hover),
+            fn_ink: pick("softkb_fnkey_text", "text_dim", d.fn_ink),
+        }
+    }
+}
+
+/// 鼠标交互状态。与窗口共享（`register_mouse` 要 `Rc<RefCell<dyn WindowMouse>>`）。
+#[derive(Default)]
+struct SoftMouse {
+    /// 命中区（tag, 矩形），每次重排后更新。
+    hits: Vec<(i32, Rect)>,
+    /// 当前悬停 tag，-1 = 无。
+    hover: i32,
+    /// 按下中的 tag，-1 = 无。
+    pressed: i32,
+    /// 待处理的点击（tag），由窗口在 tick 里消费。
+    clicked: Vec<i32>,
+    /// 长按下一次触发时刻。
+    repeat_at: Option<std::time::Instant>,
+    /// 已进入匀速重复阶段。
+    repeating: bool,
+    /// hover 变了，需要重画。
+    dirty: bool,
+    /// 窗口句柄（`isize` 存，避免让本结构在非 Windows 上依赖 HWND 类型）。0 = 未装配。
+    ///
+    /// ⚠️ 本字段连同下面的拖动三件套与 `leave_armed`，读者只有 `#[cfg(windows)]` 的
+    /// `mouse_impl` 和 `refresh_hover`。非 Windows 目标编 **lib** target 时它们确实无人
+    /// 读（CI 的 darwin clippy 会拦）。⛔ 别改成 `#[cfg(windows)]` 字段：本结构刻意保持
+    /// 在非 Windows 上也能构造，理由见 `hwnd_handle`。
+    #[cfg_attr(not(windows), allow(dead_code))]
+    hwnd: isize,
+    /// 拖动中；`anchor` 是按下时的屏幕光标，`origin` 是按下时的窗口左上。
+    /// 两平台同义：Windows 由 `mouse_impl` 写，macOS 由 `mouse_macos` 写。
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    dragging: bool,
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    anchor: (i32, i32),
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    origin: (i32, i32),
+    /// 拖动落点（左上角），供窗口在 tick 里收回去记住位置。拖动**途中**每次
+    /// `WM_MOUSEMOVE` 都更新——面板要实时跟着光标走。
+    moved_to: Option<(i32, i32)>,
+    /// 拖动**结束**时的面板右下角，供窗口在 tick 里上报协调器持久化。
+    ///
+    /// ⚠️ 与 `moved_to` 分开是要害：持久化只能在抬起时发生。若照着 `moved_to` 的时机
+    /// 上报，一次拖动就是几十上百条 IPC + 同样多次 `state.toml` 读改写。
+    /// 同理它存的是**右下角**而非左上角——记的是锚点，而面板尺寸会随切面变
+    /// （各面键数不同）。
+    #[cfg_attr(not(windows), allow(dead_code))]
+    dropped_at: Option<(i32, i32)>,
+    /// 未消费的滚轮量（单位：一格）。窗口过程只累加，真正滚动在 `tick` 里做——
+    /// 滚动要改 `tab_scroll` 并重绘，而窗口过程拿不到 `&mut SoftKeyboard`。
+    wheel: f32,
+    /// 是否已向系统订阅过 `WM_MOUSELEAVE`（一次性，收到后要重订）。
+    #[cfg_attr(not(windows), allow(dead_code))]
+    leave_armed: bool,
+}
+
+impl SoftMouse {
+    /// 还原窗口句柄。存 `isize` 是为了让本结构在非 Windows 上也能构造。
+    #[cfg(windows)]
+    fn hwnd_handle(&self) -> crate::sys::HWND {
+        crate::sys::HWND(self.hwnd as *mut core::ffi::c_void)
+    }
+
+    /// Linux 外部宿主形态：窗口壳是 `ext_panel`，句柄就是浮层 kind。
+    #[cfg(all(target_os = "linux", ext_presenter))]
+    fn hwnd_handle(&self) -> crate::sys::HWND {
+        crate::sys::HWND(self.hwnd)
+    }
+
+    /// Linux 外部宿主形态：addon 每次指针离开都报 `LEAVE`，不需要订阅。
+    #[cfg(all(target_os = "linux", ext_presenter))]
+    fn arm_leave(&mut self) {}
+
+    /// 订阅一次性 `WM_MOUSELEAVE`（光标移出窗口时收到）。收到后系统即注销，需重订。
+    #[cfg(windows)]
+    fn arm_leave(&mut self) {
+        if self.leave_armed || self.hwnd == 0 {
+            return;
+        }
+        self.leave_armed = true;
+        unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+            };
+            let mut t = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: self.hwnd_handle(),
+                dwHoverTime: 0,
+            };
+            let _ = TrackMouseEvent(&mut t);
+        }
+    }
+
+    /// 调用点：各平台的鼠标分支与 `refresh_hover`，以及导出拖动区的 [`drag_regions_of`]。
+    fn hit_at(&self, x: f32, y: f32) -> i32 {
+        // 逆序找：后画的（层级更高的）优先。键帽之间不重叠，这里只是稳妥。
+        self.hits
+            .iter()
+            .rev()
+            .find(|(_, r)| r.contains(x, y))
+            .map(|(t, _)| *t)
+            .unwrap_or(-1)
+    }
+}
+
+/// 长按重复参数：优先取系统的键盘重复设置。
+///
+/// ★ 不自定常数——鼠标长按与物理键长按必须同一个手感，而物理那条走的就是系统设置。
+pub(crate) fn repeat_params() -> (u64, u64) {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SPI_GETKEYBOARDDELAY, SPI_GETKEYBOARDSPEED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+            SystemParametersInfoW,
+        };
+        let mut delay: u32 = 1;
+        let mut speed: u32 = 31;
+        let ok_d = SystemParametersInfoW(
+            SPI_GETKEYBOARDDELAY,
+            0,
+            Some(&mut delay as *mut u32 as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_ok();
+        let ok_s = SystemParametersInfoW(
+            SPI_GETKEYBOARDSPEED,
+            0,
+            Some(&mut speed as *mut u32 as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_ok();
+        if ok_d && ok_s {
+            // delay 0..3 → 250/500/750/1000ms；speed 0..31 → 约 400ms..33ms（线性插值）。
+            let d = 250 + 250 * u64::from(delay.min(3));
+            let r = 400 - (400 - 33) * u64::from(speed.min(31)) / 31;
+            return (d, r.max(15));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(p) = crate::mac_panel::key_repeat_params() {
+        return p;
+    }
+    (REPEAT_DELAY_MS, REPEAT_RATE_MS)
+}
+
+/// 软键盘面板窗口。
+pub struct SoftKeyboard {
+    window: PanelWindow,
+    renderer: TextRenderer,
+    scale: f32,
+    colors: Colors,
+    events: Sender<UiEvent>,
+    mouse: Rc<RefCell<SoftMouse>>,
+
+    pages: Vec<String>,
+    current: usize,
+    keys: Vec<SoftKeyCap>,
+    /// 物理 Shift 按住中（临时切层，松开还原）。
+    shift_held: bool,
+    /// 面板上的 Shift 键被点亮（锁定切层，再点还原）。
+    ///
+    /// 与 `shift_held` 分开存：物理是临时的、点击是锁定的，合成一个布尔就无法表达
+    /// 「按住物理 Shift 松开后该回哪一层」。有效层取两者的或。
+    shift_locked: bool,
+    /// 系统大写锁定当前是否开着（Caps 键据此高亮）。
+    caps_on: bool,
+    /// 当前面是键盘面：CapsLock 参与字母键的档位显示（见 [`Self::cap_layer`]）。
+    send_keys: bool,
+    /// 面板上的 Ctrl 处于粘滞状态：下一次点键位合成 `ctrl+键`，然后自动熄灭。
+    ///
+    /// ★ 与 Shift 的锁定不同，它**不是层选择器**——Ctrl 不改变键帽上画什么，
+    /// 只改变那一次点击发出去的是符号还是组合键。
+    ctrl_latched: bool,
+    /// 标签行第一个可见标签的下标（面多到一行放不下时才非 0）。
+    /// 标签行的水平滚动量（设备像素）。
+    ///
+    /// 从「按项取舍」改成按像素，是因为项宽不一时按项永远对不齐容器边缘——右侧那个
+    /// 箭头会随着当前显示了哪几项而左右跳。有了 [`View::clipped`] 就没必要迁就了。
+    tab_scroll: f32,
+    /// 上一次已经「滚到可见」的面。
+    ///
+    /// ★ 只在**面变了**的时候才把当前面拉进视野。无条件每帧拉一次的后果是用户根本
+    /// 滚不动标签行——手一松就被拽回当前面那里。滚动是用户的意图，换面才是我们的。
+    last_shown_page: usize,
+    /// 物理按键按下中的键位名 + 该高亮的到期时刻。
+    ///
+    /// ★ 高亮**不靠 keyup 配对**：协调器只在 keydown 被调用，物理抬起根本不经过我们。
+    /// 改为「按下即高亮、到期自清」——物理长按会连发 keydown 不断续期，视觉上就是
+    /// 持续按下，松开后一个周期内自然熄灭。
+    down_slot: Option<(String, std::time::Instant)>,
+
+    visible: bool,
+    /// 上一帧的实际落点（左上角）；None = 还没摆过。`ensure_scale` 也用它问所在屏的 DPI。
+    origin: Option<(i32, i32)>,
+    /// 记忆锚点：面板**右下角**屏幕坐标；None = 这块屏没记录过，落默认位置。
+    ///
+    /// 与 `origin` 的分工同工具栏的 `anchor_br`/`pos`：这个是**意图**（用户把面板摆在哪），
+    /// `origin` 是**本帧落点**（意图减当前尺寸再钳进工作区）。切面会改面板尺寸，
+    /// 每帧现算才能让右下角纹丝不动。钳制结果只写回 `origin`，不回写这里。
+    anchor_br: Option<(i32, i32)>,
+    /// 焦点显示器工作区 `(left, top, right, bottom)`，随 `ShowSoftKeyboard` 下发。
+    ///
+    /// 默认位置（底部居中）据此算。`None` 时才回退 `SPI_GETWORKAREA`——那取的恒是
+    /// **主屏**，多显示器下会让面板开在用户没在打字的那块屏上。
+    work_area: Option<(i32, i32, i32, i32)>,
+}
+
+impl SoftKeyboard {
+    const DEFAULT_FONT_PX: f32 = 15.0;
+
+    pub fn new(events: Sender<UiEvent>) -> Result<Self, String> {
+        let scale = crate::dpi::scale_for_point(0, 0);
+        let window = PanelWindow::create(None, 700, 300, "WindInputSoftKeyboard")?;
+        let renderer = TextRenderer::new("Microsoft YaHei UI", Self::DEFAULT_FONT_PX * scale)?;
+        let mouse = Rc::new(RefCell::new(SoftMouse {
+            hover: -1,
+            pressed: -1,
+            #[cfg(windows)]
+            hwnd: window.hwnd().0 as isize,
+            #[cfg(all(target_os = "linux", ext_presenter))]
+            hwnd: window.hwnd().0,
+            #[cfg(not(any(windows, all(target_os = "linux", ext_presenter))))]
+            hwnd: 0,
+            ..Default::default()
+        }));
+        window.register_mouse(mouse.clone());
+        Ok(Self {
+            window,
+            renderer,
+            scale,
+            colors: Colors::default(),
+            events,
+            mouse,
+            pages: Vec::new(),
+            current: 0,
+            keys: Vec::new(),
+            shift_held: false,
+            shift_locked: false,
+            caps_on: false,
+            send_keys: false,
+            ctrl_latched: false,
+            tab_scroll: 0.0,
+            last_shown_page: usize::MAX,
+            down_slot: None,
+            visible: false,
+            origin: None,
+            anchor_br: None,
+            work_area: None,
+        })
+    }
+
+    /// 协调器下发的摆放依据：焦点屏记过的锚点 + 该屏工作区。随每条 `ShowSoftKeyboard`
+    /// 到来——而那一条**打开面板和切面刷新都会发**，两者要区别对待。
+    ///
+    /// # ★ 只在「真正打开面板」时采纳下发的锚点
+    ///
+    /// 判据是面板当前**不可见**。理由是两个方向的错都真会发生：
+    ///
+    /// - **切面时采纳** ⇒ 面板会跳屏。面板开着的时候用户可以切到另一块屏上继续打字
+    ///   （面板是 topmost 工具窗，不抢焦点），此时按一下切面键，下发的就是**新焦点屏**的
+    ///   锚点，整块面板凭空飞到另一块屏上。软键盘刻意不跟随焦点（它由用户显式开关），
+    ///   切个面更不该顺带搬家。
+    /// - **打开时不采纳** ⇒ 面板会开在错的屏上。上一次在副屏拖过面板，`anchor_br` 就
+    ///   留着副屏坐标；之后在主屏打字打开面板，协调器给的是主屏的"没有记录"（`None`），
+    ///   若因此保留旧值，面板就开到用户没在用的那块屏去了。
+    ///
+    /// 所以打开时**连 `None` 一起采纳**（清空 ⇒ 落该屏默认位置），切面时则完全不看
+    /// 下发值——那期间 `anchor_br` 的真相源是 UI 侧自己（拖动结束时更新）。
+    pub fn set_placement(
+        &mut self,
+        anchor: Option<(i32, i32)>,
+        work_area: Option<(i32, i32, i32, i32)>,
+    ) {
+        if !self.visible {
+            self.anchor_br = anchor;
+            // ⚠️ 清 `anchor_br` 还不够：`render` 的落点顺序是 `anchor_br` > `origin` >
+            // 默认位置，而 `origin` 是**上一帧的落点**——上次在副屏摆过就还留着副屏坐标，
+            // 光清锚点的话它顶上来，面板照样开在那块屏上。这一屏没有记录 = 该按这一屏
+            // 重新落默认位置，两个"旧位置"都得让开。
+            //
+            // 同屏重开不受影响：那时重算出的默认位置与 `origin` 本来就是同一个点
+            // （除非中间切过面改了尺寸，而那种情况下重算才是对的）。
+            if anchor.is_none() {
+                self.origin = None;
+            }
+        }
+        // 工作区无条件跟新：它只在"没有锚点可用"时参与算默认位置，跟着焦点屏走是对的，
+        // 且不会造成上面那种跳屏（有 `origin` 时轮不到它）。
+        if let Some(w) = work_area {
+            self.work_area = Some(w);
+        }
+    }
+
+    /// 取主题色。
+    ///
+    /// ★ **复用主题里已有的「键盘域」语义色**（`key_bg` / `key_text` / `key_hint` /
+    /// `key_special_bg` / `key_pressed_bg` / `keyboard_bg`），不另立一套。那几个键本是
+    /// 给 Android 软键盘定的，注释还写着「桌面没有这些控件」——现在桌面有了，而它们
+    /// 描述的是同一件东西：一块键盘长什么样。
+    ///
+    /// 这一步不是洁癖：键盘域的值一律以 `${var}` 引用主色，派生主题（amber/jade/violet）
+    /// 只覆盖 primary/accent 系就能让键盘跟着变。自立门户的 `softkb_*` 在任何主题文件里
+    /// 都没有定义，于是**永远落到硬编码兜底**——换成橙色主题，软键盘还是蓝的。
+    ///
+    /// `softkb_*` 仍留在链首，给「只想单独调桌面软键盘」的人一个口子。
+    pub fn set_theme(&mut self, theme: &aurora_theme::Resolved) {
+        self.colors = Colors::from_theme(theme);
+        if self.visible {
+            self.render();
+        }
+    }
+
+    /// 当前 Shift 档：物理按住 或 面板上锁定，任一即可。
+    ///
+    /// ★ **不含 CapsLock**。它同时是点击回送给协调器的 `shift`，而那边会据此合成
+    /// `shift+q`——Caps 开着再加 Shift 在真实键盘上出的是**小写**，把 caps 混进来
+    /// 会让「Caps 开时点字母」恰好出反。CapsLock 只影响显示，见 [`Self::cap_layer`]。
+    fn layer_shift(&self) -> bool {
+        self.shift_held || self.shift_locked
+    }
+
+    /// 一个键位**显示**哪一档（两种面都生效，判据见 [`slot_layer`]）。
+    fn cap_layer(&self, slot: &str) -> bool {
+        slot_layer(slot, self.layer_shift(), self.caps_on)
+    }
+
+    /// 点击这个键位时回送给协调器的 `shift`。
+    ///
+    /// ★ 两种面语义不同，而这正是「显示与输出不分叉」的落点：
+    /// - **符号面**查表直接上屏 ⇒ 回送**显示档**，画着什么就出什么。
+    /// - **键盘面**合成真实按键 ⇒ 回送**物理 Shift**，CapsLock 由系统自己应用；
+    ///   把 caps 混进来，Caps 开时合成的 `shift+q` 恰好出小写，正好是反的。
+    fn click_shift(&self, slot: &str) -> bool {
+        if self.send_keys {
+            self.layer_shift()
+        } else {
+            self.cap_layer(slot)
+        }
+    }
+
+    /// 显示面板 / 整块刷新（切面也走这里）。
+    pub fn show(
+        &mut self,
+        pages: Vec<String>,
+        current: usize,
+        keys: Vec<SoftKeyCap>,
+        send_keys: bool,
+    ) {
+        self.pages = pages;
+        self.send_keys = send_keys;
+        // 面的类型直接决定点击是「上屏符号」还是「合成按键」，值得留一行——
+        // 「CapsLock 不生效」那次排查，正是这一行一眼指出用户当时在符号面。
+        tracing::debug!("软键盘: show page={current} send_keys={send_keys}");
+        self.current = current;
+        // 标签窗口的校正统一在 `render` 里做（见 [`Self::ensure_current_visible`]）：
+        // current 有热键、直通车、点标签、底行翻页四条来路，逐条加一次迟早漏一条。
+        self.keys = keys;
+        self.shift_held = false;
+        self.shift_locked = false;
+        self.down_slot = None;
+        self.reset_mouse();
+        self.visible = true;
+        self.render();
+    }
+
+    pub fn hide(&mut self) {
+        if self.visible {
+            self.visible = false;
+            self.reset_mouse();
+            self.window.hide();
+        }
+    }
+
+    /// 清掉悬停/按下残留。
+    ///
+    /// ⚠️ 初版这里写着「面板不追 `WM_MOUSELEAVE`，为一格高亮残留多接一条消息不划算，
+    /// 改为在显示/隐藏这两个边界上重置——残留最多活到下次打开前，看不见」。**那个判断
+    /// 是错的**：面板一直开着，鼠标快速划出去时最后那一格高亮就一直亮在那儿，用户看得
+    /// 一清二楚。现在照 `status_tip` 的做法订阅 LEAVE（见 `SoftMouse::arm_leave`）。
+    fn reset_mouse(&self) {
+        let mut m = self.mouse.borrow_mut();
+        m.hover = -1;
+        m.pressed = -1;
+        m.repeat_at = None;
+        m.repeating = false;
+        m.clicked.clear();
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// 物理按键按下/抬起 → 键帽高亮。只改颜色，不重排。
+    pub fn set_key_down(&mut self, slot: &str, down: bool) {
+        let changed = match (&self.down_slot, down) {
+            (Some((s, _)), true) => s != slot,
+            (None, true) => true,
+            (Some(_), false) => true,
+            (None, false) => false,
+        };
+        self.down_slot = down.then(|| {
+            (
+                slot.to_string(),
+                std::time::Instant::now() + std::time::Duration::from_millis(KEY_FLASH_MS),
+            )
+        });
+        if changed && self.visible {
+            self.render();
+        }
+    }
+
+    /// 切层（按住 Shift）。键帽文字要变，需要重排。
+    pub fn set_layer(&mut self, shift: bool) {
+        if self.shift_held != shift {
+            self.shift_held = shift;
+            if self.visible {
+                self.render();
+            }
+        }
+    }
+
+    /// 长按重复的下一次触发时刻（供 UI 循环安排 wake，避免空转轮询）。
+    pub fn next_deadline(&self) -> Option<std::time::Instant> {
+        if !self.visible {
+            return None;
+        }
+        [
+            self.mouse.borrow().repeat_at,
+            // 物理按键高亮的自动熄灭
+            self.down_slot.as_ref().map(|(_, at)| *at),
+            // 物理 Shift / 大写锁定的跟随节奏（仅面板可见期间，见 tick 里的说明）
+            MODIFIER_POLLS.then(|| {
+                std::time::Instant::now() + std::time::Duration::from_millis(MODIFIER_POLL_MS)
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    /// 消费鼠标产生的点击与长按重复，并在 hover 变化时重画。
+    pub fn tick(&mut self) {
+        if !self.visible {
+            return;
+        }
+        // 长按：到点就再发一次当前按住的 tag。
+        let mut fire: Vec<i32> = Vec::new();
+        {
+            let mut m = self.mouse.borrow_mut();
+            let now = std::time::Instant::now();
+            if let Some(at) = m.repeat_at
+                && now >= at
+                && m.pressed >= 0
+            {
+                let tag = m.pressed;
+                // 改变状态的键不重复——按住会让面飞速乱切。
+                if repeats(tag) {
+                    fire.push(tag);
+                }
+                let (_, rate) = repeat_params();
+                m.repeating = true;
+                m.repeat_at = Some(now + std::time::Duration::from_millis(rate));
+            }
+            fire.append(&mut m.clicked);
+        }
+        for tag in fire {
+            self.dispatch(tag);
+        }
+        // 拖动落点：窗口自己记住，本次会话内不再回到默认锚点。
+        if let Some(pos) = self.mouse.borrow_mut().moved_to.take() {
+            self.origin = Some(pos);
+        }
+        // 拖动**结束**：记下锚点并上报协调器落盘，位置由此跨重启存活。
+        // 只在抬起时发一次——`moved_to` 那条是拖动全程每帧更新的，照它发会把一次拖动
+        // 变成几十条 IPC + 同样多次 state.toml 读改写。
+        if let Some((right, bottom)) = self.mouse.borrow_mut().dropped_at.take() {
+            self.anchor_br = Some((right, bottom));
+            let _ = self
+                .events
+                .send(UiEvent::SoftKeyboardMoved { right, bottom });
+        }
+
+        // 滚轮：窗口过程只累加格数，这里换算成像素并重绘。
+        let wheel = std::mem::take(&mut self.mouse.borrow_mut().wheel);
+        if wheel != 0.0 {
+            let step = self.tab_step();
+            if self.scroll_tabs(wheel * step * 0.5) {
+                self.render();
+            }
+        }
+
+        // 物理 Shift 与大写锁定的跟随。
+        //
+        // ★ 为什么要轮询：单独按 Shift 不出字，那个 keydown 根本不会转发到协调器——
+        // 我们只在「Shift+某键」时才从修饰位里知道它按住了。而用户要的是「一按 Shift
+        // 面板立刻切显上档」。故面板可见期间以固定节奏查一次键盘状态。
+        //
+        // ⚠️ 这是本仓「UI 已改事件驱动、不做空转轮询」的一处**有意例外**，边界写死在
+        // 「面板可见时」：面板一关，`next_deadline` 立即不再登记这个节奏，线程回到全静默。
+        if let Some((held, caps)) = read_shift_caps() {
+            if held != self.shift_held {
+                // 松开物理 Shift 时把面板上的锁定一并解除。
+                //
+                // 两个来源本可以各管各的，但那样会出现「点了面板 Shift 锁在上档，又按了
+                // 一下物理 Shift，松开后仍停在上档」——用户刚做完一个「按下又松开」的
+                // 完整动作，界面却没回来，看起来就是卡住了。以物理动作为准更符合直觉。
+                if !held {
+                    self.shift_locked = false;
+                }
+                self.shift_held = held;
+                self.render();
+            }
+            if caps != self.caps_on {
+                tracing::debug!("软键盘: caps_lock {} -> {caps}", self.caps_on);
+                self.caps_on = caps;
+                self.render();
+            }
+        }
+
+        // 物理按键高亮到期熄灭。
+        let mut dirty = if let Some((_, at)) = &self.down_slot
+            && std::time::Instant::now() >= *at
+        {
+            self.down_slot = None;
+            true
+        } else {
+            false
+        };
+        dirty |= {
+            let mut m = self.mouse.borrow_mut();
+            std::mem::take(&mut m.dirty)
+        };
+        if dirty {
+            self.render();
+        }
+    }
+
+    /// 把一次命中翻译成协调器事件。
+    fn dispatch(&mut self, tag: i32) {
+        if tag < 0 {
+            return;
+        }
+        if tag == SOFT_TAG_CLOSE || tag == SOFT_TAG_ESC {
+            let _ = self.events.send(UiEvent::SoftKeyboardClose);
+            return;
+        }
+        if tag == SOFT_TAG_PAGE_PREV || tag == SOFT_TAG_PAGE_NEXT {
+            let n = self.pages.len();
+            if n > 0 {
+                let i = if tag == SOFT_TAG_PAGE_PREV {
+                    prev_page(self.current, n)
+                } else {
+                    next_page(self.current, n)
+                } as usize;
+                let _ = self.events.send(UiEvent::SoftKeyboardPage(i));
+            }
+            return;
+        }
+        if tag == SOFT_TAG_TAB_LEFT {
+            // 箭头滚半个视口——一次一项在长短不一的标签上跳得很碎，半屏更好预期。
+            let step = self.tab_step();
+            if !self.scroll_tabs(-step) {
+                return;
+            }
+            self.render();
+            return;
+        }
+        if tag == SOFT_TAG_TAB_RIGHT {
+            let step = self.tab_step();
+            if !self.scroll_tabs(step) {
+                return;
+            }
+            self.render();
+            return;
+        }
+        if tag == SOFT_TAG_CTRL {
+            self.ctrl_latched = !self.ctrl_latched;
+            self.render();
+            return;
+        }
+        if tag == SOFT_TAG_SHIFT {
+            // 面板自己的状态：锁定/解锁第二层，不回送协调器。
+            self.shift_locked = !self.shift_locked;
+            self.render();
+            return;
+        }
+        if tag >= SOFT_TAG_FN_BASE {
+            let i = (tag - SOFT_TAG_FN_BASE) as usize;
+            match SOFT_FN_KEYS.get(i) {
+                // 面板控制键不在 SOFT_FN_KEYS 里，这里恒是要合成的真实按键。
+                Some((name, _)) => {
+                    let _ = self
+                        .events
+                        .send(UiEvent::SoftKeyboardFunctionKey((*name).to_string()));
+                }
+                None => tracing::warn!("软键盘: 未知功能键 tag {tag}"),
+            }
+            return;
+        }
+        // 区域标记，不是控件：视口进命中表只为让滚轮知道「鼠标在标签行上」，命中到它
+        // 说明点的是标签行**留白**，真正的响应是拖动整块面板（`drags_panel`，在
+        // `WM_LBUTTONDOWN` 里就接走了，压根到不了这里）。留这一句是把「它不是控件」
+        // 写成代码，而不是指望它掉到最后一条键位分支里靠下标越界变成空操作。
+        if tag == SOFT_TAG_TAB_VIEWPORT {
+            return;
+        }
+        // ⛔ 判据用 `is_page_tag` 而不是 `tag >= SOFT_TAG_PAGE_BASE`：理由见那个函数。
+        if is_page_tag(tag) {
+            let i = (tag - SOFT_TAG_PAGE_BASE) as usize;
+            let _ = self.events.send(UiEvent::SoftKeyboardPage(i));
+            return;
+        }
+        // 键位：tag 即下标。
+        if let Some(cap) = self.keys.get(tag as usize) {
+            // 空键位不回送：面板上它是灰的，点了什么都不该发生。
+            // 判空用**显示档**——与键帽画成灰的那条判据同源。
+            // Ctrl 粘滞时**空键位也要放行**：Ctrl+某个键是组合键，跟这一面在那个位置
+            // 画没画符号没有关系。
+            let ctrl = self.ctrl_latched;
+            if ctrl || cap.output(self.cap_layer(&cap.slot)).is_some() {
+                let _ = self.events.send(UiEvent::SoftKeyboardKey {
+                    slot: cap.slot.clone(),
+                    shift: self.click_shift(&cap.slot),
+                    ctrl,
+                });
+                // 粘滞键用完即熄：这是修饰键的通行行为，也免得用户忘了它还亮着。
+                if ctrl {
+                    self.ctrl_latched = false;
+                    self.render();
+                }
+            }
+        }
+    }
+
+    /// 这一帧面板该落在哪。**三级优先级的唯一定义处**，见 [`Placement`]。
+    fn placement(&self) -> Placement {
+        Placement::pick(self.anchor_br, self.origin, self.work_area)
+    }
+
+    fn ensure_scale(&mut self, at: Placement) {
+        let (x, y) = at.probe_point();
+        let sc = crate::dpi::scale_for_point(x, y);
+        if (sc - self.scale).abs() > 0.01 {
+            self.scale = sc;
+            self.renderer.set_base_size(Self::DEFAULT_FONT_PX * sc);
+        }
+    }
+
+    /// 命中区随每次重排更新——用上一次的会让「切面后点第一个键出上一面的符号」。
+    fn publish_hits(&self, root: &View) {
+        let mut hits = Vec::new();
+        root.collect_hits(&mut hits);
+        self.mouse.borrow_mut().hits = hits;
+    }
+
+    /// 按下即「抓住面板拖动」的区域（位图内 `x, y, w, h`），供外部宿主在本地拖动。
+    ///
+    /// 判据就是鼠标状态机自己那条：`drags_panel(hit_at(..))`，见 [`drag_regions_of`]。
+    pub fn drag_regions(&self) -> Vec<[i32; 4]> {
+        let (w, h) = self.window.size();
+        drag_regions_of(&self.mouse.borrow(), w, h)
+    }
+
+    /// 外部宿主本地拖完：落点（左上角）收进来，锚点改成新的右下角并上报协调器落盘——等同
+    /// Windows 拖动结束时 `tick` 收 `moved_to` / `dropped_at` 那两步。宿主只报左上角，换算右下角
+    /// 要用尺寸，而尺寸只有这里知道。
+    #[cfg(all(target_os = "linux", ext_presenter))]
+    pub fn on_host_moved(&mut self, x: i32, y: i32) {
+        let (w, h) = self.window.size();
+        let (right, bottom) = (x + w as i32, y + h as i32);
+        self.origin = Some((x, y));
+        self.anchor_br = Some((right, bottom));
+        let _ = self
+            .events
+            .send(UiEvent::SoftKeyboardMoved { right, bottom });
+    }
+
+    /// 测试用：当前悬停的 tag（-1 = 无）。
+    #[cfg(all(test, target_os = "linux", ext_presenter))]
+    pub(crate) fn hover(&self) -> i32 {
+        self.mouse.borrow().hover
+    }
+
+    /// 测试用：某个 tag 当前的命中矩形（forwarder 用例据此找键帽的位图内坐标）。
+    #[cfg(all(test, target_os = "linux", ext_presenter))]
+    pub(crate) fn hit_rect(&self, tag: i32) -> Option<Rect> {
+        self.mouse
+            .borrow()
+            .hits
+            .iter()
+            .rev()
+            .find(|(t, _)| *t == tag)
+            .map(|(_, r)| *r)
+    }
+
+    /// 重排 + 重画 + 上屏。
+    fn render(&mut self) {
+        if !self.visible || self.keys.is_empty() {
+            return;
+        }
+        // 缩放与落点取自**同一个** `Placement`：先定"这一帧落在哪块屏"，再按那块屏的
+        // DPI 排版，最后用同一判据算落点。分两次各问一遍就会像修复前那样跑偏。
+        let at = self.placement();
+        self.ensure_scale(at);
+        let s = self.scale;
+        // ★ 只在**换面**时把当前面拉进视野。每帧无条件拉的后果是用户滚不动标签行——
+        // 手一松就被拽回当前面。滚动是用户的意图，换面才是我们的。
+        if self.current != self.last_shown_page {
+            self.scroll_current_into_view(s);
+            self.last_shown_page = self.current;
+        }
+        let mut root = self.build(s);
+        root.layout(0.0, 0.0, &self.renderer);
+        self.publish_hits(&root);
+
+        // ★ 命中区更新后、**落笔之前**，按当前光标位置校正一次悬停；变了就重排一遍。
+        //
+        // `WM_MOUSEMOVE` 只在光标移动时到达；内容在鼠标**底下**动过（标签滚动、切面）
+        // 时不会有任何消息，高亮就留在原来那个位置上——用户看到的是「滚走了还亮着」。
+        // 收在这里而不是让每个滚动点自己调，是因为「内容动了」的来路不止一条。
+        if self.refresh_hover() {
+            root = self.build(s);
+            root.layout(0.0, 0.0, &self.renderer);
+            self.publish_hits(&root);
+        }
+
+        let (w_f, h_f) = root.measured_size();
+        let w = (w_f.ceil() as u32).max(64);
+        let h = (h_f.ceil() as u32).max(64);
+        self.window.resize(w, h);
+        // 拖动由 addon 本地做：拖动区随帧下发，与本帧的命中区同刻。
+        #[cfg(all(target_os = "linux", ext_presenter))]
+        self.window.set_drag_regions(self.drag_regions());
+        {
+            let buf = self.window.buffer_mut();
+            let n = (w * h * 4) as usize;
+            buf[..n].fill(0);
+            root.paint(buf, w, h, &self.renderer);
+        }
+        if let Err(e) = self.window.update() {
+            tracing::warn!("软键盘: 窗口更新失败: {e}");
+            // Linux：位图超出 SHM 段上限（高缩放下的大面板）时整帧送不出去，面板不显示，协调器却
+            // 仍在软键盘态接管主键区——打字全变符号。让协调器退出软键盘态，与点关闭按钮同一条路。
+            #[cfg(all(target_os = "linux", ext_presenter))]
+            let _ = self.events.send(UiEvent::SoftKeyboardClose);
+            return;
+        }
+        // 落点每帧现算：锚右下角减去**当前**尺寸。切面会改面板尺寸（各面键数不同），
+        // 存左上角的话切一次面就朝右下长一截，再被钳回来——「切个面板还跑位」。
+        let raw = match at {
+            Placement::Anchor { right, bottom } => origin_from_anchor(right, bottom, w, h),
+            Placement::LastOrigin { x, y } => (x, y),
+            Placement::DefaultIn { work } => default_origin(w, h, s, work),
+        };
+        // 恢复的锚点必须过一次钳制：记录跨重启存活，而这中间显示器可能换了、
+        // 缩放可能改了（缩放变会让 key 失配落回默认，但分辨率相同、缩放相同、
+        // 主题字号变大也会撑大面板）。钳制结果只落到 `origin`，不回写 `anchor_br`。
+        let (x, y) = crate::sys::clamp_to_work_area(raw.0, raw.1, w, h);
+        self.origin = Some((x, y));
+        self.window.show(x, y);
+    }
+
+    /// 构建 View 树。
+    fn build(&self, s: f32) -> View {
+        let u = UNIT_DP * s;
+        let gap = GAP_DP * s;
+        let c = &self.colors;
+        let hover = self.mouse.borrow().hover;
+        let pressed = self.mouse.borrow().pressed;
+
+        let mut root = View::container(Layout::Column)
+            .bg(c.panel)
+            .pad(Edges::all(PAD_DP * s))
+            .gap(gap)
+            .border(c.line, (1.0 * s).max(1.0))
+            .radius(8.0 * s);
+
+        // 顶部拖动条：一根居中的短横，明示「这块面板可以拖」。
+        //
+        // ★ 它**不带 tag**，于是落进 `hit_at < 0` 那条空白分支——也就是拖动分支。
+        // 换句话说它不是一个"控件"，而是给本来就能拖的空白处加了个记号，
+        // 与工具栏那根 grip 同源。
+        //
+        // 关闭按钮也放这一行的右端：它和拖动条一样属于「这块窗口本身」，而不是标签行
+        // 里的一项。左端放一个与它等宽的透明占位，拖动条才是**精确**居中的。
+        let close_w = TAB_CLOSE_W_DP * s;
+        let close_h = CLOSE_H_DP * s;
+        let close_inset = PAD_DP * 0.5 * s;
+        // 向上溢出量：取「亮框高 − 行高」，于是 margin_box 的高度正好落回行高,
+        // `cross(Center)` 不会再叠一次偏移，亮框就稳稳居中在顶栏那条空白里。
+        let close_rise = close_h - GRIP_ROW_H_DP * s;
+        let close_down = pressed == SOFT_TAG_CLOSE;
+        let (close_bg, close_fg) = if close_down {
+            (c.accent_soft, c.accent)
+        } else if hover == SOFT_TAG_CLOSE {
+            (c.hover, c.ink)
+        } else {
+            ([0, 0, 0, 0], c.hint)
+        };
+        root = root.child(
+            View::container(Layout::Row)
+                .fill_cross()
+                .fixed_h(GRIP_ROW_H_DP * s)
+                .cross(Align::Center)
+                .child(View::container(Layout::Row).fixed_w(close_w))
+                .child(View::spacer().grow())
+                .child(
+                    View::container(Layout::Row)
+                        .fixed_w(GRIP_W_DP * s)
+                        .fixed_h((GRIP_H_DP * s).max(2.0))
+                        .radius((GRIP_H_DP * s * 0.5).max(1.0))
+                        .bg(c.grip),
+                )
+                .child(View::spacer().grow())
+                .child(
+                    // 关闭按钮向右上**溢出到面板的内边距里**，得到一个宽扁的胶囊热区,
+                    // 像标题栏那样整块可点。
+                    //
+                    // 面板有 `PAD_DP` 的内边距，按内容大小画出来的悬停框会「浮」在角落里，
+                    // 既小又对不齐边。用负 margin 把这块内边距吃回来一部分：
+                    //   宽 +inset / margin.r -inset，高 +rise / margin.t -rise
+                    //   ⇒ margin_box 与原来一模一样（宽=close_w，高=行高），
+                    //   于是**不影响同行其它元素的排布**（拖动条仍精确居中），
+                    //   只有这个节点自己向上、向右长出去。
+                    // ⚠️ 右侧只吃半个 PAD，不吃满：面板是圆角浮层不是有物理边框的标题栏，
+                    // 顶到物理边缘会盖掉圆角、显得「卡在角上」，留半格才有呼吸感。
+                    View::container(Layout::Row)
+                        .fixed_w(close_w + close_inset)
+                        .fixed_h(close_h)
+                        .margin(Edges {
+                            t: -close_rise,
+                            r: -close_inset,
+                            ..Default::default()
+                        })
+                        .radius(close_h * 0.5)
+                        .bg(close_bg)
+                        .border(
+                            if close_down { c.accent } else { [0, 0, 0, 0] },
+                            (1.0 * s).max(1.0),
+                        )
+                        .tag(SOFT_TAG_CLOSE)
+                        .child(
+                            View::leaf("✕", close_fg)
+                                .font_size(13.0 * s)
+                                .text_align(Align::Center)
+                                .fill_cross()
+                                .grow(),
+                        ),
+                ),
+        );
+        root = root.child(self.build_tabs(s, u, gap, hover, pressed));
+
+        // 键位行：4 行画布 + 各行两端的功能键。
+        //
+        // 行尾那个功能键一律 `grow`：各行的键位数与间隙数都不同，按固定单位数排出来
+        // 右边缘会差几个像素，参差不齐。让它吃掉本行的富余，四行右缘就自动对齐。
+        let mut idx = 0usize;
+        for (r, count) in ROW_SLOTS.iter().copied().enumerate() {
+            let mut row = View::container(Layout::Row).gap(gap).fill_cross();
+            // 行首功能键
+            match r {
+                1 => row = row.child(self.fn_key(1, "Tab", 1.5, u, gap, s, hover, pressed)),
+                2 => row = row.child(self.caps_key(1.75, u, gap, s, hover, pressed)),
+                3 => row = row.child(self.shift_key(2.5, u, gap, s, hover)),
+                _ => {}
+            }
+            for i in 0..count {
+                if let Some(cap) = self.keys.get(idx + i) {
+                    row = row.child(self.key_cap((idx + i) as i32, cap, u, s, hover, pressed));
+                }
+            }
+            idx += count;
+            // 行尾功能键。Del 排在 `\` 之后（第二行末尾），照 Windows 触摸键盘的布局。
+            match r {
+                0 => row = row.child(self.fn_key(0, "⌫", 3.0, u, gap, s, hover, pressed).grow()),
+                1 => row = row.child(self.fn_key(4, "Del", 1.5, u, gap, s, hover, pressed).grow()),
+                2 => {
+                    row = row.child(
+                        self.fn_key(2, "Enter", 3.25, u, gap, s, hover, pressed)
+                            .grow(),
+                    )
+                }
+                3 => row = row.child(self.shift_key(3.5, u, gap, s, hover).grow()),
+                _ => {}
+            }
+            root = root.child(row);
+        }
+
+        // 底行：**左组贴左、控制键组贴右**（Ctrl / 空格 ┄┄ ◀ ▶ Esc）。
+        //
+        // 「左固定 + 中间自由 + 右固定」不需要新的布局原语：`fill_cross` 把本行撑到列的
+        // 内容宽（= 最宽那行键盘的宽度），中间的 `spacer().grow()` 吃掉富余，右组就恒
+        // 贴右缘。少了 `fill_cross`，行宽只等于自身内容宽，spacer 分不到一个像素，右组
+        // 就跟着左组浮动——面板越宽错得越明显。
+        let mut bottom = View::container(Layout::Row).gap(gap).fill_cross();
+        bottom = bottom.child(self.ctrl_key_latch(1.75, u, gap, s, hover));
+        bottom = bottom.child(self.fn_key(3, "", 8.0, u, gap, s, hover, pressed));
+        bottom = bottom.child(View::spacer().grow());
+        bottom =
+            bottom.child(self.ctrl_key(SOFT_TAG_PAGE_PREV, "◀", 1.5, u, gap, s, hover, pressed));
+        bottom =
+            bottom.child(self.ctrl_key(SOFT_TAG_PAGE_NEXT, "▶", 1.5, u, gap, s, hover, pressed));
+        bottom = bottom.child(self.ctrl_key(SOFT_TAG_ESC, "Esc", 1.5, u, gap, s, hover, pressed));
+        root = root.child(bottom);
+        root
+    }
+
+    /// 各面标签的宽度（不含项间隙）。
+    fn tab_widths(&self, s: f32) -> Vec<f32> {
+        self.pages
+            .iter()
+            .map(|n| {
+                self.renderer.measure_text_sized(n, TAB_FONT_DP * s).width + TAB_PAD_X_DP * s * 2.0
+            })
+            .collect()
+    }
+
+    /// 标签行的度量：`(各标签宽, 内容总宽, 视口宽, 要不要滚动箭头)`。
+    ///
+    /// ★ 视口宽是**先于内容**定下来的：整行宽度对齐键盘区，减去关闭按钮与（需要时的）
+    /// 两个箭头，剩下的就是视口。所以右侧那些控件的位置只由键盘宽度决定，**与有多少个
+    /// 面、当前显示了哪几个都无关**——上一版它们跟着内容宽度漂，正是因为没有这一步。
+    fn tab_metrics(&self, s: f32, u: f32, gap: f32) -> (Vec<f32>, f32, f32, bool) {
+        let widths = self.tab_widths(s);
+        let n = widths.len();
+        let content_w = widths.iter().sum::<f32>() + TAB_GAP_DP * s * n.saturating_sub(1) as f32;
+        let full = KBD_UNITS * u + KBD_GAPS * gap;
+        // 关闭按钮已经挪到拖动条那一行，标签行整行都归标签用。
+        let need_scroll = content_w > full;
+        let arrows = if need_scroll {
+            (TAB_ARROW_W_DP * s + TAB_GAP_DP * s) * 2.0
+        } else {
+            0.0
+        };
+        let view_w = (full - arrows).max(0.0);
+        (widths, content_w, view_w, need_scroll)
+    }
+
+    /// 箭头/滚轮一次滚多远：半个视口。
+    fn tab_step(&self) -> f32 {
+        let s = self.scale;
+        let (_, _, view_w, _) = self.tab_metrics(s, UNIT_DP * s, GAP_DP * s);
+        (view_w * 0.5).max(40.0 * s)
+    }
+
+    /// 当前允许的最大滚动量。
+    fn tab_scroll_max(&self, s: f32, u: f32, gap: f32) -> f32 {
+        let (_, content_w, view_w, _) = self.tab_metrics(s, u, gap);
+        (content_w - view_w).max(0.0)
+    }
+
+    /// 滚动标签行（箭头与滚轮共用）。返回是否真的动了。
+    fn scroll_tabs(&mut self, dx: f32) -> bool {
+        let s = self.scale;
+        let max = self.tab_scroll_max(s, UNIT_DP * s, GAP_DP * s);
+        let next = (self.tab_scroll + dx).clamp(0.0, max);
+        if (next - self.tab_scroll).abs() < 0.5 {
+            return false;
+        }
+        self.tab_scroll = next;
+        true
+    }
+
+    /// 按**当前光标位置**重算悬停。
+    ///
+    /// ★ 内容在鼠标底下动了（滚动、切面）时必须重算：`WM_MOUSEMOVE` 只在光标移动时到达，
+    /// 鼠标不动而内容动，高亮就留在原来那个标签上——滚走了还亮着。
+    #[cfg(windows)]
+    fn refresh_hover(&self) -> bool {
+        use crate::sys::{GetCursorPos, POINT};
+        use windows::Win32::Graphics::Gdi::ScreenToClient;
+        let mut m = self.mouse.borrow_mut();
+        if m.hwnd == 0 {
+            return false;
+        }
+        let hwnd = m.hwnd_handle();
+        let mut p = POINT::default();
+        unsafe {
+            if GetCursorPos(&mut p).is_err() || !ScreenToClient(hwnd, &mut p).as_bool() {
+                return false;
+            }
+        }
+        let h = m.hit_at(p.x as f32, p.y as f32);
+        if h == m.hover {
+            return false;
+        }
+        m.hover = h;
+        true
+    }
+
+    /// macOS 版：光标与面板左上角都问得到，换算成客户区坐标即可。
+    ///
+    /// 与 Windows 分支同一职责（内容在鼠标底下动了要重算高亮），只是 macOS 没有
+    /// `ScreenToClient`，减一次面板原点就是。
+    #[cfg(target_os = "macos")]
+    fn refresh_hover(&self) -> bool {
+        let (ox, oy) = self.window.origin_px();
+        let (cx, cy) = crate::mac_panel::global_cursor_px(f64::from(self.scale));
+        let mut m = self.mouse.borrow_mut();
+        let h = m.hit_at((cx - ox) as f32, (cy - oy) as f32);
+        if h == m.hover {
+            return false;
+        }
+        m.hover = h;
+        true
+    }
+
+    /// Linux 外部宿主形态：照 macOS 的算法，光标（addon 最近报来的指针）减面板左上角。
+    ///
+    /// ⚠️ 先问指针还在不在面板里：「最后指针」在 LEAVE 后保持不动，不看这一位的话，
+    /// 指针离开后的任何一次重绘（切面、物理按键高亮）都会把它最后停过的那个键重新点亮。
+    #[cfg(all(target_os = "linux", ext_presenter))]
+    fn refresh_hover(&self) -> bool {
+        use crate::sys::{GetCursorPos, GetWindowRect, POINT, RECT};
+        let mut m = self.mouse.borrow_mut();
+        let hwnd = m.hwnd_handle();
+        if !crate::ext_panel::pointer_inside(hwnd) {
+            return false;
+        }
+        let (mut p, mut r) = (POINT::default(), RECT::default());
+        unsafe {
+            if GetCursorPos(&mut p).is_err() || GetWindowRect(hwnd, &mut r).is_err() {
+                return false;
+            }
+        }
+        let h = m.hit_at((p.x - r.left) as f32, (p.y - r.top) as f32);
+        if h == m.hover {
+            return false;
+        }
+        m.hover = h;
+        true
+    }
+
+    #[cfg(not(any(windows, target_os = "macos", all(target_os = "linux", ext_presenter))))]
+    fn refresh_hover(&self) -> bool {
+        false
+    }
+
+    /// 把当前面滚进视野。**只在换面时调用**，见 [`Self::last_shown_page`]。
+    fn scroll_current_into_view(&mut self, s: f32) {
+        if self.pages.is_empty() {
+            return;
+        }
+        let (u, gap) = (UNIT_DP * s, GAP_DP * s);
+        let (widths, _, view_w, _) = self.tab_metrics(s, u, gap);
+        self.tab_scroll = scroll_to_show(
+            &widths,
+            TAB_GAP_DP * s,
+            self.current,
+            self.tab_scroll,
+            view_w,
+        );
+    }
+
+    /// 标签行：**一个裁剪视口 + 固定在右侧的控件**。
+    ///
+    /// 结构（从左到右）：`‹` │ 视口（clip，内容按像素左移） │ `›` │ `✕`
+    ///
+    /// 视口用 `fixed_w(0) + grow` 吃掉中间全部剩余宽度：measure 时它宽度为 0，所以
+    /// **整行的宽度与标签内容完全无关**；arrange 时才把富余分给它。右侧三个控件因此
+    /// 恒定贴在同一个位置——上一版它们随内容漂，就是因为行宽被内容撑着走。
+    ///
+    /// 内容用负 margin 左移实现滚动，超出视口的部分由 [`View::clipped`] 裁掉。
+    fn build_tabs(&self, s: f32, u: f32, gap: f32, hover: i32, pressed: i32) -> View {
+        let c = &self.colors;
+        let tab_gap = TAB_GAP_DP * s;
+        let pad_x = TAB_PAD_X_DP * s;
+        let (_, content_w, view_w, need_scroll) = self.tab_metrics(s, u, gap);
+        let max_scroll = (content_w - view_w).max(0.0);
+        let scroll = self.tab_scroll.clamp(0.0, max_scroll);
+
+        let mut row = View::container(Layout::Row)
+            .gap(tab_gap)
+            .cross(Align::Center)
+            .fill_cross();
+        if need_scroll {
+            row = row.child(self.tab_arrow(
+                SOFT_TAG_TAB_LEFT,
+                "‹",
+                TAB_ARROW_W_DP * s,
+                s,
+                hover,
+                pressed,
+                scroll > 0.5,
+            ));
+        }
+
+        // 视口内容：全部标签一字排开，整体左移 scroll。
+        let mut inner = View::container(Layout::Row).gap(tab_gap).margin(Edges {
+            l: -scroll,
+            ..Default::default()
+        });
+        for (i, name) in self.pages.iter().enumerate() {
+            let tag = SOFT_TAG_PAGE_BASE + i as i32;
+            let active = i == self.current;
+            let (bg, fg) = if active {
+                (c.accent_soft, c.accent)
+            } else if hover == tag {
+                (c.keycap, c.ink)
+            } else {
+                ([0, 0, 0, 0], c.hint)
+            };
+            inner = inner.child(
+                View::container(Layout::Row)
+                    .bg(bg)
+                    .radius(4.0 * s)
+                    .pad(Edges::xy(pad_x, 5.0 * s))
+                    .cross(Align::Center)
+                    .tag(tag)
+                    .child(
+                        View::leaf(name, fg)
+                            .font_size(TAB_FONT_DP * s)
+                            .text_align(Align::Center),
+                    ),
+            );
+        }
+        row = row.child(
+            View::container(Layout::Row)
+                // ★ 宽度 0 + grow：整行宽度不被内容撑开，富余在 arrange 时才分进来。
+                .fixed_w(0.0)
+                .grow()
+                .clipped()
+                // 视口本身也进命中表，让滚轮知道「鼠标在标签行上」。标签的命中区在它
+                // 之后收集，会盖在上面，故点标签仍然点得到标签。
+                .tag(SOFT_TAG_TAB_VIEWPORT)
+                .child(inner),
+        );
+
+        if need_scroll {
+            row = row.child(self.tab_arrow(
+                SOFT_TAG_TAB_RIGHT,
+                "›",
+                TAB_ARROW_W_DP * s,
+                s,
+                hover,
+                pressed,
+                scroll < max_scroll - 0.5,
+            ));
+        }
+        row
+    }
+
+    /// 标签行的滚动箭头。`live=false` 时画成淡的且不进命中表——到头了还能点只会让人
+    /// 反复试探。
+    #[allow(clippy::too_many_arguments)]
+    fn tab_arrow(
+        &self,
+        tag: i32,
+        text: &str,
+        w: f32,
+        s: f32,
+        hover: i32,
+        pressed: i32,
+        live: bool,
+    ) -> View {
+        let c = &self.colors;
+        let down = live && pressed == tag;
+        let (bg, fg) = if down {
+            (c.accent_soft, c.accent)
+        } else if !live {
+            // 到头了：淡化**正常态的文字色**，而不是拿 `line`（边框色）当前景。
+            //
+            // ⚠️ border 在浅色主题里几乎等于面板底色（213 vs 251），箭头会看着像整个
+            // 消失，用户实测反馈「不可点击时完全隐藏了」。而箭头是常驻占位的，突然
+            // 不见等于布局变了。淡化才是「这里有个键，只是现在按不动」，且自动跟随主题。
+            ([0, 0, 0, 0], faded(c.hint, 150))
+        } else if hover == tag {
+            (c.hover, c.ink)
+        } else {
+            ([0, 0, 0, 0], c.hint)
+        };
+        let mut v = View::container(Layout::Row)
+            .fixed_w(w)
+            .radius(4.0 * s)
+            .bg(bg)
+            .pad(Edges::xy(2.0 * s, 4.0 * s))
+            .cross(Align::Center)
+            .child(
+                View::leaf(text, fg)
+                    .font_size(13.0 * s)
+                    .text_align(Align::Center)
+                    .fill_cross()
+                    .grow(),
+            );
+        if live {
+            v = v.tag(tag);
+        }
+        v
+    }
+
+    /// 一个符号键帽：角标（原物理键）+ **两档符号同时显示**。
+    ///
+    /// 上排小字是另一档，下排大字是当前档，切层时两者互换视觉权重——这样用户不按 Shift
+    /// 也知道上档是什么，而当前能打出的是哪一个仍然一眼可辨（靠字号与颜色，不是靠记）。
+    fn key_cap(
+        &self,
+        tag: i32,
+        cap: &SoftKeyCap,
+        u: f32,
+        s: f32,
+        hover: i32,
+        pressed: i32,
+    ) -> View {
+        let c = &self.colors;
+        // 显示档含 CapsLock（键盘面的字母键），回送档不含——见 cap_layer / layer_shift。
+        let shift = self.cap_layer(&cap.slot);
+        let cur = cap.output(shift);
+        let alt = cap.output(!shift);
+        // 「空」只看当前档：当前档没有映射就按不出东西，哪怕另一档有。
+        let dead = cur.is_none();
+        let phys_down = self.down_slot.as_ref().is_some_and(|(s, _)| s == &cap.slot);
+        let down = phys_down || pressed == tag;
+
+        // 三档轻重：普通 → 悬停（底色微亮）→ 按下（柔和主色 + 主色描边 + 主色字）。
+        //
+        // ⛔ 按下**不用纯 accent 实心填充**：那让一个键在一片浅色键帽里突然变成深色方块，
+        // 角标与另一档的字也被迫反白，一眼看去像是「这个键坏了」而不是「按下了」。
+        // 描边加上换字色已经足够指认，而且相邻键的视觉重量不会被打乱。
+        //
+        // 角标（`hint`）在按下态**保持原色**：它是键位名与另一档，不是被按的那个字符，
+        // 跟着变蓝只会让一个小小的键帽里出现三种蓝。
+        let (bg, border, fg, hint) = if down {
+            (c.accent_soft, c.accent, c.accent, c.hint)
+        } else if dead {
+            (c.keycap_dead, c.line, c.hint, c.hint)
+        } else if hover == tag {
+            (c.hover, c.line, c.ink, c.hint)
+        } else {
+            (c.keycap, c.line, c.ink, c.hint)
+        };
+
+        // 角标用键位名的可读形态（`grave` → `` ` ``），大写显示更像键帽刻字。
+        let label = slot_label(&cap.slot);
+        let sym = cur.unwrap_or("·");
+        // 多字符 token 收窄字号，避免撑出键帽。
+        let sym_px = if sym.chars().count() > 1 {
+            12.0 * s
+        } else {
+            17.0 * s
+        };
+
+        // 上排：角标 + 另一档（另一档没有映射时留空，不画占位符——那会让人以为它能打）。
+        let mut top = View::container(Layout::Row)
+            .cross(Align::Start)
+            .child(View::leaf(label, hint).font_size(9.0 * s))
+            .child(View::spacer().grow());
+        if let Some(a) = alt {
+            let a_px = if a.chars().count() > 1 {
+                8.5 * s
+            } else {
+                11.0 * s
+            };
+            top = top.child(View::leaf(a, hint).font_size(a_px));
+        }
+
+        let mut cell = View::container(Layout::Column)
+            .fixed_w(u)
+            .fixed_h(u)
+            .bg(bg)
+            .radius(4.0 * s)
+            .border(border, (1.0 * s).max(1.0))
+            .pad(Edges::xy(3.0 * s, 2.0 * s))
+            .child(top.fill_cross())
+            .child(
+                View::leaf(sym, fg)
+                    .font_size(sym_px)
+                    .text_align(Align::Center)
+                    .fill_cross()
+                    .grow(),
+            );
+        // 空键位不进命中表：它点了也不该有反应，连 hover 高亮都不该给。
+        if !dead {
+            cell = cell.tag(tag);
+        }
+        cell
+    }
+
+    /// 会合成真实按键的功能键（退格 / Tab / 回车 / 空格 / Ins / Del）。
+    #[allow(clippy::too_many_arguments)]
+    fn fn_key(
+        &self,
+        fn_idx: usize,
+        text: &str,
+        units: f32,
+        u: f32,
+        gap: f32,
+        s: f32,
+        hover: i32,
+        pressed: i32,
+    ) -> View {
+        let tag = SOFT_TAG_FN_BASE + fn_idx as i32;
+        let down = pressed == tag;
+        self.flat_key(tag, text, units, u, gap, s, hover, down)
+    }
+
+    /// Ctrl：**粘滞修饰键**。点一下亮起，下一次点键位就合成 `ctrl+键`，然后自动熄灭。
+    ///
+    /// ★ 不能做成「tap 一次 Ctrl」：单独敲一下 Ctrl 什么也不会发生，组合键的意义全在
+    /// 「按住 Ctrl 的同时按另一个键」。而面板不抢焦点，也没法真的「按住」——粘滞是
+    /// 软键盘表达修饰键的通行做法。
+    fn ctrl_key_latch(&self, units: f32, u: f32, gap: f32, s: f32, hover: i32) -> View {
+        let c = &self.colors;
+        let on = self.ctrl_latched;
+        let (bg, fg) = if on {
+            (c.accent_soft, c.accent)
+        } else if hover == SOFT_TAG_CTRL {
+            (c.hover, c.ink)
+        } else {
+            (c.keycap_fn, c.fn_ink)
+        };
+        View::container(Layout::Row)
+            .fixed_w(units * u + (units - 1.0) * gap)
+            .fixed_h(u)
+            .bg(bg)
+            .radius(4.0 * s)
+            .border(if on { c.accent } else { c.line }, (1.0 * s).max(1.0))
+            .cross(Align::Center)
+            .tag(SOFT_TAG_CTRL)
+            .child(
+                View::leaf("Ctrl", fg)
+                    .font_size(11.5 * s)
+                    .text_align(Align::Center)
+                    .fill_cross()
+                    .grow(),
+            )
+    }
+
+    /// 面板控制键（翻页 / 关闭）：不合成按键，语义各自不同。
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
+    fn ctrl_key(
+        &self,
+        tag: i32,
+        text: &str,
+        units: f32,
+        u: f32,
+        gap: f32,
+        s: f32,
+        hover: i32,
+        pressed: i32,
+    ) -> View {
+        self.flat_key(tag, text, units, u, gap, s, hover, pressed == tag)
+    }
+
+    /// Caps 键：显示系统大写锁定，并在够得着的平台上切换它。
+    ///
+    /// ⛔ 这不违反「不拦截 CapsLock」那条禁令。禁的是**拦截物理键**——toggle 键的
+    /// keydown/keyup 处理有坑，「翻转再回敲复原」已被删除且不得重来。这里是用户点面板时
+    /// 我们**主动敲一次** `vk:0x14`，与用户自己按下没有区别；物理 CapsLock 仍然完全
+    /// 不接管，它的状态由下面的轮询如实读回来。
+    ///
+    /// [`CAPS_CLICKABLE`] 为假时（macOS）画成禁用态：
+    /// - **键位留着，尺寸不变**——少画一个键会让两个平台的底行布局分家，而这一行是
+    ///   固定单位排的，抽掉一个就得两套排布；
+    /// - **不进命中表**，与面板上的空键位同一个做法：不 hover、不按下、更不合成，
+    ///   免得点了没反应还以为是卡了；
+    /// - **`caps_on` 的高亮照旧**——读那一半是好的，禁用不该把指示灯一起关掉。
+    fn caps_key(&self, units: f32, u: f32, gap: f32, s: f32, hover: i32, pressed: i32) -> View {
+        let tag = SOFT_TAG_FN_BASE + SOFT_FN_CAPS_INDEX as i32;
+        let c = &self.colors;
+        // 大写锁定是**持续态**，要一眼看见但不该盖过正在打的那个键：与标签行的
+        // 「当前面」同一套（柔和底 + 主色字 + 主色描边），而不是整块实心主色。
+        //
+        // ★ `caps_on` 排在禁用之前：亮着的锁定态比「这个键点不了」更要紧，也更该被看见。
+        let (bg, fg) = if self.caps_on {
+            (c.accent_soft, c.accent)
+        } else if !CAPS_CLICKABLE {
+            // 借空键位那套灰——本面板既有的「这个位置点了没用」的视觉词汇，不另发明一种。
+            (c.keycap_dead, c.hint)
+        } else if pressed == tag {
+            (c.accent_soft, c.ink)
+        } else if hover == tag {
+            (c.hover, c.ink)
+        } else {
+            (c.keycap_fn, c.hint)
+        };
+        let cell = View::container(Layout::Row)
+            .fixed_w(units * u + (units - 1.0) * gap)
+            .fixed_h(u)
+            .bg(bg)
+            .radius(4.0 * s)
+            .border(
+                if self.caps_on { c.accent } else { c.line },
+                (1.0 * s).max(1.0),
+            )
+            .cross(Align::Center)
+            .child(
+                View::leaf("Caps", fg)
+                    .font_size(11.5 * s)
+                    .text_align(Align::Center)
+                    .fill_cross()
+                    .grow(),
+            );
+        if CAPS_CLICKABLE { cell.tag(tag) } else { cell }
+    }
+
+    /// Shift 键：**可点**（锁定/解锁第二层），同时反映物理按住状态。
+    ///
+    /// 两种来源分开存（`shift_held` / `shift_locked`）：物理按住是临时的、松开还原，
+    /// 点击是锁定的、再点才还原。合成一个布尔就无法回答「松开物理 Shift 后该回哪一层」。
+    ///
+    /// ⛔ 仍然**不拦截物理 Shift 的按键事件**——面板只是跟随显示，切层判据取自每次按键
+    /// 携带的修饰位与一次轻量的键盘状态查询，不去接管这个键本身。
+    fn shift_key(&self, units: f32, u: f32, gap: f32, s: f32, hover: i32) -> View {
+        let c = &self.colors;
+        let on = self.layer_shift();
+        let dot_w = (4.0 * s).max(3.0);
+        // 与 Caps 同款：持续态用柔和底 + 主色字，不做实心填充。
+        let (bg, fg) = if on {
+            (c.accent_soft, c.accent)
+        } else if hover == SOFT_TAG_SHIFT {
+            (c.hover, c.ink)
+        } else {
+            (c.keycap_fn, c.hint)
+        };
+        View::container(Layout::Row)
+            .fixed_w(units * u + (units - 1.0) * gap)
+            .fixed_h(u)
+            .bg(bg)
+            .radius(4.0 * s)
+            .border(if on { c.accent } else { c.line }, (1.0 * s).max(1.0))
+            // ⚠️ 必须给内边距：本容器有边框，而子节点是从**边缘**开始排的——
+            // 不留内边距时，最右那个标记位正好压在边框上，看起来像是漏到了键外面。
+            .pad(Edges::xy(5.0 * s, 0.0))
+            .cross(Align::Center)
+            .tag(SOFT_TAG_SHIFT)
+            // 锁定标记**不能拼进文字里**：`"Shift ●"` 整串居中会把 Shift 三个字往左推,
+            // 锁定/解锁之间文字来回跳。改成三段——左侧等宽的透明占位 + 居中的文字 +
+            // 右侧的标记位，布局与是否锁定完全无关，只有标记的颜色在变。
+            .child(
+                View::container(Layout::Row)
+                    .fixed_w(dot_w)
+                    .fixed_h(dot_w)
+                    .radius(dot_w * 0.5),
+            )
+            .child(
+                View::leaf("Shift", fg)
+                    .font_size(11.5 * s)
+                    .text_align(Align::Center)
+                    .fill_cross()
+                    .grow(),
+            )
+            .child(
+                View::container(Layout::Row)
+                    .fixed_w(dot_w)
+                    .fixed_h(dot_w)
+                    .radius(dot_w * 0.5)
+                    .bg(if self.shift_locked {
+                        c.accent
+                    } else {
+                        [0, 0, 0, 0]
+                    }),
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn flat_key(
+        &self,
+        tag: i32,
+        text: &str,
+        units: f32,
+        u: f32,
+        gap: f32,
+        s: f32,
+        hover: i32,
+        down: bool,
+    ) -> View {
+        let c = &self.colors;
+        // 与符号键帽同一套三档（见 key_cap）。功能键此前按下用实心主色、平时文字用 `hint`,
+        // 在一排浅色键帽里显得突兀——它们和字母键是同一块键盘上的东西，只是底色略深。
+        let (bg, border, fg) = if down {
+            (c.accent_soft, c.accent, c.accent)
+        } else if hover == tag {
+            (c.hover, c.line, c.ink)
+        } else {
+            (c.keycap_fn, c.line, c.fn_ink)
+        };
+        View::container(Layout::Row)
+            .fixed_w(units * u + (units - 1.0) * gap)
+            .fixed_h(u)
+            .bg(bg)
+            .radius(4.0 * s)
+            .border(border, (1.0 * s).max(1.0))
+            .cross(Align::Center)
+            .tag(tag)
+            .child(
+                View::leaf(text, fg)
+                    .font_size(11.5 * s)
+                    .text_align(Align::Center)
+                    .fill_cross()
+                    .grow(),
+            )
+    }
+}
+
+/// 读物理 Shift 是否按住、大写锁定是否开着。无实现的平台返回 `None`，
+/// [`SoftKeyboard::tick`] 见 `None` 即整段跳过（面板停在当前层，不会出错档）。
+fn read_shift_caps() -> Option<(bool, bool)> {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CAPITAL, VK_SHIFT};
+        // 高位 = 按住；低位 = toggle 态（大写锁定用的是这一位）。
+        let shift = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+        let caps = (GetKeyState(VK_CAPITAL.0 as i32) as u16 & 0x0001) != 0;
+        Some((shift, caps))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        crate::mac_panel::shift_caps_state()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// 改变状态的键不重复——按住翻页键会让面飞速乱切。
+/// 让第 `cur` 个标签完整露出所需的滚动量。
+///
+/// 纯函数——宽度已量好，这里只做算术。抽出来是为了能单测，`scroll_current_into_view`
+/// 只负责把渲染器测出的宽度喂进来。
+fn scroll_to_show(widths: &[f32], gap: f32, cur: usize, scroll: f32, view_w: f32) -> f32 {
+    if widths.is_empty() {
+        return 0.0;
+    }
+    let cur = cur.min(widths.len() - 1);
+    let content_w = widths.iter().sum::<f32>() + gap * (widths.len() - 1) as f32;
+    let max = (content_w - view_w).max(0.0);
+    let x0: f32 = widths[..cur].iter().sum::<f32>() + gap * cur as f32;
+    let x1 = x0 + widths[cur];
+    // 在左边就贴左露出，在右边就贴右露出；已经完整可见则一动不动。
+    let next = if x0 < scroll {
+        x0
+    } else if x1 > scroll + view_w {
+        x1 - view_w
+    } else {
+        scroll
+    };
+    next.clamp(0.0, max)
+}
+
+/// 这个控件在**抬起**时才触发，而不是按下就动手。
+///
+/// 只给「关掉整块面板」这一类不可撤销的动作用。普通键位必须按下即出字——打字要跟手，
+/// 长按重复也建立在按下就开始之上。而关闭按钮按下即关，手感上像是「还没点就没了」，
+/// 且中途反悔（按住挪开）也来不及。
+/// 把颜色淡化到指定不透明度（禁用态用）。
+///
+/// 文字色的 alpha 由 `TextRenderer` 在选择性回写那一步混合（`dwrite.rs` 有像素级
+/// 测试守着），所以这里只改 alpha 通道即可，不必知道底色是什么。
+fn faded(c: [u8; 4], alpha: u8) -> [u8; 4] {
+    [c[0], c[1], c[2], alpha]
+}
+
+/// 这个 tag 是不是标签行里的**某一个面**（`SOFT_TAG_PAGE_BASE + 下标`）。
+///
+/// ★★★ 判据必须是**闭区间**。tag 空间是一段一段分配的（键位 0.. / 翻页 200_000 /
+/// 关闭 300_000 / 标签行控件 330_000 / 功能键 400_000），写成开区间 `tag >=
+/// SOFT_TAG_PAGE_BASE` 就等于宣称「200_000 以上全是面」——后加的 330_000 段于是被
+/// 整段吞进来。`SOFT_TAG_TAB_VIEWPORT`（330_002）就这么掉进过翻页分支，算出
+/// `i = 130_002` 发了个 `SoftKeyboardPage(130002)`，被协调器的越界检查挡下，只留一条
+/// 「面下标越界」warn，用户看到的是点了标签行留白**什么都没发生**。
+///
+/// 收成一个函数是因为这个判据在本文件有四处用（`dispatch`、[`fires_on_release`]、
+/// 滚轮的 `on_tabs`、以及本函数自己），此前只有 `dispatch` 那处写成了开区间——
+/// 三对一，正是「同一判据抄了四份」的典型下场。⛔ 别再就地展开成 `>=`。
+fn is_page_tag(tag: i32) -> bool {
+    (SOFT_TAG_PAGE_BASE..SOFT_TAG_CLOSE).contains(&tag)
+}
+
+/// 按下这里是「抓住面板拖动」而不是「点了某个控件」。
+///
+/// 两种情形：`-1`（没命中任何命中区，即键位之间的缝）与 `SOFT_TAG_TAB_VIEWPORT`。
+/// 后者是**区域标记而非控件**——视口进命中表只为让滚轮知道「鼠标在标签行上」，标签
+/// 自己的命中区在它之后收集、盖在上面，所以命中到视口就说明点的是标签行的**留白**。
+/// 而 `WM_LBUTTONDOWN` 那条拖动分支的注释一直写着「空白处（标签行留白、键位之间的
+/// 缝）→ 拖动整块面板」，此前却只判 `h < 0`，留白根本走不到——注释与代码相矛盾。
+fn drags_panel(tag: i32) -> bool {
+    tag < 0 || tag == SOFT_TAG_TAB_VIEWPORT
+}
+
+/// `w × h` 面板里按下会拖动的区域，切成互不重叠的矩形（位图内 `x, y, w, h`）。
+///
+/// ★ 不另写一套几何：按命中区的边把面板切成网格，每格取中心点问一次
+/// `drags_panel(hit_at(..))`——与鼠标状态机按下时的判据是同一行代码。再把同一行带里相邻
+/// 的格并成一段、上下两行带里同宽同位的段并成一块，矩形数就压到几十个。
+fn drag_regions_of(m: &SoftMouse, w: u32, h: u32) -> Vec<[i32; 4]> {
+    let edges = |pick: fn(&Rect) -> (f32, f32), max: u32| {
+        let mut v = vec![0, max as i32];
+        for (_, r) in &m.hits {
+            let (a, len) = pick(r);
+            for e in [a, a + len] {
+                v.push((e.round() as i32).clamp(0, max as i32));
+            }
+        }
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let xs = edges(|r| (r.x, r.w), w);
+    let ys = edges(|r| (r.y, r.h), h);
+    let mut out: Vec<[i32; 4]> = Vec::new();
+    // 上一行带延续下来、还能往下长的块在 `out` 里的下标，按 `(x, 宽)` 认。
+    let mut open: Vec<usize> = Vec::new();
+    for band in ys.windows(2) {
+        let (y0, y1) = (band[0], band[1]);
+        let cy = (y0 + y1) as f32 * 0.5;
+        let mut runs: Vec<(i32, i32)> = Vec::new();
+        for cell in xs.windows(2) {
+            let (x0, x1) = (cell[0], cell[1]);
+            if !drags_panel(m.hit_at((x0 + x1) as f32 * 0.5, cy)) {
+                continue;
+            }
+            match runs.last_mut() {
+                Some((_, end)) if *end == x0 => *end = x1,
+                _ => runs.push((x0, x1)),
+            }
+        }
+        let mut next_open = Vec::with_capacity(runs.len());
+        for (x0, x1) in runs {
+            let rect = [x0, y0, x1 - x0, y1 - y0];
+            match open
+                .iter()
+                .copied()
+                .find(|&i| out[i][0] == x0 && out[i][2] == x1 - x0 && out[i][1] + out[i][3] == y0)
+            {
+                Some(i) => {
+                    out[i][3] += y1 - y0;
+                    next_open.push(i);
+                }
+                None => {
+                    next_open.push(out.len());
+                    out.push(rect);
+                }
+            }
+        }
+        open = next_open;
+    }
+    out
+}
+
+// 调用点在 mouse_impl（Windows / Linux 外部宿主）与 mouse_macos；其余形态（开发机不带 linux-host）无人调
+#[cfg_attr(
+    not(any(windows, target_os = "macos", all(target_os = "linux", ext_presenter))),
+    allow(dead_code)
+)]
+fn fires_on_release(tag: i32) -> bool {
+    // 关闭：不可撤销，按下即关像「还没点就没了」。
+    if tag == SOFT_TAG_CLOSE || tag == SOFT_TAG_ESC {
+        return true;
+    }
+    // ★ 切面类：按下即切面会**重建整块面板**，而重建顺手清掉了按下态（`show` 里的
+    // `reset_mouse`）——用户看到的是按下态「闪一下就没了」。改成抬起触发，按住期间
+    // 状态稳稳留着，松手才切。
+    tag == SOFT_TAG_PAGE_PREV || tag == SOFT_TAG_PAGE_NEXT || is_page_tag(tag)
+}
+
+fn repeats(tag: i32) -> bool {
+    if let Some(idx) = tag.checked_sub(SOFT_TAG_FN_BASE)
+        && idx >= 0
+    {
+        // 功能键里只有大写锁定不重复——它是 toggle，按住会飞速开关，
+        // 松手时是开是关全凭运气。判据在 types 里，与键表同处。
+        return fn_key_repeats(idx as usize);
+    }
+    (0..SOFT_TAG_PAGE_BASE).contains(&tag)
+}
+
+fn next_page(cur: usize, n: usize) -> i32 {
+    if n == 0 { 0 } else { ((cur + 1) % n) as i32 }
+}
+
+fn prev_page(cur: usize, n: usize) -> i32 {
+    if n == 0 {
+        0
+    } else {
+        ((cur + n - 1) % n) as i32
+    }
+}
+
+/// 键位名 → 键帽角标。符号键用它本来的样子，比 `lbracket` 直观。
+fn slot_label(slot: &str) -> String {
+    match slot {
+        "grave" => "`".into(),
+        "minus" => "-".into(),
+        "equal" => "=".into(),
+        "lbracket" => "[".into(),
+        "rbracket" => "]".into(),
+        "backslash" => "\\".into(),
+        "semicolon" => ";".into(),
+        "quote" => "'".into(),
+        "comma" => ",".into(),
+        "period" => ".".into(),
+        "slash" => "/".into(),
+        other => other.to_uppercase(),
+    }
+}
+
+/// 记忆锚点（面板**右下角**）→ 本帧落点（左上角）。
+///
+/// 与 `Toolbar::origin_from_anchor` 同一个减法、同一个理由：面板尺寸会变（软键盘是
+/// 切面改键数，工具栏是换向/增删格），锚右下角让这些变化朝屏幕内侧展开。
+/// 必须每帧用**当前**的 `w`/`h` 现算，不能把结果存下来复用。
+fn origin_from_anchor(right: i32, bottom: i32, w: u32, h: u32) -> (i32, i32) {
+    (right - w as i32, bottom - h as i32)
+}
+
+/// 这一帧面板落在哪——**三级优先级只此一处**。
+///
+/// 有两个消费者问的是同一个问题："这一帧的面板在哪块屏上"：
+/// - [`SoftKeyboard::ensure_scale`] 要一个屏内的点去查 DPI；
+/// - [`SoftKeyboard::render`] 要算左上角落点。
+///
+/// ⚠️ 两者**不能共用一个函数**：算落点要先知道面板尺寸，而尺寸取决于缩放，缩放又
+/// 取决于在哪块屏——是个鸡生蛋。所以只能各自分派，但**优先级本身只写一次**（就是本
+/// 枚举的构造函数 [`SoftKeyboard::placement`]）。
+///
+/// 各写一遍的下场已经发生过一次：`ensure_scale` 当时只判 `anchor_br`/`origin` 两级，
+/// 漏掉的第三级恰好是"副屏首次打开、还没有位置记忆"——两个 `None` 一路落到 `(0, 0)`
+/// 即主屏，于是按主屏 DPI 排出的尺寸落到副屏上。症状很迷惑：鼠标一碰就好了（hover
+/// 重绘时 `origin` 已是上一帧落在副屏的落点，够到了第二级），拖动过一次也永久好了
+/// （有了 `anchor_br`，够到第一级）——**唯独第一次打开是错的**。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placement {
+    /// 用户摆过的位置，锚面板右下角（跨重启记忆）。
+    Anchor { right: i32, bottom: i32 },
+    /// 上一帧的落点（左上角）。同屏重开、hover 重绘走这里。
+    LastOrigin { x: i32, y: i32 },
+    /// 这块屏还没有记录：按协调器给的焦点屏工作区落默认位置。
+    DefaultIn { work: Option<(i32, i32, i32, i32)> },
+}
+
+impl Placement {
+    /// 三级优先级的**唯一实现**。`SoftKeyboard::placement` 只是把三个字段喂进来——
+    /// 拆成自由函数是为了让守门测试打到真身：`SoftKeyboard` 要真窗口才能构造，测试里
+    /// 造不出来，而把 `match` 在测试里抄一遍就成了"判据问自己"，改错了也照样绿。
+    fn pick(
+        anchor_br: Option<(i32, i32)>,
+        origin: Option<(i32, i32)>,
+        work_area: Option<(i32, i32, i32, i32)>,
+    ) -> Self {
+        match (anchor_br, origin) {
+            // 锚点是用户的**意图**，压过 `origin`（那只是上一帧的结果）。
+            (Some((right, bottom)), _) => Placement::Anchor { right, bottom },
+            (None, Some((x, y))) => Placement::LastOrigin { x, y },
+            (None, None) => Placement::DefaultIn { work: work_area },
+        }
+    }
+
+    /// 取一个**落在目标屏内**的点，供 DPI 查询。
+    ///
+    /// ⚠️ `right`/`bottom` 无论来自锚点还是工作区都是**排他**边界（等同 Win32 `RECT`
+    /// 语义），必须退 1px 才在屏内。不退的后果是屏幕右/下边缘的面板查到**相邻那块屏**
+    /// 的 DPI——多屏横排时尤其容易踩到，且只在贴边时复现。
+    fn probe_point(self) -> (i32, i32) {
+        match self {
+            Placement::Anchor { right, bottom } => (right - 1, bottom - 1),
+            // 左上角是包含边界，本身就在面板内，不必退。
+            Placement::LastOrigin { x, y } => (x, y),
+            Placement::DefaultIn {
+                work: Some((_, _, right, bottom)),
+            } => (right - 1, bottom - 1),
+            // 协调器都没查到显示器（非 Windows／查询失败），没有比主屏更好的猜测。
+            // `default_origin` 在同样的缺席下退回 `SPI_GETWORKAREA`，那个 API 取的也是主屏——
+            // 两处兜底落在同一块屏上，是一致的。
+            Placement::DefaultIn { work: None } => (0, 0),
+        }
+    }
+}
+
+/// 首次显示的位置：工作区底部居中，留一点边距。
+///
+/// `work` 是协调器按**焦点显示器**给的工作区 `(left, top, right, bottom)`。
+/// 只有在它缺席（协调器查不到显示器、非 Windows）时才回退 `SPI_GETWORKAREA`——
+/// ⚠️ 那个 API 取的恒是**主屏**，多显示器下拿它定位就是"在副屏打字、面板开在主屏"。
+/// 工具栏那边（`Toolbar::corner_position`）的文档写着同一条警告，是同一个坑。
+fn default_origin(w: u32, h: u32, s: f32, work: Option<(i32, i32, i32, i32)>) -> (i32, i32) {
+    let margin = (16.0 * s).round() as i32;
+    let bottom_centered = |left: i32, top: i32, right: i32, bottom: i32| {
+        let x = left + ((right - left) - w as i32) / 2;
+        let y = bottom - h as i32 - margin;
+        (x.max(left), y.max(top))
+    };
+    if let Some((left, top, right, bottom)) = work {
+        return bottom_centered(left, top, right, bottom);
+    }
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+        };
+        let mut rc = windows::Win32::Foundation::RECT::default();
+        if SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some(&mut rc as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_ok()
+        {
+            return bottom_centered(rc.left, rc.top, rc.right, rc.bottom);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some((ax, ay, aw, ah)) = crate::mac_panel::work_area_px(f64::from(s)) {
+        // 与 Windows 分支同一落点：工作区**底部居中**，留一点边距。
+        let x = ax + ((aw as i32) - w as i32) / 2;
+        let y = ay + ah as i32 - h as i32 - margin;
+        return (x.max(ax), y.max(ay));
+    }
+    let _ = (w, h);
+    (margin, margin)
+}
+
+// ───────────────────────── 鼠标 ─────────────────────────
+
+/// Win32 消息 → [`SoftMouse`]。Linux 外部宿主形态同样走这一份：`ext_panel` 把 addon 报来的
+/// 指针翻译成同一组 `WM_*`，`sys` 的 mock 给出指针与窗口矩形。
+#[cfg(any(windows, all(target_os = "linux", ext_presenter)))]
+mod mouse_impl {
+    use super::{SoftMouse, drags_panel, fires_on_release, is_page_tag, repeat_params, repeats};
+    use crate::sys::{
+        GetCursorPos, GetWindowRect, HWND_TOPMOST, POINT, RECT, ReleaseCapture, SWP_NOACTIVATE,
+        SWP_NOSIZE, SWP_NOZORDER, SetCapture, SetWindowPos, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MOUSELEAVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, clamp_to_work_area,
+    };
+    #[cfg(not(windows))]
+    use crate::sys::{HWND, LPARAM, LRESULT, ScreenToClient, WPARAM};
+    use crate::window::WindowMouse;
+    use aurora_ui_types::{SOFT_TAG_TAB_LEFT, SOFT_TAG_TAB_RIGHT, SOFT_TAG_TAB_VIEWPORT};
+    #[cfg(windows)]
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    #[cfg(windows)]
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
+
+    fn pos(lparam: LPARAM) -> (f32, f32) {
+        let x = (lparam.0 & 0xFFFF) as i16 as f32;
+        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
+        (x, y)
+    }
+
+    impl WindowMouse for SoftMouse {
+        fn on_message(
+            &mut self,
+            _hwnd: HWND,
+            msg: u32,
+            _wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> Option<LRESULT> {
+            match msg {
+                WM_MOUSEMOVE if self.dragging => {
+                    let mut p = POINT::default();
+                    unsafe {
+                        let _ = GetCursorPos(&mut p);
+                    }
+                    let nx = self.origin.0 + (p.x - self.anchor.0);
+                    let ny = self.origin.1 + (p.y - self.anchor.1);
+                    let hwnd = self.hwnd_handle();
+                    let (w, h) = unsafe {
+                        let mut r = RECT::default();
+                        if GetWindowRect(hwnd, &mut r).is_ok() {
+                            ((r.right - r.left) as u32, (r.bottom - r.top) as u32)
+                        } else {
+                            (0, 0)
+                        }
+                    };
+                    // 钳到工作区：面板比候选窗大得多，拖出屏幕就再也抓不回来了。
+                    let (cx, cy) = clamp_to_work_area(nx, ny, w, h);
+                    unsafe {
+                        let _ = SetWindowPos(
+                            hwnd,
+                            HWND_TOPMOST,
+                            cx,
+                            cy,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+                        );
+                    }
+                    self.moved_to = Some((cx, cy));
+                    Some(LRESULT(0))
+                }
+                WM_MOUSEMOVE => {
+                    // 每次进来都补订：LEAVE 是一次性的，收到后系统就注销了。
+                    self.arm_leave();
+                    let (x, y) = pos(lparam);
+                    let h = self.hit_at(x, y);
+                    if h != self.hover {
+                        self.hover = h;
+                        self.dirty = true;
+                    }
+                    // 按住后移出该键：停止长按重复。SetCapture 在后台窗口按线程失效
+                    // （本仓已有记录），所以这里靠「移出即停」+ 抬起兜底，不用 capture。
+                    if self.pressed >= 0 && h != self.pressed {
+                        self.pressed = -1;
+                        self.repeat_at = None;
+                        self.repeating = false;
+                        self.dirty = true;
+                    }
+                    Some(LRESULT(0))
+                }
+                WM_LBUTTONDOWN => {
+                    let (x, y) = pos(lparam);
+                    let h = self.hit_at(x, y);
+                    if drags_panel(h) {
+                        // 空白处（标签行留白、键位之间的缝）→ 拖动整块面板。
+                        //
+                        // 判据是 `drags_panel` 而不是 `h < 0`：标签行留白命中的是
+                        // `SOFT_TAG_TAB_VIEWPORT`（一个区域标记，>= 0），此前落到下面的
+                        // 按键分支去了，于是留白点了既不拖动也没反应。
+                        //
+                        // 这里用 SetCapture 是安全的：按下发生在本窗口内，捕获的是本线程的
+                        // 鼠标。本仓记过「后台窗口 SetCapture 按线程失效」，那说的是拿它去
+                        // **侦听窗口外的点击**（菜单关闭），与拖动不是一回事——工具栏的拖动
+                        // 一直就是这么做的。
+                        let mut p = POINT::default();
+                        unsafe {
+                            let _ = GetCursorPos(&mut p);
+                        }
+                        let hwnd = self.hwnd_handle();
+                        let mut r = RECT::default();
+                        let origin = unsafe {
+                            if GetWindowRect(hwnd, &mut r).is_ok() {
+                                (r.left, r.top)
+                            } else {
+                                (p.x, p.y)
+                            }
+                        };
+                        self.anchor = (p.x, p.y);
+                        self.origin = origin;
+                        self.dragging = true;
+                        if self.hover != -1 {
+                            self.hover = -1;
+                            self.dirty = true;
+                        }
+                        unsafe {
+                            let _ = SetCapture(hwnd);
+                        }
+                        return Some(LRESULT(0));
+                    }
+                    if h >= 0 {
+                        self.pressed = h;
+                        // 抬起才触发的控件在这里只记按下态（键帽会亮），动作留到 UP。
+                        if !fires_on_release(h) {
+                            self.clicked.push(h);
+                        }
+                        self.dirty = true;
+                        if repeats(h) {
+                            let (delay, _) = repeat_params();
+                            self.repeat_at = Some(
+                                std::time::Instant::now() + std::time::Duration::from_millis(delay),
+                            );
+                        }
+                    }
+                    Some(LRESULT(0))
+                }
+                // 光标离开面板：清掉悬停高亮。
+                //
+                // ★ 没有这一条，鼠标快速划出面板时最后那一格会一直亮着——`WM_MOUSEMOVE`
+                // 只在光标**还在窗口内**时到达，出界那一下没有任何消息。
+                WM_MOUSELEAVE => {
+                    self.leave_armed = false;
+                    if self.hover != -1 {
+                        self.hover = -1;
+                        self.dirty = true;
+                    }
+                    // 按住后划出去再松手，我们收不到 UP，按下态也要一并收掉。
+                    if self.pressed >= 0 && !self.dragging {
+                        self.pressed = -1;
+                        self.repeat_at = None;
+                        self.repeating = false;
+                        self.dirty = true;
+                    }
+                    Some(LRESULT(0))
+                }
+                // 滚轮在标签行上横向滚动。
+                //
+                // ⚠️ WM_MOUSEWHEEL 的 lparam 是**屏幕坐标**（其它鼠标消息是客户区坐标），
+                // 不换算会永远命中不到。
+                //
+                // 面板是 WS_EX_NOACTIVATE、永远拿不到焦点，而滚轮消息按规矩发给焦点窗口——
+                // 我们能收到它，靠的是 Win10 起默认开启的「悬停即滚动非活动窗口」。
+                // 用户若关掉那个设置就滚不动，故箭头必须一直留着，滚轮只是快捷方式。
+                WM_MOUSEWHEEL => {
+                    let mut p = POINT {
+                        x: (lparam.0 & 0xFFFF) as i16 as i32,
+                        y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+                    };
+                    let hwnd = self.hwnd_handle();
+                    unsafe {
+                        let _ = ScreenToClient(hwnd, &mut p);
+                    }
+                    let hit = self.hit_at(p.x as f32, p.y as f32);
+                    let on_tabs = hit == SOFT_TAG_TAB_VIEWPORT
+                        || hit == SOFT_TAG_TAB_LEFT
+                        || hit == SOFT_TAG_TAB_RIGHT
+                        || is_page_tag(hit);
+                    if on_tabs {
+                        let delta = ((_wparam.0 >> 16) & 0xFFFF) as i16;
+                        // 向前滚（正 delta）= 向左看，与横向列表的通行方向一致。
+                        self.wheel += -delta as f32 / 120.0;
+                    }
+                    Some(LRESULT(0))
+                }
+                WM_LBUTTONUP => {
+                    if self.dragging {
+                        self.dragging = false;
+                        unsafe {
+                            let _ = ReleaseCapture();
+                        }
+                        // 抬起才记锚点：取实际窗口矩形的右下角，交给 tick 上报持久化。
+                        let hwnd = self.hwnd_handle();
+                        let mut r = RECT::default();
+                        if unsafe { GetWindowRect(hwnd, &mut r) }.is_ok() {
+                            self.dropped_at = Some((r.right, r.bottom));
+                        }
+                    }
+                    if self.pressed >= 0 {
+                        // 抬起才触发：必须仍停在按下的那个控件上——按下后挪开再松手
+                        // 是「反悔」，不该执行。
+                        let (x, y) = pos(lparam);
+                        if fires_on_release(self.pressed) && self.hit_at(x, y) == self.pressed {
+                            self.clicked.push(self.pressed);
+                        }
+                        self.pressed = -1;
+                        self.dirty = true;
+                    }
+                    self.repeat_at = None;
+                    self.repeating = false;
+                    Some(LRESULT(0))
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod mouse_macos {
+    use super::{SoftMouse, drags_panel, fires_on_release, is_page_tag, repeat_params, repeats};
+    use crate::mac_panel::{MouseEvent, MouseKind, PanelGeom, PanelMouse};
+    use aurora_ui_types::{SOFT_TAG_TAB_LEFT, SOFT_TAG_TAB_RIGHT, SOFT_TAG_TAB_VIEWPORT};
+
+    /// AppKit 事件 → 同一个 [`SoftMouse`] 状态机。
+    ///
+    /// # 与 Windows 版（`mouse_impl`）的对应关系
+    ///
+    /// 状态机本身**一模一样**，逐条对位；差别只在事件从哪来、以及三件 Win32 特有的事
+    /// 在这里不需要做：
+    ///
+    /// | Win32 | macOS | 说明 |
+    /// |---|---|---|
+    /// | `WM_MOUSEMOVE` | `Move` / 未拖动时的 `Drag` | AppKit 在按住时发的是 `mouseDragged` |
+    /// | `WM_LBUTTONDOWN` / `UP` | `Down` / `Up` | — |
+    /// | `WM_MOUSELEAVE` + `TrackMouseEvent` 重订 | `Leave` | 跟踪区是常驻的，**不需要每次重订** |
+    /// | `SetCapture` / `ReleaseCapture` | 无 | AppKit 按下后隐式把后续事件送回同一视图 |
+    /// | `ScreenToClient`（滚轮用） | 无 | 滚轮事件的坐标本来就是客户区的 |
+    /// | `SetWindowPos` + `clamp_to_work_area` | 返回落点，由 `mac_panel` 挪窗并钳制 | 可见区只有主线程问得到 |
+    impl PanelMouse for SoftMouse {
+        fn on_mouse(&mut self, ev: MouseEvent, geom: PanelGeom) -> Option<(i32, i32)> {
+            match ev.kind {
+                // 拖动中：跟着光标走。落点由 `mac_panel` 钳进可见区，真实位置经
+                // `on_moved` 回来——面板比候选窗大得多，拖出屏幕就再也抓不回来了。
+                MouseKind::Drag if self.dragging => {
+                    let nx = self.origin.0 + (ev.sx - self.anchor.0);
+                    let ny = self.origin.1 + (ev.sy - self.anchor.1);
+                    Some((nx, ny))
+                }
+                // 未拖动的移动（含按住时的 Drag）：更新悬停，并处理「按住后挪开」。
+                MouseKind::Move | MouseKind::Drag => {
+                    let h = self.hit_at(ev.x, ev.y);
+                    if h != self.hover {
+                        self.hover = h;
+                        self.dirty = true;
+                    }
+                    // 按住后移出该键：停止长按重复（抬起时也不再触发，见 `Up` 的同址判据）。
+                    if self.pressed >= 0 && h != self.pressed {
+                        self.pressed = -1;
+                        self.repeat_at = None;
+                        self.repeating = false;
+                        self.dirty = true;
+                    }
+                    None
+                }
+                MouseKind::Down => {
+                    let h = self.hit_at(ev.x, ev.y);
+                    if drags_panel(h) {
+                        // 空白处（标签行留白、键位之间的缝）→ 拖动整块面板。
+                        // 判据是 `drags_panel` 而不是 `h < 0`，理由见那个函数。
+                        self.anchor = (ev.sx, ev.sy);
+                        self.origin = (geom.x, geom.y);
+                        self.dragging = true;
+                        if self.hover != -1 {
+                            self.hover = -1;
+                            self.dirty = true;
+                        }
+                        return None;
+                    }
+                    if h >= 0 {
+                        self.pressed = h;
+                        // 抬起才触发的控件在这里只记按下态（键帽会亮），动作留到 Up。
+                        if !fires_on_release(h) {
+                            self.clicked.push(h);
+                        }
+                        self.dirty = true;
+                        if repeats(h) {
+                            let (delay, _) = repeat_params();
+                            self.repeat_at = Some(
+                                std::time::Instant::now() + std::time::Duration::from_millis(delay),
+                            );
+                        }
+                    }
+                    None
+                }
+                MouseKind::Up => {
+                    self.dragging = false;
+                    if self.pressed >= 0 {
+                        // 抬起才触发：必须仍停在按下的那个控件上——按下后挪开再松手
+                        // 是「反悔」，不该执行。
+                        let h = self.hit_at(ev.x, ev.y);
+                        if fires_on_release(self.pressed) && h == self.pressed {
+                            self.clicked.push(self.pressed);
+                        }
+                        self.pressed = -1;
+                        self.dirty = true;
+                    }
+                    self.repeat_at = None;
+                    self.repeating = false;
+                    None
+                }
+                // 光标离开面板：清掉悬停高亮。
+                //
+                // ★ 没有这一条，鼠标快速划出面板时最后那一格会一直亮着——移动事件只在
+                // 光标还在视图内时到达，出界那一下没有任何事件。
+                MouseKind::Leave => {
+                    if self.hover != -1 {
+                        self.hover = -1;
+                        self.dirty = true;
+                    }
+                    // 按住后划出去再松手，我们收不到 Up，按下态也要一并收掉。
+                    if self.pressed >= 0 && !self.dragging {
+                        self.pressed = -1;
+                        self.repeat_at = None;
+                        self.repeating = false;
+                        self.dirty = true;
+                    }
+                    None
+                }
+                // 滚轮只在标签行上有意义（横向滚动标签）。这里只累加格数，真正的滚动
+                // 在 `tick` 里做——滚动要改 `tab_scroll` 并重绘，而本函数拿不到面板。
+                MouseKind::Wheel => {
+                    let h = self.hit_at(ev.x, ev.y);
+                    let on_tabs = h == SOFT_TAG_TAB_VIEWPORT
+                        || h == SOFT_TAG_TAB_LEFT
+                        || h == SOFT_TAG_TAB_RIGHT
+                        || is_page_tag(h);
+                    if on_tabs {
+                        // 向前滚 = 向左看，与横向列表的通行方向一致（同 Windows 分支）。
+                        self.wheel += -ev.wheel;
+                    }
+                    None
+                }
+            }
+        }
+
+        fn on_moved(&mut self, x: i32, y: i32) {
+            self.moved_to = Some((x, y));
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::view::Rect;
+        use aurora_ui_types::{SOFT_TAG_CLOSE, SOFT_TAG_PAGE_BASE};
+
+        /// 造一个装好命中区的 `SoftMouse`：tag 0（键位）占 (0,0,10,10)，
+        /// tag 1（键位）占 (20,0,10,10)，关闭按钮占 (40,0,10,10)，
+        /// 标签行视口占 (0,20,100,10)。其余位置命中 -1（留白）。
+        fn mk() -> SoftMouse {
+            SoftMouse {
+                hits: vec![
+                    (
+                        0,
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            w: 10.0,
+                            h: 10.0,
+                        },
+                    ),
+                    (
+                        1,
+                        Rect {
+                            x: 20.0,
+                            y: 0.0,
+                            w: 10.0,
+                            h: 10.0,
+                        },
+                    ),
+                    (
+                        SOFT_TAG_CLOSE,
+                        Rect {
+                            x: 40.0,
+                            y: 0.0,
+                            w: 10.0,
+                            h: 10.0,
+                        },
+                    ),
+                    (
+                        SOFT_TAG_TAB_VIEWPORT,
+                        Rect {
+                            x: 0.0,
+                            y: 20.0,
+                            w: 100.0,
+                            h: 10.0,
+                        },
+                    ),
+                ],
+                hover: -1,
+                pressed: -1,
+                ..Default::default()
+            }
+        }
+
+        fn geom() -> PanelGeom {
+            PanelGeom {
+                x: 100,
+                y: 200,
+                w: 300,
+                h: 150,
+            }
+        }
+
+        fn ev(kind: MouseKind, x: f32, y: f32) -> MouseEvent {
+            MouseEvent {
+                kind,
+                x,
+                y,
+                sx: 0,
+                sy: 0,
+                wheel: 0.0,
+            }
+        }
+
+        fn ev_screen(kind: MouseKind, sx: i32, sy: i32) -> MouseEvent {
+            MouseEvent {
+                kind,
+                x: 0.0,
+                y: 0.0,
+                sx,
+                sy,
+                wheel: 0.0,
+            }
+        }
+
+        /// 键位按下即触发（`fires_on_release` 为假），与 Windows 侧 `WM_LBUTTONDOWN` 同步。
+        #[test]
+        fn key_fires_on_press() {
+            let mut m = mk();
+            assert_eq!(m.on_mouse(ev(MouseKind::Down, 5.0, 5.0), geom()), None);
+            assert_eq!(m.pressed, 0);
+            assert_eq!(m.clicked, vec![0], "键位按下即入队");
+        }
+
+        /// 关闭按钮抬起才触发，且必须仍停在它上面——按下后挪开再松手是「反悔」。
+        #[test]
+        fn close_fires_on_release_only_when_still_on_it() {
+            let mut m = mk();
+            m.on_mouse(ev(MouseKind::Down, 45.0, 5.0), geom());
+            assert_eq!(m.pressed, SOFT_TAG_CLOSE);
+            assert!(m.clicked.is_empty(), "按下不该立刻触发关闭");
+            m.on_mouse(ev(MouseKind::Up, 45.0, 5.0), geom());
+            assert_eq!(m.clicked, vec![SOFT_TAG_CLOSE]);
+
+            // 反悔：按下后移到别处再松手。
+            let mut m = mk();
+            m.on_mouse(ev(MouseKind::Down, 45.0, 5.0), geom());
+            m.on_mouse(ev(MouseKind::Up, 5.0, 5.0), geom());
+            assert!(m.clicked.is_empty(), "挪开再松手不该触发");
+        }
+
+        /// 留白与标签行留白都拖整块面板；真控件不拖。判据同 `drags_panel`。
+        #[test]
+        fn blank_and_tab_viewport_start_a_drag() {
+            for (x, y, what) in [(70.0, 5.0, "键位之间的缝"), (50.0, 25.0, "标签行留白")]
+            {
+                let mut m = mk();
+                assert_eq!(m.on_mouse(ev(MouseKind::Down, x, y), geom()), None);
+                assert!(m.dragging, "{what} 应当开始拖动");
+                assert_eq!(m.origin, (100, 200), "记的是按下时的窗口左上");
+            }
+            let mut m = mk();
+            m.on_mouse(ev(MouseKind::Down, 5.0, 5.0), geom());
+            assert!(!m.dragging, "键位不该被当成拖动，否则点了就只会拖窗口");
+        }
+
+        /// 拖动落点 = 按下时窗口左上 + 光标位移。
+        #[test]
+        fn drag_offsets_by_cursor_delta() {
+            let mut m = mk();
+            let mut down = ev(MouseKind::Down, 70.0, 5.0);
+            down.sx = 500;
+            down.sy = 600;
+            m.on_mouse(down, geom());
+            let want = m.on_mouse(ev_screen(MouseKind::Drag, 530, 580), geom());
+            assert_eq!(want, Some((130, 180)), "100+30, 200-20");
+        }
+
+        /// ★ `moved_to` 记的必须是**钳制后**的真实落点，不是想去的那个。
+        /// 记错的症状是「往屏幕边上一拖，松手后面板自己跳走」——下一帧 `render`
+        /// 拿它调 `show`，就把面板送回了屏外。
+        #[test]
+        fn on_moved_records_the_clamped_position() {
+            let mut m = mk();
+            m.on_mouse(ev(MouseKind::Down, 70.0, 5.0), geom());
+            m.on_mouse(ev_screen(MouseKind::Drag, 9999, 9999), geom());
+            assert_eq!(m.moved_to, None, "拖动本身不写落点");
+            m.on_moved(42, 43);
+            assert_eq!(m.moved_to, Some((42, 43)));
+        }
+
+        /// 按住后移出该键：停掉按下态与长按重复。
+        #[test]
+        fn moving_off_a_pressed_key_cancels_it() {
+            let mut m = mk();
+            m.on_mouse(ev(MouseKind::Down, 5.0, 5.0), geom());
+            assert!(m.repeat_at.is_some(), "键位可重复，应已排上首次延迟");
+            m.on_mouse(ev(MouseKind::Drag, 25.0, 5.0), geom());
+            assert_eq!(m.pressed, -1);
+            assert!(m.repeat_at.is_none());
+        }
+
+        /// 离开面板：清悬停，并收掉按下态（划出去再松手收不到 Up）。
+        #[test]
+        fn leave_clears_hover_and_press() {
+            let mut m = mk();
+            m.on_mouse(ev(MouseKind::Move, 5.0, 5.0), geom());
+            assert_eq!(m.hover, 0);
+            m.on_mouse(ev(MouseKind::Down, 5.0, 5.0), geom());
+            m.on_mouse(ev(MouseKind::Leave, 0.0, 0.0), geom());
+            assert_eq!(m.hover, -1, "残留高亮正是这条分支要消灭的");
+            assert_eq!(m.pressed, -1);
+        }
+
+        /// 滚轮只在标签行上累加；落在键位上不动。方向与横向列表一致（向前滚 = 向左看）。
+        #[test]
+        fn wheel_only_counts_over_the_tab_row() {
+            let mut m = mk();
+            let mut w = ev(MouseKind::Wheel, 50.0, 25.0);
+            w.wheel = 2.0;
+            m.on_mouse(w, geom());
+            assert_eq!(m.wheel, -2.0);
+
+            let mut m = mk();
+            let mut w = ev(MouseKind::Wheel, 5.0, 5.0);
+            w.wheel = 2.0;
+            m.on_mouse(w, geom());
+            assert_eq!(m.wheel, 0.0, "键位上滚轮不该滚标签行");
+        }
+
+        /// 标签（面）也算标签行，滚轮在它上面同样有效。
+        #[test]
+        fn wheel_counts_over_a_page_tab() {
+            let mut m = mk();
+            m.hits.push((
+                SOFT_TAG_PAGE_BASE,
+                Rect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 30.0,
+                    h: 10.0,
+                },
+            ));
+            let mut w = ev(MouseKind::Wheel, 10.0, 25.0);
+            w.wheel = 1.0;
+            m.on_mouse(w, geom());
+            assert_eq!(m.wheel, -1.0);
+        }
+    }
+}
+
+#[cfg(not(any(windows, all(target_os = "linux", ext_presenter))))]
+impl crate::window::WindowMouse for SoftMouse {
+    // 句柄类型走 `crate::sys::`（真源，`sys.rs` 有 `pub use imp::*`）而非
+    // `crate::window::`——后者那行 `use crate::sys::{...}` 是**私有** import，隔着模块
+    // 引用它是 E0603。本 impl 是 `cfg(not(windows))` 专属，Windows 上根本不编译，故这个
+    // 错只在 macOS/Linux 现形，本机 Windows 怎么跑都测不出。
+    fn on_message(
+        &mut self,
+        _hwnd: crate::sys::HWND,
+        _msg: u32,
+        _wparam: crate::sys::WPARAM,
+        _lparam: crate::sys::LPARAM,
+    ) -> Option<crate::sys::LRESULT> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 默认位置落在**协调器给的那块屏**上，而不是主屏。
+    ///
+    /// 此前 `default_origin` 只认 `SPI_GETWORKAREA`——那个 API 取的恒是主显示器工作区，
+    /// 于是"在副屏打字、软键盘开在主屏"。副屏在主屏左侧时工作区坐标为负，落点必须
+    /// 跟着为负；钳到 0 就会把面板推回主屏（工具栏那边 `corner_in_work_area` 踩过同一个坑）。
+    #[test]
+    fn default_origin_follows_given_work_area() {
+        // 左侧副屏：虚拟桌面 x ∈ [-1920, 0)，工作区 (−1920, 0, 0, 1040)。
+        let (x, y) = default_origin(700, 300, 1.0, Some((-1920, 0, 0, 1040)));
+        assert_eq!(x, -1920 + (1920 - 700) / 2, "应在该屏水平居中（负坐标）");
+        assert_eq!(y, 1040 - 300 - 16, "应贴该屏工作区底部，留 16px 边距");
+        assert!(x < 0, "落点必须留在左侧副屏上，不得被推回主屏");
+    }
+
+    /// 副屏首次打开（还没有任何位置记忆）时，DPI 探针点必须落在**那块副屏**上。
+    ///
+    /// 用户实测：主副屏缩放不同，第一次在副屏点开软键盘尺寸就是错的（按主屏缩放排的），
+    /// 鼠标一碰又好了，拖动过一次之后永久好了。根因是 `ensure_scale` 当时只判两级，
+    /// `anchor_br`/`origin` 双 `None` 时落到 `(0, 0)`——那是主屏。后两个"又好了"分别是
+    /// 够到了 `LastOrigin` 和 `Anchor` 两级，把缺失的第三级掩盖成了"偶发"。
+    #[test]
+    fn probe_point_follows_work_area_when_nothing_is_remembered() {
+        // 左侧副屏：工作区 (−1920, 0, 0, 1040)，坐标为负。
+        // 从**入口条件**（还没摆过 = 无锚点，没画过 = 无上一帧落点）走完整条链，
+        // 而不是直接构造 `DefaultIn`——后者会跳过 `pick`，正好漏掉出问题的那一步。
+        let at = Placement::pick(None, None, Some((-1920, 0, 0, 1040)));
+        let (x, y) = at.probe_point();
+        assert!(
+            x < 0,
+            "探针点必须落在左侧副屏上，取到 {x} 说明又按主屏查 DPI 了"
+        );
+        assert_eq!(
+            (x, y),
+            (-1, 1039),
+            "工作区 right/bottom 是排他边界，须退 1px"
+        );
+    }
+
+    /// 三级优先级：`Anchor` > `LastOrigin` > `DefaultIn`。
+    ///
+    /// 这条钉的是 [`SoftKeyboard::placement`] 的分派本身。`render` 算落点与
+    /// `ensure_scale` 查 DPI 都基于它，改动优先级会同时影响两处。
+    #[test]
+    fn placement_priority_is_anchor_then_last_origin_then_default() {
+        let work = Some((-1920, 0, 0, 1040));
+        // 有锚点时压过上一帧落点——锚点是用户的**意图**，落点只是上一帧的结果。
+        assert_eq!(
+            Placement::pick(Some((800, 600)), Some((10, 20)), work),
+            Placement::Anchor {
+                right: 800,
+                bottom: 600
+            }
+        );
+        assert_eq!(
+            Placement::pick(None, Some((10, 20)), work),
+            Placement::LastOrigin { x: 10, y: 20 }
+        );
+        assert_eq!(
+            Placement::pick(None, None, work),
+            Placement::DefaultIn { work }
+        );
+    }
+
+    /// 锚点/上一帧落点两级的探针取点：右下角退 1px、左上角不退。
+    #[test]
+    fn probe_point_respects_inclusive_and_exclusive_edges() {
+        assert_eq!(
+            Placement::Anchor {
+                right: 1600,
+                bottom: 1000
+            }
+            .probe_point(),
+            (1599, 999),
+            "锚点是面板右下角（排他），不退 1px 会查到相邻那块屏"
+        );
+        assert_eq!(
+            Placement::LastOrigin { x: 100, y: 200 }.probe_point(),
+            (100, 200),
+            "左上角是包含边界，本身就在面板内"
+        );
+        assert_eq!(
+            Placement::DefaultIn { work: None }.probe_point(),
+            (0, 0),
+            "查不到显示器时兜底主屏，与 default_origin 的 SPI_GETWORKAREA 兜底同屏"
+        );
+    }
+
+    /// 面板比工作区还高时，纵向落点被夹到工作区顶部而不是变成负的屏外坐标。
+    ///
+    /// 低分辨率屏 + 大字号缩放下真会发生（面板高度随 scale 线性增长）。
+    #[test]
+    fn default_origin_clamps_to_top_when_panel_is_taller_than_work_area() {
+        let (_, y) = default_origin(700, 900, 1.0, Some((0, 0, 1280, 720)));
+        assert_eq!(y, 0, "放不下时贴顶，而不是落到屏幕上方之外");
+    }
+
+    /// 锚点 → 落点：同一锚点下，尺寸不同（切面）算出的右下角恒等。
+    ///
+    /// 软键盘各面键数不同 ⇒ 面板宽高随切面变。存左上角的话切一次面就朝右下长一截，
+    /// 表现为"切个面板还跑位"。与工具栏 `anchor_keeps_bottom_right_fixed_across_orientation`
+    /// 是同一个不变量。
+    #[test]
+    fn anchor_keeps_bottom_right_fixed_across_pages() {
+        const RIGHT: i32 = 1600;
+        const BOTTOM: i32 = 1000;
+        for (w, h) in [(700u32, 300u32), (900, 300), (700, 360)] {
+            let (x, y) = origin_from_anchor(RIGHT, BOTTOM, w, h);
+            assert_eq!(
+                (x + w as i32, y + h as i32),
+                (RIGHT, BOTTOM),
+                "面板 {w}x{h} 的右下角跑了"
+            );
+        }
+        // 尺寸变了左上角就该跟着动（朝屏幕内侧），否则说明压根没按当前尺寸现算。
+        assert_ne!(
+            origin_from_anchor(RIGHT, BOTTOM, 700, 300),
+            origin_from_anchor(RIGHT, BOTTOM, 900, 300)
+        );
+    }
+
+    #[test]
+    fn row_slots_match_the_ansi_main_block() {
+        // 13+13+11+10 = 47。与 aurora-softkeyboard 的 KEY_ROWS 对不上时，键帽会整体错位，
+        // 而错位在肉眼看来只是「某些符号跑到了别的键上」。
+        assert_eq!(ROW_SLOTS.iter().sum::<usize>(), 47);
+    }
+
+    #[test]
+    fn page_cycling_wraps() {
+        assert_eq!(next_page(0, 3), 1);
+        assert_eq!(next_page(2, 3), 0);
+        assert_eq!(prev_page(0, 3), 2);
+        assert_eq!(prev_page(2, 3), 1);
+        // 空表不该 panic（除零 / 下溢）
+        assert_eq!(next_page(0, 0), 0);
+        assert_eq!(prev_page(0, 0), 0);
+    }
+
+    #[test]
+    fn only_output_keys_repeat() {
+        assert!(repeats(0), "符号键位重复");
+        assert!(repeats(SOFT_TAG_FN_BASE), "退格等功能键重复");
+        assert!(
+            !repeats(SOFT_TAG_FN_BASE + SOFT_FN_CAPS_INDEX as i32),
+            "大写锁定绝不重复——它是 toggle，按住会飞速开关，松手时是开是关全凭运气"
+        );
+        assert!(!repeats(SOFT_TAG_PAGE_BASE), "翻页不重复——按住会飞速乱切");
+        assert!(!repeats(SOFT_TAG_CLOSE), "关闭不重复");
+        assert!(!repeats(SOFT_TAG_CTRL), "粘滞 Ctrl 不重复");
+    }
+
+    /// tag 分段判据必须是**闭区间**——开区间会把后加的段整段吞掉。
+    ///
+    /// 钉的是 0.120 周期的真实缺陷：`dispatch` 里写的是 `tag >= SOFT_TAG_PAGE_BASE`，
+    /// 于是 `SOFT_TAG_TAB_VIEWPORT`（330_002，在 200_000 与 400_000 之间）掉进翻页分支，
+    /// 算出 `i = 130_002` 发出 `SoftKeyboardPage(130002)`，被协调器的越界检查挡下，
+    /// 只留一条 warn ⇒ 用户点标签行留白**什么都没发生**。
+    ///
+    /// ⚠️ 将来往 `SOFT_TAG_PAGE_BASE..SOFT_TAG_CLOSE` **之外**再加新的 tag 段时，
+    /// 照着补一条断言：编译器管不了整型常量的分段，只有这里能拦。
+    #[test]
+    fn tag_ranges_are_closed_so_later_segments_are_not_swallowed() {
+        assert!(is_page_tag(SOFT_TAG_PAGE_BASE), "第 0 个面");
+        assert!(
+            is_page_tag(SOFT_TAG_CLOSE - 1),
+            "面段的上界（闭区间右端前一个）"
+        );
+        assert!(!is_page_tag(SOFT_TAG_CLOSE), "关闭不是面");
+        assert!(
+            !is_page_tag(SOFT_TAG_TAB_VIEWPORT),
+            "标签行视口是区域标记，不是某一个面——它被误判成面就是那个 bug 本身"
+        );
+        assert!(!is_page_tag(SOFT_TAG_TAB_LEFT) && !is_page_tag(SOFT_TAG_TAB_RIGHT));
+        assert!(!is_page_tag(SOFT_TAG_FN_BASE), "功能键不是面");
+        assert!(!is_page_tag(0), "键位不是面");
+    }
+
+    /// 导出的拖动区与按下时的判据逐像素一致：落在某块拖动区里 ⇔ `drags_panel(hit_at(..))`。
+    /// 覆盖键位、键间缝、标签行留白（视口）和盖在视口上的标签。
+    #[test]
+    fn drag_regions_match_press_hit_test_pixel_by_pixel() {
+        let r = |x: f32, y: f32, w: f32, h: f32| Rect { x, y, w, h };
+        let m = SoftMouse {
+            hits: vec![
+                (0, r(10.0, 10.0, 20.0, 20.0)),
+                (1, r(40.0, 10.0, 20.0, 20.0)),
+                (SOFT_TAG_TAB_VIEWPORT, r(0.0, 40.0, 100.0, 20.0)),
+                (SOFT_TAG_PAGE_BASE, r(10.0, 40.0, 30.0, 20.0)),
+            ],
+            hover: -1,
+            pressed: -1,
+            ..Default::default()
+        };
+        let (w, h) = (100u32, 70u32);
+        let regions = drag_regions_of(&m, w, h);
+        for py in 0..h as i32 {
+            for px in 0..w as i32 {
+                let (cx, cy) = (px as f32 + 0.5, py as f32 + 0.5);
+                let inside = regions
+                    .iter()
+                    .filter(|[x, y, rw, rh]| px >= *x && px < x + rw && py >= *y && py < y + rh)
+                    .count();
+                assert!(inside <= 1, "拖动区互不重叠 ({px},{py})");
+                assert_eq!(
+                    inside == 1,
+                    drags_panel(m.hit_at(cx, cy)),
+                    "({px},{py}) 的拖动区归属与按下判据不一致"
+                );
+            }
+        }
+        assert!(
+            regions.len() < 20,
+            "相邻格应合并，实际 {} 块",
+            regions.len()
+        );
+    }
+
+    /// 标签行留白按下 → 拖动整块面板，与那条分支自己的注释一致。
+    #[test]
+    fn tab_row_blank_drags_the_panel() {
+        assert!(drags_panel(-1), "没命中任何命中区（键位之间的缝）");
+        assert!(
+            drags_panel(SOFT_TAG_TAB_VIEWPORT),
+            "标签行留白——命中的是视口这个区域标记，它 >= 0，判 `h < 0` 会漏掉"
+        );
+        // 反向对照：真控件绝不能被当成拖动，否则点了就只会拖窗口。
+        assert!(!drags_panel(0), "键位");
+        assert!(!drags_panel(SOFT_TAG_PAGE_BASE), "标签");
+        assert!(!drags_panel(SOFT_TAG_TAB_LEFT), "左箭头");
+        assert!(!drags_panel(SOFT_TAG_CLOSE), "关闭");
+    }
+
+    #[test]
+    fn slot_labels_use_the_printed_symbol() {
+        assert_eq!(slot_label("grave"), "`");
+        assert_eq!(slot_label("lbracket"), "[");
+        assert_eq!(slot_label("q"), "Q");
+        assert_eq!(slot_label("1"), "1");
+    }
+
+    /// 标签滚动的算术：贴左露出、贴右露出、已可见则不动。
+    #[test]
+    fn scroll_only_moves_when_the_tab_is_off_screen() {
+        let w = [80.0f32; 8]; // 每项 80，间隙 0 ⇒ 内容 640
+        let view = 200.0;
+        // 已完整可见 ⇒ 一动不动。★ 这条是「用户滚不动标签行」那个 bug 的守门：
+        //   若这里返回了别的值，每帧都会把滚动量拽回去。
+        assert_eq!(scroll_to_show(&w, 0.0, 1, 0.0, view), 0.0);
+        // 在右边界之外 ⇒ 贴右露出：第 3 项右缘 4*80=320，减去视口 200
+        assert_eq!(scroll_to_show(&w, 0.0, 3, 0.0, view), 120.0);
+        // 在左边界之外 ⇒ 贴左露出
+        assert_eq!(scroll_to_show(&w, 0.0, 1, 300.0, view), 80.0);
+        // 不会滚过头：末项也不超过 content-view
+        assert_eq!(scroll_to_show(&w, 0.0, 7, 0.0, view), 640.0 - 200.0);
+        // 内容装得下 ⇒ 恒为 0
+        assert_eq!(scroll_to_show(&[50.0, 50.0], 0.0, 1, 0.0, view), 0.0);
+        // 空表不 panic
+        assert_eq!(scroll_to_show(&[], 0.0, 3, 0.0, view), 0.0);
+    }
+}
+
+// 激活键文字色：强调色底上的字取 on_accent（分段着色给 _base 加了 accent_text 之后，
+// 旧的第二级 accent_text 会让 _base / msime 的激活键同色字压同色底）。
+#[cfg(test)]
+mod active_key_color_tests {
+    use super::Colors;
+
+    fn theme(name: &str) -> aurora_theme::Resolved {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data/themes");
+        aurora_theme::load_resolved(&dir, name, false).unwrap()
+    }
+
+    #[test]
+    fn active_key_text_is_on_accent_not_accent() {
+        for name in ["_base", "msime", "default"] {
+            let t = theme(name);
+            let c = Colors::from_theme(&t);
+            assert_eq!(
+                c.on_accent, t.palette["on_accent"],
+                "{name}：激活键文字应取 on_accent"
+            );
+            assert_ne!(c.on_accent, c.accent, "{name}：激活键字色不能与底色相同");
+        }
+    }
+}

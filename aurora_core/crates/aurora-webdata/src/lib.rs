@@ -1,0 +1,10691 @@
+//! Web 设置数据 RPC：schema/dict/temp/freq/shadow/stats/theme/phrase/quick/commonChars 命名空间。
+//!
+//! 经 aurora-rpc 的 `CoreRpc::data_rpc` 转发到此（service 的 RpcCore 适配）。
+//! 方法名与前端 `contract.ts` 1:1 一致。
+//!
+//! 接入进度：契约全部数据域方法均接通真实 store/engine/theme：
+//! - schema.*（含三层合并 getConfig/saveConfig/resetConfig/setDictEnabled/delete）
+//! - dict.*（含 encode/genPinyin 反查出码）、temp.*、freq.*、shadow.*、phrase.*、stats.*、theme.*
+//! - `schema.references` 暂返 `{}`（删除安全检查未用，前端宽松消费）；
+//!   无 store/themes 时各方法返回合法空集（降级，不报错）。
+//!
+//! 本 crate 由 aurora-coordinator 的 webdata 模块独立而来：它只经
+//! [`WebDataHost`] 窄面（定义在 aurora-coordinator::web_host）触宿主，
+//! 把 aurora-transfer/fontdb 等重依赖挡在 Android 闭包之外。
+
+mod user_dicts;
+
+use serde_json::{Value, json};
+use aurora_coordinator::dict_transfer_api::{self, resolve_engine_type};
+use aurora_coordinator::handle_common_chars::CommonCharEdit;
+use aurora_coordinator::handle_quick_format::QuickFormatEdit;
+use aurora_coordinator::user_words_api;
+use aurora_coordinator::web_host::WebDataHost;
+use aurora_store::completion::CompletionKind;
+
+fn str_param<'a>(p: &'a Value, key: &str) -> anyhow::Result<&'a str> {
+    p.get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("缺少参数 {}", key))
+}
+
+/// 导入类方法的文本来源：**`path` 优先，`content` 回落**。
+///
+/// ## 为什么要有 `path` 这条路
+///
+/// 走 `content` 时整份词库要塞进一帧 JSON-RPC，而设置端的读帧上限是 16MB
+/// （`wind-setting::rpc::MAX_FRAME`）。按每条约 30 字节（含 JSON 对 `\t\n` 的转义）算，
+/// 单是用户词库就在 55 万条左右撞墙，带上词频/候选调整等段则 25 万条起——**这是随词库
+/// 增长必然撞上的墙，不是偶发**。见 issue #101（用户实测报「帧长超限」）。
+///
+/// `path` 让 payload 从 O(词库大小) 降到 O(1)，上限**消失**而不是提高。这不是新花样：
+/// `backup.*` 一直就是这么传的（见 [`WebData::web_backup_create`]），本函数只是把
+/// `dict.*` 拉齐到同一套做法。
+///
+/// ## 为什么 `content` 必须留着
+///
+/// 两类调用方没有文件可指：命令行的管道用法，以及设置端「纯词列表」那条路——它把用户
+/// 的词表分批送去出码、在内存里拼成 TSV 再导入，那份 TSV 从来不落盘。
+///
+/// ⚠️ 路径不做额外校验，与 `backup.*` 保持一致：它来自用户在本机文件对话框里的选择，
+/// 与 core 同权限同用户。在这一处单独立一套规矩，只会让两条路的行为解释不通。
+fn dict_source_text(params: &Value) -> anyhow::Result<std::borrow::Cow<'_, str>> {
+    if let Some(path) = params.get("path").and_then(|v| v.as_str())
+        && !path.is_empty()
+    {
+        let s = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("读取 {} 失败：{}", path, e))?;
+        return Ok(std::borrow::Cow::Owned(s));
+    }
+    Ok(std::borrow::Cow::Borrowed(str_param(params, "content")?))
+}
+
+/// 按设置页点选的列给常用字列表排序。`sort_by` 为空 = 不动，保持字表原序。
+///
+/// ## 为什么 `"text"` 也要认
+///
+/// 「字」那一列复用了 `WordField::Text`（`cell_text` 取它正好得到那个字），于是设置页发来的
+/// `sortBy` 是 `"text"`，而这张表的 json 字段名是 `"char"`。两个都收下——只认一个的后果是
+/// 点了列头毫无反应，**且不报错**。
+///
+/// ## 稳定排序，不用 `reverse()`
+///
+/// 降序走 `Ordering::reverse` 而不是排完再整体反转：后者会把同值组内的顺序也倒过来，
+/// 于是按「当前」排序时，同为生僻的那一批会从字表原序变成倒序——用户看到的是一列
+/// 莫名其妙乱序的字。稳定排序则让同值组保持字表原序。
+fn sort_common_char_rows(
+    rows: &mut [aurora_coordinator::handle_common_chars::CommonCharRow],
+    sort_by: &str,
+    desc: bool,
+) {
+    let key = |r: &aurora_coordinator::handle_common_chars::CommonCharRow| match sort_by {
+        // 多码位簇按首码位排——它没有单一码位，取首个是唯一稳定且直观的口径。
+        "text" | "char" => (r.text.chars().next().map_or(0, |c| c as u32), false),
+        // bool 升序 = false 在前 = 生僻在前。
+        "baseCommon" => (0, r.base_common),
+        "common" => (0, r.common),
+        _ => (0, false),
+    };
+    if !matches!(sort_by, "text" | "char" | "baseCommon" | "common") {
+        return;
+    }
+    rows.sort_by(|a, b| {
+        let o = key(a).cmp(&key(b));
+        if desc { o.reverse() } else { o }
+    });
+}
+
+/// 参数里取一个**单字**。
+///
+/// 多字符 / 空串一律拒绝，而不是取首字符：「常用」是字级属性，悄悄截取会让用户以为
+/// 自己给整个词做了标记，而实际上只标了第一个字。
+/// 读取「一个字符」参数——按**字素簇**校验，不是按 `char`。
+///
+/// `⚽️`(2 个码位)、`👨‍👩‍👧`(5 个)、`🇨🇳`(2 个) 在屏幕上都只有一个图形，按 `char` 数校验会把
+/// 它们当成词组拒掉，用户看到的是候选右键里根本没有「设为生僻字」这一项。
+fn char_param(p: &Value, key: &str) -> anyhow::Result<String> {
+    let s = str_param(p, key)?;
+    if s.is_empty() {
+        anyhow::bail!("参数 {key} 不能为空");
+    }
+    aurora_candidate::single_markable_char(s)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("参数 {key} 只能是一个字符（收到「{s}」）"))
+}
+
+/// 读取 `sections` 参数（字符串数组）→ 词库数据段；缺省返回 None（由调用方取引擎默认）。
+fn dict_sections_param(p: &Value) -> Option<Vec<aurora_store::dict_export::DictSection>> {
+    let arr = p.get("sections")?.as_array()?;
+    Some(
+        arr.iter()
+            .filter_map(|v| v.as_str())
+            .filter_map(aurora_store::dict_export::DictSection::from_key)
+            .collect(),
+    )
+}
+
+/// 导入结果 → JSON（`{sections:[{key, added/updated/unchanged | imported, skipped, …}]}`）。
+/// 过了准入契约的段（用户词 / 临时词）再并进分类统计——两种格式字段名一致，UI 两条路径
+/// 共用同一套渲染。
+///
+/// ⚠️ `rejectedSamples` 只有 WindDict 多段路径带：Rime/TSV 路径历来不回这个字段，
+/// 下沉到 `dict_transfer_api` 时保持原形状不变。
+fn dict_report_json(out: &dict_transfer_api::DictImportOutcome) -> Value {
+    let aurora_dict = out.format == aurora_store::import_formats::DictFormat::WindDict;
+    let sections: Vec<Value> = out
+        .sections
+        .iter()
+        .map(|s| {
+            let mut o = serde_json::Map::new();
+            o.insert("key".into(), json!(s.key));
+            if let Some(w) = &s.words {
+                o.insert("added".into(), json!(w.added));
+                o.insert("updated".into(), json!(w.updated));
+                o.insert("unchanged".into(), json!(w.unchanged));
+            } else {
+                o.insert("imported".into(), json!(s.imported));
+            }
+            // 闸口丢掉的行已并进 skipped，此处只补「为什么少」的分类。
+            o.insert("skipped".into(), json!(s.skipped));
+            if let Some(st) = &s.contract {
+                o.insert("rejected".into(), json!(st.rejected));
+                if aurora_dict {
+                    o.insert("rejectedSamples".into(), json!(st.samples));
+                }
+                o.insert("boundaryFilled".into(), json!(st.filled));
+                o.insert("boundaryAmbiguous".into(), json!(st.ambiguous));
+                o.insert("boundaryNoReading".into(), json!(st.no_reading));
+                o.insert("noBoundary".into(), json!(st.no_boundary));
+                // 用户选「不补充」时跳过的行数（与 rejected 分开：那是程序判非法，这是用户的选择）。
+                o.insert("boundarySkipped".into(), json!(st.unfilled_skipped));
+            }
+            Value::Object(o)
+        })
+        .collect();
+    json!({ "sections": sections })
+}
+
+fn i32_param(p: &Value, key: &str) -> i32 {
+    p.get(key).and_then(|v| v.as_i64()).unwrap_or(0) as i32
+}
+
+/// 该数据 RPC 是否扫整张（某方案的）用户词 / 临时词 / 词频 / shadow 表，见 [`WebDataRpc::web_data_rpc`]。
+///
+/// 只收真正全表的：`dict.listPaged` 为给精确 `total` 三条分流都扫满；`dict.search` 是带
+/// `limit` 的前缀查询、扫到够数即停，只有 `limit = 0`（不限）时才算。短语 / 补全 / 快捷输入 /
+/// 常用字 / 字符类 / 统计这些全局小表不在内：条数有界，扫一遍填不起可观的缓存。
+fn scans_whole_table(method: &str, params: &Value) -> bool {
+    FULL_SCAN_METHODS.contains(&method)
+        || (method == "dict.search" && usize_param(params, "limit", 50) == 0)
+}
+
+/// 无条件全表扫描的 RPC（`dict.search` 有条件，单独判，见 [`scans_whole_table`]）。
+/// 方法名与分派表的对应由测试 `rpc_name_tables_match_the_dispatch_table` 锁住。
+const FULL_SCAN_METHODS: &[&str] = &[
+    "dict.listPaged",
+    "dict.export",
+    "dict.stats",
+    "temp.list",
+    "temp.listPaged",
+    "temp.promoteAll",
+    "temp.clear",
+    "freq.listPaged",
+    "shadow.list",
+    "shadow.listPaged",
+    "backup.create",
+    // 预览要逐条比对现有词（新增 / 已存在 / 冲突），整表都读一遍。
+    "dict.previewImport",
+    // 清空是逐条删（整表都走一遍）；量通常不大，按扫描标记而不立即回收。
+    "freq.clear",
+    "shadow.clear",
+];
+
+/// **全表规模的写**：成功之后立即回收页缓存（`drop_page_cache_after_bulk_write`）。
+///
+/// redb 刷盘时会把脏页直接晋升进读缓存并长期不还（本机实测 19 万词的库因此常驻 41 MB，
+/// 50 万词约 90 MB）——用户反馈「导入大词库之后内存占用变高」就是它。写是一次性的，不必等
+/// 空闲：做完就还。只在**成功**时丢：格式不符 / 引擎类型不匹配那些 early-return Err 一个字节
+/// 都没落库，没必要付关库重开这一趟；丢缓存失败也不把一次成功的写报成失败（只记日志）。
+/// 放在分发出口而不是各 handler 里：handler 内多条分支各自返回，将来多一条就会漏。
+///
+/// `schema.delete` 级联清该方案的用户词 / 临时词 / 草稿 / 词频 / 联想历史 / shadow 六张表，
+/// 动的页与 `dict.clear` 同量级。
+const BULK_WRITE_METHODS: &[&str] = &[
+    "backup.restore",
+    "dict.clear",
+    "dict.import",
+    "schema.delete",
+];
+
+fn usize_param(p: &Value, key: &str, default: usize) -> usize {
+    p.get(key)
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(default)
+}
+
+/// 解析排序参数。sortBy 在 valid_fields 中时返回 (字段名, is_desc)，否则返回 None（保持原顺序）。
+fn parse_sort<'a>(params: &'a Value, valid_fields: &[&str]) -> Option<(&'a str, bool)> {
+    let by = params.get("sortBy")?.as_str()?;
+    if !valid_fields.contains(&by) {
+        return None;
+    }
+    let desc = params.get("sortOrder").and_then(|v| v.as_str()) == Some("desc");
+    Some((by, desc))
+}
+
+/// `system.memoryStats` 的回包：进程私有内存 + 已加载方案 + 各懒建结构的自报大小。
+///
+/// 数据源与 `Coordinator::debug_memory_report` 相同（[`aurora_engine::EngineManager::memory_report`]
+/// 与 `ReverseLookup::heap_bytes`），不另算一套。字段恒在：取不到的给 `null`、没有的给空数组。
+///
+/// - `process`：`{bytes, kind}`，口径见 `aurora_coordinator::process_memory`（Windows Private、
+///   Linux / Android RssAnon；macOS 两者皆 `null`）。
+/// - `redb`：redb 不暴露页缓存的在用量，只给上限与「空闲回收」已发生的次数；旧库没打开（迁移
+///   全部完成后运行期不再打开它）或无 store 时 `null`。
+/// - 字节数都是各结构按容量自报、不含分配器开销，只用来回答「是哪一档涨了」。
+fn memory_stats_json<H: WebDataHost + ?Sized>(h: &H) -> Value {
+    let process = aurora_coordinator::process_memory::private_memory();
+    let r = h.engine_mgr().memory_report();
+    let (chaizi, pinyin, comments) = h
+        .reverse_lookup()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .heap_bytes();
+    json!({
+        "process": {
+            "bytes": process.map(|p| p.bytes),
+            "kind": process.map(|p| p.kind),
+        },
+        "schemas": r.engines.iter().map(|(id, ty, parts)| json!({
+            "id": id,
+            "type": ty,
+            "parts": parts.iter().map(|p| json!({
+                "name": p.name, "bytes": p.bytes, "allocs": p.allocs,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "reverseIndex": r.reverse_index.iter().map(|(id, heap, image)| json!({
+            "schema": id, "heapBytes": heap, "imageBytes": image,
+        })).collect::<Vec<_>>(),
+        "userText": r.user_text.iter().map(|(id, bytes, building)| json!({
+            "schema": id, "bytes": bytes, "building": building,
+        })).collect::<Vec<_>>(),
+        "userAssoc": r.user_assoc.as_ref().map(|(id, bytes)| json!({
+            "schema": id, "bytes": bytes,
+        })),
+        "singleChar": r.single_char.as_ref().map(|(id, bytes, _)| json!({
+            "schema": id, "bytes": bytes,
+        })),
+        "reverseLookup": {
+            "chaiziBytes": chaizi, "pinyinBytes": pinyin, "commentBytes": comments,
+        },
+        "redb": h.user_store().filter(|s| !s.is_paused()).map(|s| json!({
+            "cacheLimitBytes": aurora_store::store::DEFAULT_CACHE_SIZE_BYTES,
+            "pageCacheDrops": s.page_cache_drops(),
+        })),
+    })
+}
+
+/// 设置页数据 RPC 本体：全部方法为默认实现，只能经 [`WebDataHost`] 窄面触宿主——
+/// 默认方法看不见 Coordinator 字段，窄面约束由编译期保证。调用方
+/// `use 本 trait` 后在 Coordinator 上直接调 `web_data_rpc`。
+/// 数据类 RPC 的分派体。**模块私有**：外部只能经 [`WebDataRpc::web_data_rpc`] 进来，那里统一
+/// 做扫描标记与批量写之后的回收——绕过它就漏了。（trait 的默认方法没有私有可见性，故不放进 trait。）
+fn web_data_dispatch<H: WebDataRpc + ?Sized>(
+    h: &H,
+    method: &str,
+    params: &Value,
+) -> anyhow::Result<Value> {
+    match method {
+        // ── schema.* ─────────────────────────────────────────
+        "schema.list" => h.web_schema_list(params),
+        "schema.layouts" => h.web_schema_layouts(),
+        "schema.active" => Ok(json!({ "id": h.engine_mgr().active_schema_id() })),
+        "schema.setActive" => {
+            let id = str_param(params, "id")?;
+            let ok = h.engine_mgr().switch_schema(id);
+            if ok {
+                h.sync_chaizi_assets(); // 拆字库/字根字体随活跃方案切换
+                h.note_global_schema_set(id); // 设置页是全局意图：按应用方案的全局方案跟随
+                // 注释库不随方案变化，见 `Coordinator::sync_comment_dicts`。
+            }
+            Ok(json!({ "ok": ok }))
+        }
+        // ── 方案配置编辑（三层合并：默认 ← 方案文件 ← override 层）──
+        "schema.getConfig" => h.web_schema_get_config(params),
+        // 全局页「已被 N 个方案覆盖」的反查：全局键 → 覆盖它的方案 id 列表（R8.6）。
+        "schema.overrideSummary" => h.web_schema_override_summary(),
+        "schema.saveConfig" => h.web_schema_save_config(params),
+        "schema.auxCodeSources" => h.web_schema_aux_code_sources(params),
+        "schema.resetConfig" => h.web_schema_reset_config(params),
+        "schema.setDictEnabled" => h.web_schema_set_dict_enabled(params),
+        // 失效方案的引擎缓存（未加载时安全 no-op）：CLI `schema set/reset` 后
+        // 调用，让 override 改动在下次使用该方案时按新配置重建生效。
+        "schema.invalidate" => {
+            let id = str_param(params, "id")?;
+            h.engine_mgr().invalidate_schema(id);
+            // CLI 直接写 override 后走这里，与 saveConfig 同形（GH#144）：吃键集等跨方案
+            // 派生集合不重建，方案自定义标点 / 引导键要等重启才生效。
+            h.refresh_schema_derived_config();
+            Ok(json!({ "ok": true }))
+        }
+        // 全量强制重建词库缓存（CLI `schema rebuild`）：失效全部引擎后删缓存产物。
+        // 面向「指纹判新鲜但内容需重建」的场景（如解析器修复后存量缓存静默过期）。
+        "schema.rebuildCache" => {
+            let (removed, failed) = h.engine_mgr().rebuild_all_caches();
+            Ok(json!({ "removed": removed, "failed": failed }))
+        }
+        // 重启服务（CLI `aurora_input restart`）：与托盘菜单同一条 request_restart
+        // 流程。延迟发信号——main 收到即释放单例并 exit，先让本条 RPC 响应写回
+        // 客户端，避免 CLI 读响应与进程退出竞争。
+        "system.restart" => {
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                aurora_coordinator::request_restart();
+            });
+            Ok(json!({ "ok": true }))
+        }
+        // 内存诊断（只读，设置端「高级 → 性能 → 内存占用」与「复制诊断信息」）。
+        "system.memoryStats" => Ok(memory_stats_json(h)),
+        // 存储状态（设置页提示「只读模式」）：用户数据设计 §7.1 降级保护。
+        // `issues`：用户数据目录下的文件问题（设计 §2.5），路径相对数据目录。
+        // `format_version` 是 meta.toml 里的实际值，`known_format_version` 是本版本认识的上限；
+        // `write_error`：最近一次写用户数据失败的原因（磁盘满、目录只读…），成功写入后清空。
+        // 用户数据锁不可用 / 被别的进程占用时引擎只读，同样报 readonly。
+        "system.storageStatus" => {
+            let store = h.user_store();
+            let engine_readonly = store.is_some_and(|s| s.runtime().data().readonly());
+            let reason = h.storage_readonly_reason().or_else(|| {
+                engine_readonly.then(|| {
+                    "用户数据被另一个进程占用，或文件锁不可用：本次运行不保存学习与修改。"
+                        .to_string()
+                })
+            });
+            let actual = store
+                .and_then(|s| s.path().parent().map(aurora_config::user_meta::read))
+                .flatten()
+                .map(|m| m.format_version);
+            Ok(json!({
+                "readonly": reason.is_some(),
+                "reason": reason,
+                "format_version": actual.unwrap_or(aurora_config::user_meta::KNOWN_FORMAT_VERSION),
+                "known_format_version": aurora_config::user_meta::KNOWN_FORMAT_VERSION,
+                "write_error": store.and_then(|s| s.runtime().data().write_error()),
+                "issues": store.map(|s| storage_issues_json(s)).unwrap_or_default(),
+            }))
+        }
+        // 桌面提示（CLI `aurora_input ui toast`、外部脚本）：toast 只能由 core 进程
+        // 自己的 UI 线程渲染，别的进程除了转交没有第二条路。
+        //
+        // ⚠️ 刻意**不**在 dict.import / config.set 这类干活的方法里弹提示：那会连
+        // 设置页的按钮一起弹（设置页自己已有 UI 反馈），把"要不要提示"的决定权
+        // 从调用方手里夺走。要提示的调用方显式打这一条。
+        "ui.toast" => {
+            let text = str_param(params, "text")?;
+            let s = |k: &str| {
+                params
+                    .get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let ms = params.get("ms").and_then(Value::as_u64).unwrap_or(0);
+            h.ui_toast(text, &s("kind"), &s("color"), &s("pos"), ms)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(json!({ "ok": true }))
+        }
+        "schema.delete" => h.web_schema_delete(params),
+        "schema.references" => Ok(json!({})), // 引用关系（删除安全检查）：暂返空，前端宽松消费
+        "scheme.exportPackage" => h.web_scheme_export_package(params),
+        "scheme.importPackage" => h.web_scheme_import_package(params),
+        "scheme.previewImport" => h.web_scheme_preview_import(params),
+        // 文本信封（kind = "schema_text"）：形状与上面两个 path 版完全一致，
+        // 设置端复用同一个确认对话框。
+        "scheme.previewImportText" => h.web_scheme_preview_import_text(params),
+        "scheme.importText" => h.web_scheme_import_text(params),
+
+        // ── backup.*（整机备份，aurora-transfer::backup）───────
+        "backup.create" => h.web_backup_create(params),
+        "backup.inspect" => h.web_backup_inspect(params),
+        // 批量写：成功后立即回收页缓存，见 `BULK_WRITE_METHODS`。
+        "backup.restore" => h.web_backup_restore(params),
+
+        // ── dict.*（用户词库）────────────────────
+        "comment.sources" => h.web_comment_sources(),
+        "emoji.modules" => h.web_emoji_modules(),
+        "dict.listPaged" => h.web_dict_list_paged(params),
+        "dict.search" => h.web_dict_search(params),
+        "dict.add" => h.web_dict_add(params),
+        "dict.update" => h.web_dict_update(params),
+        "dict.remove" => h.web_dict_remove(params),
+        // 批量写（逐条 remove，动的页与导入同量级）：见 `BULK_WRITE_METHODS`。
+        "dict.clear" => h.web_dict_clear(params),
+        "dict.stats" => h.web_dict_stats(),
+        // 系统词库统计（设置页「词库统计」）：本体在 `aurora_coordinator::dict_stats_api`。
+        // 扫的是 mmap 词库不是 redb，故**不**进 `FULL_SCAN_METHODS`（那张表管页缓存回收）。
+        "dict.systemStats" => aurora_coordinator::dict_stats_api::system_stats(
+            h,
+            str_param(params, "schemaId")?,
+            usize_param(params, "topN", 50),
+            params
+                .get("refresh")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        // 加词界面的默认上下文：设置端 `--add-word` 裸启动（不经输入法热键，故没有
+        // --schema / --text）时据此把窗口填成可用状态，以及窗内「最近输入」按钮的取值。
+        // 深链带了参数就不会调它——那时用户的意图已经明确。
+        "dict.addWordContext" => {
+            let ctx = h.add_word_context();
+            Ok(json!({
+                "schemaId": ctx.schema_id,
+                "recentText": ctx.recent_text,
+                "maxLen": ctx.max_len,
+            }))
+        }
+        // 加词自动出码：按方案类型选拼音/五笔规则（reverse 反查表）。
+        "dict.encode" => h.web_dict_encode(params),
+        // 批量出码：纯词列表导入按批调用（设置端每批约 1000 词）。
+        "dict.encodeWords" => h.web_dict_encode_words(params),
+        "dict.genPinyin" => {
+            // 取码要按**真实文本**算：转义形态里的 `\` `n` 会被当成两个待取码的字符。
+            let text = str_param(params, "text")?;
+            Ok(json!(h.gen_pinyin_word(&store_text(text))))
+        }
+        "dict.export" => h.web_dict_export(params),
+        // 批量写：成功后立即回收页缓存，见 `BULK_WRITE_METHODS`。
+        "dict.import" => h.web_dict_import(params),
+        "dict.previewImport" => h.web_dict_preview_import(params),
+        // 用户词文本手改后重新载入（设计 §5）；带 paths 只同步这几个文件，越界拒绝。
+        "dict.reload" => h.web_dict_reload(params),
+        // 显式折回全部待写回的数据（备份 / 导出 / 调试前）。
+        "dict.flush" => h.web_dict_flush(),
+        // 外部编辑会话（设计 user-dict-libraries-and-external-edit §4.2）：begin 暂停该文件的
+        // 写回 / 挡住界面修改并给出绝对路径，end 按文件载入并恢复；超过租约 core 自动 end。
+        "data.beginEdit" => h.web_data_begin_edit(params),
+        "data.endEdit" => h.web_data_end_edit(params),
+        "data.editSessions" => h.web_data_edit_sessions(),
+        // 「打开数据目录」：数据目录或其下方案目录 / 数据文件的绝对路径。
+        "data.locate" => h.web_data_locate(params),
+        // 用户分库（设计 user-dict-libraries-and-external-edit §3）：`<数据方案>/dicts/*.dict.yaml`。
+        "userDicts.list" => user_dicts::list(h, params),
+        "userDicts.entries" => user_dicts::entries(h, params),
+        "userDicts.removeEntry" => user_dicts::remove_entry(h, params),
+        "userDicts.addEntry" => user_dicts::add_entry(h, params),
+        "userDicts.clear" => user_dicts::clear(h, params),
+        "userDicts.create" => user_dicts::create(h, params),
+        "userDicts.rename" => user_dicts::rename(h, params),
+        "userDicts.delete" => user_dicts::delete(h, params),
+        "userDicts.importAs" => user_dicts::import_as(h, params),
+        "userDicts.setEnabled" => user_dicts::set_enabled(h, params),
+        // 删除一个方案的全部用户数据（数据方案目录、它的备份、方案覆盖）；共用数据的拒绝。
+        "userdata.purgeSchema" => h.web_userdata_purge_schema(params),
+
+        // ── temp.*（临时词，redb）─────────────────────────────
+        "temp.list" => h.web_temp_list(params),
+        // 分页版（设置页列表走这条；`temp.list` 保留给导出等全量取用方）。
+        "temp.listPaged" => h.web_temp_list_paged(params),
+        "temp.promote" => h.web_temp_promote(params),
+        "temp.remove" => h.web_temp_remove(params),
+        "temp.promoteAll" => h.web_temp_promote_all(params),
+        "temp.clear" => h.web_temp_clear(params),
+
+        // ── freq.*（用户词频）───────────────────
+        "freq.listPaged" => h.web_freq_list_paged(params),
+        "freq.delete" => h.web_freq_delete(params),
+        "freq.clear" => h.web_freq_clear(params),
+
+        // ── mailSuffix.* / urlHistory.*（补全学习数据）──
+        // 两组共用一份实现，只差 `CompletionKind`：存储层本就是一张表两个分区，
+        // RPC 再各写一遍等于把「同形态」这件事在第三处重新论证一遍。
+        // 命名空间分开是给设置端用的——「清空网址历史」不该顺带抹掉邮箱学习。
+        "mailSuffix.listPaged" => h.web_completion_list_paged(CompletionKind::EmailSuffix, params),
+        "mailSuffix.delete" => h.web_completion_delete(CompletionKind::EmailSuffix, params),
+        "mailSuffix.clear" => h.web_completion_clear(CompletionKind::EmailSuffix),
+        "urlHistory.listPaged" => h.web_completion_list_paged(CompletionKind::UrlHistory, params),
+        "urlHistory.delete" => h.web_completion_delete(CompletionKind::UrlHistory, params),
+        "urlHistory.clear" => h.web_completion_clear(CompletionKind::UrlHistory),
+        // 快捷输入历史（成员 `quick_input.history`），同一张表的第三个分区。
+        "quickHistory.listPaged" => {
+            h.web_completion_list_paged(CompletionKind::QuickHistory, params)
+        }
+        "quickHistory.delete" => h.web_completion_delete(CompletionKind::QuickHistory, params),
+        "quickHistory.clear" => h.web_completion_clear(CompletionKind::QuickHistory),
+
+        // ── shadow.*（影子规则）─────────────────
+        "shadow.list" => h.web_shadow_list(params),
+        // 分页版（设置页列表走这条；`shadow.list` 保留给全量取用方）。
+        "shadow.listPaged" => h.web_shadow_list_paged(params),
+        // 整表撤销。此前设置端靠「逐条 remove_rule」凑出清空，分页之后它手上
+        // 只剩当前页，那条路会静默只清一页。
+        "shadow.clear" => h.web_shadow_clear(params),
+        "shadow.pin" => h.web_shadow_pin(params),
+        "shadow.delete" => h.web_shadow_delete(params),
+        "shadow.removeRule" => h.web_shadow_remove_rule(params),
+        "shadow.addRule" => h.web_shadow_add_rule(params),
+
+        // ── phrase.*（用户短语，全局）──────────
+        "phrase.list" => h.web_phrase_list(),
+        "phrase.add" => h.web_phrase_add(params),
+        "phrase.update" => h.web_phrase_update(params),
+        "phrase.remove" => h.web_phrase_remove(params),
+        "phrase.setEnabled" => h.web_phrase_set_enabled(params),
+        "phrase.resetDefault" => h.web_phrase_reset(),
+        "phrase.listSystem" => h.web_phrase_list_system(),
+        "phrase.listUser" => h.web_phrase_list_user(params),
+        "phrase.export" => h.web_phrase_export(),
+        "phrase.import" => h.web_phrase_import(params),
+        "phrase.previewImportText" => h.web_phrase_preview_import_text(params),
+        "phrase.importText" => h.web_phrase_import_text(params),
+        "phrase.resetSystem" => h.web_phrase_reset_system(),
+
+        // ── quick.*（快捷输入格式表的用户调整，全局）──
+        // 基表（模板与出厂顺序）在 system.quick.toml，**RPC 一律不写它**：
+        // 那会抢走高级用户手写文件的所有权，见 handle_quick_format 模块文档。
+        "charset.list" => h.web_charset_list(),
+        "charset.set" => h.web_charset_set(params),
+        "charset.reset" => h.web_charset_reset(params),
+        "charset.clearRedundant" => h.web_charset_clear_redundant(params),
+        "charset.delete" => h.web_charset_delete(params),
+        "charset.create" => h.web_charset_create(params),
+        "commonChars.list" => h.web_common_chars_list(params),
+        "commonChars.query" => h.web_common_chars_query(params),
+        "commonChars.set" => h.web_common_chars_set(params),
+        "commonChars.bulkByBlock" => h.web_common_chars_bulk(params),
+        "commonChars.reset" => h.web_common_chars_reset(params),
+        "commonChars.clear" => h.web_common_chars_clear(),
+        "commonChars.export" => h.web_common_chars_export(),
+        "commonChars.previewImport" => h.web_common_chars_preview_import(params),
+        "commonChars.import" => h.web_common_chars_import(params),
+        "quick.list" => h.web_quick_list(),
+        "quick.move" => h.web_quick_move(params),
+        "quick.setEnabled" => h.web_quick_set_enabled(params),
+        "quick.resetEntry" => h.web_quick_reset_entry(params),
+        "quick.resetKind" => h.web_quick_reset_kind(params),
+        "quick.vars" => h.web_quick_vars(),
+        "quick.add" => h.web_quick_add(params),
+        "quick.setText" => h.web_quick_set_text(params),
+        "quick.delete" => h.web_quick_delete(params),
+        // ── compat.*：应用兼容规则的分层管理（逻辑全在 aurora_config::compat_admin）──
+        m if m.starts_with("compat.") => h.web_compat_rpc(m, params),
+        "quick.export" => h.web_quick_export(),
+        "quick.import" => h.web_quick_import(params),
+        "quick.previewImport" => h.web_quick_preview_import(params),
+
+        // ── stats.*（输入统计，redb 每日聚合）────────────────
+        "stats.summary" => h.web_stats_summary(),
+        "stats.daily" => h.web_stats_daily(params),
+        "stats.clear" => h.web_stats_clear(),
+        "stats.pruneBefore" => h.web_stats_prune(params),
+
+        // ── appearance.*（设置页预览，text-span-colors.md §11）──
+        "appearance.previewTemplate" => h.web_appearance_preview_template(params),
+
+        // ── correction.*（拼写纠错，设置页自定义规则行的冲突示例）──
+        "correction.conflictExample" => correction_conflict_example(params),
+
+        // ── theme.* ──────────────────────────────────────────
+        "theme.list" => h.web_theme_list(),
+        "theme.resolved" => Ok(serde_json::to_value(h.theme_follow_values())?),
+        "theme.accent" => {
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty());
+            Ok(serde_json::to_value(h.theme_accent(name))?)
+        }
+        "theme.preview" => h.web_theme_preview(params),
+        "theme.getText" => h.web_theme_get_text(params),
+        "theme.delete" => h.web_theme_delete(params),
+        "theme.importFromText" => h.web_theme_import_text(params),
+        "theme.previewPackage" => h.web_theme_preview_package(params),
+        "theme.importPackage" => h.web_theme_import_package(params),
+        "theme.exportPackage" => h.web_theme_export_package(params),
+        "theme.importFromUrl" => {
+            anyhow::bail!("URL 导入未启用（features.theme.import_url=false）")
+        }
+
+        other => anyhow::bail!("unknown method: {}", other),
+    }
+}
+
+/// `correction.conflictExample {rule}` → `{valid:true, example}`（无冲突时 example 为 null）
+/// 或 `{valid:false, reason}`。判据与引擎同源（`aurora_engine::pinyin::correction`）。
+fn correction_conflict_example(params: &Value) -> anyhow::Result<Value> {
+    use aurora_engine::pinyin::correction::custom_rule_conflict;
+    Ok(match custom_rule_conflict(str_param(params, "rule")?) {
+        Ok(example) => json!({ "valid": true, "example": example }),
+        Err(reason) => json!({ "valid": false, "reason": reason }),
+    })
+}
+
+/// 数据文件问题 → 设置页用的 JSON（路径相对数据目录、`/` 分隔）。
+fn storage_issues_json(store: &aurora_store::Store) -> Vec<Value> {
+    let root = store.user_text_dir();
+    store
+        .data_issues()
+        .iter()
+        .map(|i| issue_json(root, i))
+        .collect()
+}
+
+/// 一条数据文件问题：路径相对数据目录（`storageStatus` 与 `data.endEdit` 共用）。
+fn issue_json(root: &std::path::Path, i: &aurora_store::issues::FileIssue) -> Value {
+    use aurora_store::issues::IssueKind;
+    let rel = i.path.strip_prefix(root).unwrap_or(&i.path);
+    let path: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let mut v = json!({ "path": path.join("/") });
+    match &i.kind {
+        IssueKind::BadLines(n) => {
+            v["kind"] = json!("bad_lines");
+            v["lines"] = json!(n);
+        }
+        IssueKind::Isolated => v["kind"] = json!("isolated"),
+        IssueKind::Rebuilt { kept_as } => {
+            v["kind"] = json!("rebuilt");
+            v["kept_as"] = json!(kept_as);
+        }
+        IssueKind::Invalid { message } => {
+            v["kind"] = json!("invalid");
+            v["file"] = v["path"].clone();
+            v["message"] = json!(message);
+        }
+    }
+    v
+}
+
+pub trait WebDataRpc: WebDataHost {
+    /// 枚举本机字体：返回 (family, display_name)。family 为匹配/渲染用名(通常英文),
+    /// display_name 优先取该字体含 CJK 字符的本地化名(如"微软雅黑"),否则同 family。
+    /// 首次调用扫描系统字体目录（fontdb），开销可接受（设置页打开字体选择时一次）。
+    fn list_font_families(&self) -> Vec<(String, String)> {
+        fn has_cjk(s: &str) -> bool {
+            s.chars().any(|c| {
+                let u = c as u32;
+                (0x4E00..=0x9FFF).contains(&u) // CJK 统一表意
+                    || (0x3400..=0x4DBF).contains(&u) // 扩展 A
+                    || (0xF900..=0xFAFF).contains(&u) // 兼容表意
+            })
+        }
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        // family(英文) → 显示名;同 family 保留首个本地化名。BTreeMap 去重 + 按 family 升序。
+        let mut map: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        for face in db.faces() {
+            let Some((family, _)) = face.families.first() else {
+                continue;
+            };
+            if family.is_empty() {
+                continue;
+            }
+            let display = face
+                .families
+                .iter()
+                .map(|(n, _)| n)
+                .find(|n| has_cjk(n))
+                .cloned()
+                .unwrap_or_else(|| family.clone());
+            map.entry(family.clone()).or_insert(display);
+        }
+        map.into_iter().collect()
+    }
+
+    /// 数据类 RPC 总分派。方法名以 `<ns>.<method>` 形式分组；未知方法返回 Err。
+    ///
+    /// 会扫整张用户词 / 临时词 / 词频 / shadow 表的方法做完之后标记「有扫描待回收」：
+    /// 库空闲 3 秒后回收 redb 读缓存（`Store::mark_scan_pending`，
+    /// `docs/design/memory-footprint.md` §6）。不立即回收——设置页连续翻页时每页都扫一遍，
+    /// 逐页回收等于每页都从冷缓存起扫。放在这里而不是各个 handler 里：出口只有一个，
+    /// 各 handler 内的多条分流 / early-return 漏不掉。出错也标记：扫描可能已走了一半。
+    ///
+    /// 批量写（[`BULK_WRITE_METHODS`]）成功之后则**立即**回收，见那张表的文档。
+    fn web_data_rpc(&self, method: &str, params: &Value) -> anyhow::Result<Value> {
+        let r = web_data_dispatch(self, method, params);
+        if r.is_ok() && BULK_WRITE_METHODS.contains(&method) {
+            self.drop_page_cache_after_bulk_write(method);
+        } else if scans_whole_table(method, params)
+            && let Some(store) = self.user_store()
+        {
+            store.mark_scan_pending();
+        }
+        r
+    }
+
+    /// `schema.list` —— 方案全集（含元信息），供设置页方案管理与主方案下拉。
+    ///
+    /// `params.includeHidden = true` 时把隐藏方案（英文、快符这类 `[schema].hidden`）
+    /// 也列出来，供设置页的「显示特殊方案」开关。默认不含——它们对大多数用户是噪音。
+    /// 每项都带 `hidden` 字段，前端据此区分该行能配什么（隐藏方案配引导键，
+    /// 普通方案配直达热键）。
+    fn web_schema_list(&self, params: &Value) -> anyhow::Result<Value> {
+        use std::collections::HashMap;
+
+        let include_hidden = params
+            .get("includeHidden")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // 设置页方案下拉的显示顺序（三段式，段间固定先后）：
+        //   ① 已启用的拼音方案（数量少、最常用，置顶）
+        //   ② 其余已启用方案，按 config.schema.available 配置顺序
+        //   ③ 未启用方案（磁盘扫到但不在 available），按类型分组「拼音→码表→混输→英文」，组内按 id 字典序
+        // 底层 installed_schemas() 仍返回 id 字典序全集（做稳定去重锚点），排序只在此展示层重排。
+
+        // 已启用方案 → 配置位置索引，供段①②保持配置顺序。
+        let available = self.engine_mgr().available_schemas();
+        let avail_pos: HashMap<&str, usize> = available
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_str(), i))
+            .collect();
+
+        // 未启用段的类型分组顺序：拼音→码表→混输→英文。
+        // 英文排最后：它是给需要长时间打英文的人用的，绝大多数人不会启用。
+        fn type_rank(t: &str) -> i64 {
+            match t {
+                "pinyin" => 0,
+                "codetable" => 1,
+                "mixed" => 2,
+                "english" => 3,
+                _ => 4,
+            }
+        }
+
+        // 复合排序键 (段号, 段内主键, id)：段号先分档；段内主键在启用段是配置位置、
+        // 在未启用段是类型档；id 仅在未启用段做字典序 tiebreak（启用段位置唯一，不参与）。
+        let mut rows: Vec<((u8, i64, String), Value)> = self
+            .engine_mgr()
+            .installed_schemas()
+            .iter()
+            // 隐藏方案默认不列；已启用的隐藏方案是例外——用户既然把它放进了 available，
+            // 藏起来只会让人找不到怎么停用它。
+            .filter(|id| {
+                include_hidden
+                    || avail_pos.contains_key(id.as_str())
+                    || !self.engine_mgr().schema_is_hidden(id)
+            })
+            .map(|id| {
+                // 取合并后 Schema 一次，带出方案元信息（备注/版本/图标/作者），供设置页方案列表与详情显示。
+                let merged = self.engine_mgr().schema_merged(id);
+                let engine_type = merged
+                    .as_ref()
+                    .map(resolve_engine_type)
+                    .unwrap_or("codetable");
+                let info = merged.as_ref().map(|s| &s.schema);
+                let item = json!({
+                    "id": id,
+                    "name": self.engine_mgr().schema_name(id),
+                    "engineType": merged.as_ref().map(resolve_engine_type),
+                    "scheme": merged.as_ref().map(|s| {
+                        if resolve_engine_type(s) == "pinyin" {
+                            s.engine.pinyin.scheme.clone()
+                        } else {
+                            String::new()
+                        }
+                    }).unwrap_or_default(),
+                    // 用户目录存在同名 schema.toml 即视为用户方案（可删除）；否则内置。
+                    "builtin": !self.engine_mgr().is_user_schema(id),
+                    // 隐藏方案（英文/快符）：设置页据此决定该行显示什么、能配什么。
+                    "hidden": self.engine_mgr().schema_is_hidden(id),
+                    // 是否为 **overlay 方案**（方案文件带 `[overlay]` 段）：可由引导键/直达
+                    // 热键临时叠加进入（快符/生僻字那类）。设置页据此枚举 `special:<id>`
+                    // 动词的可选项，并决定要不要显示 overlay 那一节配置。
+                    //
+                    // ⚠️ 与 `hidden` **正交**，不可互推：hidden 只说「不列进方案切换列表」，
+                    // 隐藏的码表方案也可能只是 mix 成员、没有 overlay
+                    // 生命周期；反过来一个 overlay 方案也可以不隐藏。
+                    "overlay": merged.as_ref().is_some_and(|s| s.overlay.is_some()),
+                    "description": info.map(|i| i.description.clone()).unwrap_or_default(),
+                    "version": info.map(|i| i.version.clone()).unwrap_or_default(),
+                    "icon_label": info.map(|i| i.icon_label.clone()).unwrap_or_default(),
+                    "author": info.map(|i| i.author.clone()).unwrap_or_default(),
+                });
+
+                let key = match avail_pos.get(id.as_str()) {
+                    // 已启用：拼音置顶(段0)，其余(段1)，段内按配置位置。
+                    Some(&pos) => {
+                        let seg = if engine_type == "pinyin" { 0 } else { 1 };
+                        (seg, pos as i64, String::new())
+                    }
+                    // 未启用(段2)：按类型档 + id 字典序。
+                    None => (2, type_rank(engine_type), id.clone()),
+                };
+                (key, item)
+            })
+            .collect();
+
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        let items: Vec<Value> = rows.into_iter().map(|(_, item)| item).collect();
+        Ok(json!(items))
+    }
+
+    /// 双拼布局清单：合并扫描安装目录与用户目录的 `schemas/shuangpin/*.toml`，
+    /// 返回 `[{id, name}]`，供设置页"双拼布局"下拉动态取值（取代前端硬编码）。
+    fn web_schema_layouts(&self) -> anyhow::Result<Value> {
+        let items: Vec<Value> = self
+            .engine_mgr()
+            .shuangpin_layouts()
+            .into_iter()
+            .map(|(id, name)| json!({ "id": id, "name": name }))
+            .collect();
+        Ok(json!(items))
+    }
+
+    /// 注释词库的**可选来源**：自动派生项 + `schemas/comments/` 下扫到的文件（`.dict.yaml` 与
+    /// OpenCC 文本词典 `.txt`）。
+    ///
+    /// 设置页据此把「填路径」换成「挑一个」——路径要相对 `schemas/`、分隔符怎么写、文件到底
+    /// 放没放对，这三件事以前全靠用户自己对，错了的表现是「配了没反应」（core 只 warn 一行）。
+    ///
+    /// `files` 里带 `hasComment`：**扫到但没有 comment 列**的文件仍然列出而不是滤掉。
+    /// 滤掉的话，用户放了个格式不对的文件进去，界面上看到的是「我的文件不见了」，
+    /// 那比「列出来并标一句缺 comment 列」难查得多。
+    fn web_comment_sources(&self) -> anyhow::Result<Value> {
+        let data_dir = aurora_config::Config::data_dir();
+        let auto: Vec<Value> = self
+            .auto_comment_sources()
+            .iter()
+            .map(|a| {
+                json!({
+                    "id": a.id,
+                    "label": a.label,
+                    "rel": a.rel,
+                    "schemas": a.schemas,
+                })
+            })
+            .collect();
+        let files: Vec<Value> = aurora_config::Config::list_schema_resource_dir(
+            data_dir.as_deref(),
+            "comments",
+            ".dict.yaml",
+        )
+        .into_iter()
+        .map(|(rel, abs)| {
+            json!({
+                "path": rel,
+                "label": dict_yaml_name(&abs),
+                "hasComment": aurora_reverse::declares_comment_column(&abs),
+            })
+        })
+        .chain(
+            // OpenCC 文本词典（`词<Tab>值…`，rime 生态常见 `.txt`）：没有 YAML 头就没有 columns
+            // 可判，按约定恒为「词 → 注释」两列，故 `hasComment` 直接给 true（解析见
+            // `aurora_reverse::parse_comment_dict` 的裸表分支）。
+            aurora_config::Config::list_schema_resource_dir(data_dir.as_deref(), "comments", ".txt")
+                .into_iter()
+                .map(|(rel, abs)| {
+                    json!({
+                        "path": rel,
+                        "label": dict_yaml_name(&abs),
+                        "hasComment": true,
+                    })
+                }),
+        )
+        .collect();
+        Ok(json!({ "auto": auto, "files": files }))
+    }
+
+    /// emoji 附加模块清单（内置 + 用户放进 `emoji/` 的 OpenCC 表），供设置页对话框列出。
+    ///
+    /// 只给清单与出厂值，不给开关状态：状态在 `input.emoji.modules`，设置端随整份配置已拿到，
+    /// 按 `配置值 ?? defaultOn` 自己算——两处各算一遍的话，未保存的勾选会被这里的旧值盖掉。
+    fn web_emoji_modules(&self) -> anyhow::Result<Value> {
+        let items: Vec<Value> =
+            aurora_config::Config::emoji_modules(aurora_config::Config::data_dir().as_deref())
+                .into_iter()
+                .map(|m| {
+                    json!({
+                        "id": m.id,
+                        "label": m.label,
+                        "description": m.description,
+                        "file": m.file,
+                        "user": m.user,
+                        "defaultOn": m.default_on,
+                    })
+                })
+                .collect();
+        Ok(json!({ "modules": items, "userDir": aurora_config::EMOJI_USER_DIR }))
+    }
+
+    /// 三条分流（流式 / 排序 / 搜索两组）的本体在 [`user_words_api::list_paged`]（与移动端共用），
+    /// 这里只做参数解析与显示域投影（[`word_item`]）。
+    fn web_dict_list_paged(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let prefix = params
+            .get("prefix")
+            .and_then(|v| v.as_str())
+            .or_else(|| params.get("query").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let limit = usize_param(params, "limit", 50);
+        let offset = usize_param(params, "offset", 0);
+        let sort = parse_sort(params, &["code", "text", "weight"]).map(|(by, desc)| {
+            let by = match by {
+                "weight" => user_words_api::UserWordSort::Weight,
+                "text" => user_words_api::UserWordSort::Text,
+                _ => user_words_api::UserWordSort::Code,
+            };
+            (by, desc)
+        });
+        let page = user_words_api::list_paged(self, schema, prefix, sort, offset, limit)?;
+        let items: Vec<Value> = page.items.into_iter().map(word_item).collect();
+        Ok(json!({ "items": items, "total": page.total }))
+    }
+
+    fn web_dict_search(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let query = str_param(params, "query").unwrap_or("");
+        let limit = usize_param(params, "limit", 50);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // 列表显示的是带空格的音节码（见 word_item），用户很可能照着搜。key 是扁平的，
+        // 不拆则 `ni ha` 一条也匹配不到。拆完仍是前缀语义（`ni ha` → `niha`）。
+        // 末尾再过一道 ü 归一，理由同 `user_words_api::list_paged` 里的 ★。
+        let (query, _) = aurora_store::wdict::split_spaced_code(query);
+        let query = user_words_api::normalize_pinyin_code(self, &schema, query);
+        let items: Vec<Value> = store
+            .search_user_words_prefix(&schema, &query, limit)?
+            .into_iter()
+            .map(word_item)
+            .collect();
+        Ok(json!(items))
+    }
+
+    /// 本体在 [`user_words_api::add`]（与移动端共用），这里只解参与还原转义。
+    fn web_dict_add(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        // 设置页传的是转义形态，还原成存储域（真实文本）后再落库/比对。见 [`store_text`]。
+        let text = &store_text(text);
+        let weight = i32_param(params, "weight");
+        user_words_api::add(self, schema, code, text, weight)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_dict_update(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        // text 在这里是**查找键**（update_user_word_weight 按它匹配记录），
+        // 不还原就查不到 → 「改了没反应」。见 [`store_text`]。
+        let text = &store_text(text);
+        let weight = i32_param(params, "weight");
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // 存在则改权重（boundary 沿用）；不存在则新增（upsert 语义）。
+        // code 同样先规范化，否则带空格的码既查不到既有记录、又会新增出带空格的 key。
+        let (code, boundary) = user_words_api::normalize_add_code(self, &schema, code, text);
+        if !store.update_user_word_weight(&schema, &code, text, weight)? {
+            store.add_user_word(&schema, &code, text, weight, boundary)?;
+        }
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_dict_remove(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        // code 带音节空格由 [`user_words_api::remove`] 拆回扁平码；text 是列表给的转义形态、
+        // key 是真实文本，不还原就删不掉。
+        user_words_api::remove(self, schema, code, &store_text(text))?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// `dict.reload {paths?: [string]}` → `{reloaded: [schema]}`：不带 paths 全量扫描。
+    fn web_dict_reload(&self, params: &Value) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let reloaded = match params.get("paths").and_then(|v| v.as_array()) {
+            Some(arr) => {
+                let paths: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                store.reload_user_text_paths(&paths)?
+            }
+            None => {
+                let mut r = store.sync_user_texts();
+                // 用户分库：比对已建引擎记下的指纹，变了才失效
+                r.extend(
+                    self.engine_mgr()
+                        .user_dicts_changed()
+                        .into_iter()
+                        .map(|ds| format!("{}{ds}", aurora_store::user_words::USER_DICTS_CHANGED)),
+                );
+                r
+            }
+        };
+        // 变了的项重建对应的内存镜像（短语层、快捷格式、常用字、字符集）
+        self.apply_user_text_changes(&reloaded);
+        Ok(json!({ "reloaded": reloaded }))
+    }
+
+    /// `dict.flush` → `{ok: true, held: [file]}`；`held`：外部编辑中、这次没写回的用户词文件。
+    fn web_dict_flush(&self) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        store.flush_user_data()?;
+        Ok(json!({ "ok": true, "held": store.held_edit_files() }))
+    }
+
+    /// 外部编辑的目标文件：`{path}`，或 `{schemaId, kind: words|shadow|temp|freq|user_dicts}`、
+    /// `{schemaId, kind: user_dict, name}`（按数据方案换算，拼音族折叠到 "pinyin"），或
+    /// `{kind: phrases|quick_format|common_chars}`、`{kind: charsets, key}`。
+    fn edit_target_param(
+        &self,
+        store: &aurora_store::Store,
+        params: &Value,
+    ) -> anyhow::Result<String> {
+        if let Some(p) = params.get("path").and_then(Value::as_str) {
+            return Ok(p.to_string());
+        }
+        let schema = || -> anyhow::Result<String> {
+            Ok(self
+                .engine_mgr()
+                .data_schema_id(str_param(params, "schemaId")?))
+        };
+        let path = match str_param(params, "kind")? {
+            "words" => store.user_text_path(&schema()?),
+            "shadow" => store.shadow_path(&schema()?),
+            "phrases" => store.phrases_path(),
+            "quick_format" => store.quick_format_path(),
+            "common_chars" => store.common_chars_path(),
+            "user_dict" => aurora_store::user_dicts::lib_path(
+                store.user_text_dir(),
+                &schema()?,
+                str_param(params, "name")?,
+            ),
+            "user_dicts" => aurora_store::user_dicts::meta_path(store.user_text_dir(), &schema()?),
+            "charsets" => store.charset_path(str_param(params, "key")?)?,
+            "temp" => store.user_text_dir().join(schema()?).join("temp.dict.yaml"),
+            "freq" => store
+                .user_text_dir()
+                .join(schema()?)
+                .join("freq.table.yaml"),
+            other => anyhow::bail!("不支持编辑的类别：{other}"),
+        };
+        Ok(path.to_string_lossy().into_owned())
+    }
+
+    /// `data.beginEdit {path}`（或类别参数，见 [`Self::edit_target_param`]）→
+    /// `{path: 绝对路径, file: 相对数据目录, kind}`。只读模式拒绝。
+    fn web_data_begin_edit(&self, params: &Value) -> anyhow::Result<Value> {
+        if let Some(r) = self.storage_readonly_reason() {
+            anyhow::bail!("{r}");
+        }
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        if params.get("kind").and_then(Value::as_str) == Some("charsets") {
+            self.prepare_charset_edit(store, str_param(params, "key")?)?;
+        }
+        let s = store.begin_edit(&self.edit_target_param(store, params)?)?;
+        Ok(json!({
+            "path": s.path.to_string_lossy(),
+            "file": s.file,
+            "kind": s.kind.as_str(),
+        }))
+    }
+
+    /// 按 key 编辑字符分类：出厂没有、用户层也没有的 key 拒绝；用户层还没有这个类的文件 ⇒ 先写一份
+    /// 只带 key 的（说明行 + 头部），编辑器里打开就是可改的样子。
+    fn prepare_charset_edit(&self, store: &aurora_store::Store, key: &str) -> anyhow::Result<()> {
+        if store.get_charset_doc(key)?.is_some() {
+            return Ok(());
+        }
+        if !self.engine_mgr().charset_factory().contains_key(key) {
+            anyhow::bail!("没有名为「{key}」的字符分类");
+        }
+        let doc = aurora_config::charset_def::CharsetDoc {
+            def: aurora_config::charset_def::CharsetDef {
+                key: key.to_string(),
+                ..Default::default()
+            },
+            added: Vec::new(),
+            removed: Vec::new(),
+        };
+        store.set_charset_doc(key, &aurora_config::charset_def::render_doc(&doc)?)
+    }
+
+    /// `data.endEdit {path}`（或类别参数）→ `{changed, issues}`；变了的项重建内存镜像（同 `dict.reload`）。
+    /// 问题在重建之后再取：字符分类的校验发生在重建字符分类时。
+    fn web_data_end_edit(&self, params: &Value) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let r = store.end_edit(&self.edit_target_param(store, params)?)?;
+        self.apply_user_text_changes(&r.reloaded);
+        let root = store.user_text_dir();
+        let issues: Vec<Value> = store
+            .data_issues()
+            .iter()
+            .filter(|i| i.path == r.path)
+            .map(|i| issue_json(root, i))
+            .collect();
+        Ok(json!({ "changed": r.changed, "issues": issues }))
+    }
+
+    /// `data.editSessions` → `[{file, since_secs}]`（设置端重开窗口时恢复编辑条）。
+    fn web_data_edit_sessions(&self) -> anyhow::Result<Value> {
+        let Some(store) = self.user_store() else {
+            return Ok(json!([]));
+        };
+        Ok(Value::Array(
+            store
+                .edit_sessions()
+                .into_iter()
+                .map(|(file, d)| json!({ "file": file, "since_secs": d.as_secs() }))
+                .collect(),
+        ))
+    }
+
+    /// `data.locate {path?}` → `{path, exists}`（`exists`：该目录 / 文件此刻在不在）；`{schemaId}` 定位该方案的数据目录（拼音族折叠）。
+    fn web_data_locate(&self, params: &Value) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let schema_dir = match (
+            params.get("path"),
+            params.get("schemaId").and_then(Value::as_str),
+        ) {
+            (None, Some(s)) => Some(self.engine_mgr().data_schema_id(s)),
+            _ => None,
+        };
+        let p = store.locate_data_path(
+            schema_dir
+                .as_deref()
+                .or_else(|| params.get("path").and_then(Value::as_str)),
+        )?;
+        let mut v = json!({ "path": p.to_string_lossy(), "exists": p.exists() });
+        if schema_dir.is_some() {
+            let id = params["schemaId"].as_str().unwrap_or_default();
+            let reason = self.purge_block_reason(id);
+            v["purgeable"] = json!(reason.is_none());
+            if let Some(r) = reason {
+                v["reason"] = json!(r);
+            }
+        }
+        Ok(v)
+    }
+
+    fn web_dict_clear(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let n = user_words_api::clear(self, schema)?;
+        Ok(json!(n))
+    }
+
+    /// 导出方案数据为单个多段 wdict 文件。`sections` 参数选类型；缺省按引擎类型取默认适用段。
+    ///
+    /// 带 `path` 时**由 core 直接写盘**、只回报字节数；缺省仍回 `{content}`。理由同
+    /// [`dict_source_text`]：整库走一帧 JSON 会在几十万条上撞设置端的 16MB 读帧上限
+    /// （issue #101 就是在这里报的「帧长超限」）。
+    fn web_dict_export(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema_id = str_param(params, "schemaId")?;
+        // 本体（数据方案折叠、engine_type 写头、缺省段按引擎类型）在
+        // [`dict_transfer_api::export`]，与移动端共用。
+        let content =
+            dict_transfer_api::export(self, schema_id, dict_sections_param(params).as_deref())?;
+        if let Some(path) = params.get("path").and_then(|v| v.as_str())
+            && !path.is_empty()
+        {
+            std::fs::write(path, &content)
+                .map_err(|e| anyhow::anyhow!("写入 {} 失败：{}", path, e))?;
+            return Ok(json!({ "path": path, "bytes": content.len() }));
+        }
+        Ok(json!({ "content": content }))
+    }
+
+    /// 导入。WindDict 多段：`sections` 选要应用的类型（默认文件所含全部段）；
+    /// Rime/TSV：仅用户词库。返回 `{sections:[...]}` 逐段结果。
+    ///
+    /// 本体（引擎类型校验、段交集、拼音准入契约）在 [`dict_transfer_api::import`]，与移动端
+    /// 共用；这里只解参数（`path`/`content`、`strategy`、`fillBoundary`、`sections`）与拼 JSON。
+    fn web_dict_import(&self, params: &Value) -> anyhow::Result<Value> {
+        use aurora_transfer::merge::Strategy;
+        let schema_id = str_param(params, "schemaId")?;
+        let content = dict_source_text(params)?;
+        let replace = Strategy::from_param(
+            params
+                .get("strategy")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        ) == Strategy::Replace;
+        // 导入对话框的二选一（§5）。**缺省 true**：旧客户端与命令行不传这个参数，
+        // 行为必须与本参数出现之前完全一致。
+        let fill_boundary = params
+            .get("fillBoundary")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let out = dict_transfer_api::import(
+            self,
+            schema_id,
+            content.as_ref(),
+            replace,
+            fill_boundary,
+            dict_sections_param(params),
+        )?;
+        Ok(dict_report_json(&out))
+    }
+
+    /// 导入预览。回报文件含哪些段及各段计数（用户词库另带 willAdd/willUpdate/unchanged/samples）。
+    fn web_dict_preview_import(&self, params: &Value) -> anyhow::Result<Value> {
+        use aurora_store::dict_export::DictSection;
+        let schema_id = str_param(params, "schemaId")?;
+        let data_schema = self.engine_mgr().data_schema_id(schema_id);
+        let content = dict_source_text(params)?;
+        let content = content.as_ref();
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let fmt = aurora_store::import_formats::detect_dict_format(content);
+        if fmt == aurora_store::import_formats::DictFormat::WindDict {
+            let present = aurora_store::wdict::sections_present(content);
+            let mut arr: Vec<Value> = Vec::new();
+            for tag in &present {
+                let Some(sec) = DictSection::from_key(tag) else {
+                    continue;
+                };
+                match sec {
+                    DictSection::UserWords => {
+                        let (rows, sk) = aurora_store::wdict::parse_words_wdict(content)
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                        let total = rows.len();
+                        // 预览必须跑与导入**完全相同**的准入判据，否则「预计入库 N 条」会骗人。
+                        let (rows, ct) = dict_transfer_api::apply_pinyin_entry_contract(
+                            self, schema_id, rows, true,
+                        );
+                        let (c, samples) = store.preview_import_user_words(&data_schema, &rows)?;
+                        arr.push(json!({
+                            "key": "userWords", "count": total,
+                            "willAdd": c.added, "willUpdate": c.updated, "unchanged": c.unchanged,
+                            "skipped": sk + ct.rejected, "samples": samples,
+                            "rejected": ct.rejected,
+                            "rejectedSamples": ct.samples,
+                            "boundaryFilled": ct.filled,
+                            "boundaryAmbiguous": ct.ambiguous,
+                            "boundaryNoReading": ct.no_reading,
+                            "noBoundary": ct.no_boundary,
+                        }));
+                    }
+                    DictSection::TempWords => {
+                        let (rows, sk) = aurora_store::wdict::parse_temp_words_wdict(content)
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                        let total = rows.len();
+                        let (_rows, ct) = dict_transfer_api::apply_pinyin_entry_contract(
+                            self, schema_id, rows, true,
+                        );
+                        arr.push(json!({
+                            "key": "tempWords", "count": total,
+                            "skipped": sk + ct.rejected,
+                            "rejected": ct.rejected,
+                            "rejectedSamples": ct.samples,
+                            "boundaryFilled": ct.filled,
+                            "boundaryAmbiguous": ct.ambiguous,
+                            "boundaryNoReading": ct.no_reading,
+                            "noBoundary": ct.no_boundary,
+                        }));
+                    }
+                    DictSection::Freq => {
+                        let (rows, sk) = aurora_store::wdict::parse_freq_wdict(content)
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                        arr.push(json!({ "key": "freq", "count": rows.len(), "skipped": sk }));
+                    }
+                    DictSection::Shadow => {
+                        let (rows, sk) = aurora_store::wdict::parse_shadow_wdict(content)
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                        arr.push(json!({ "key": "shadow", "count": rows.len(), "skipped": sk }));
+                    }
+                }
+            }
+            // 来源方案/引擎（文件头部）+ 与目标方案的兼容性（引擎类型一致或来源未知）。
+            let target = self
+                .engine_mgr()
+                .schema_merged(schema_id)
+                .map(|s| resolve_engine_type(&s))
+                .unwrap_or("codetable");
+            let source_engine =
+                aurora_store::wdict::read_header_field(content, "engine_type").unwrap_or_default();
+            let source_schema =
+                aurora_store::wdict::read_header_field(content, "schema_id").unwrap_or_default();
+            let compatible = source_engine.is_empty() || source_engine == target;
+            Ok(json!({
+                "format": "winddict", "sections": arr,
+                "sourceSchema": source_schema, "sourceEngine": source_engine,
+                "targetEngine": target, "compatible": compatible,
+            }))
+        } else {
+            let (fmt2, rows, skipped) = aurora_store::import_formats::parse_words_auto(
+                content,
+                dict_transfer_api::code_policy_for(self, schema_id),
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            let total = rows.len();
+            // 预览必须跑与导入**完全相同**的准入判据，否则「预计入库 N 条」会骗人。
+            let (rows, contract) =
+                dict_transfer_api::apply_pinyin_entry_contract(self, schema_id, rows, true);
+            let (c, samples) = store.preview_import_user_words(&data_schema, &rows)?;
+            // Rime/TSV 无来源引擎元信息，兼容性交由用户判断（不拦截）。
+            Ok(json!({
+                "format": fmt2.as_str(),
+                "sections": [ {
+                    "key": "userWords", "count": total,
+                    "willAdd": c.added, "willUpdate": c.updated, "unchanged": c.unchanged,
+                    "skipped": skipped + contract.rejected, "samples": samples,
+                    // 三档处置的计数（见设计文档 §5）：rejected 一律不入库，
+                    // noBoundary 是「入库了但仍缺边界」，ambiguous 是「多解已择一」。
+                    "rejected": contract.rejected,
+                    "rejectedSamples": contract.samples,
+                    "boundaryFilled": contract.filled,
+                    "boundaryAmbiguous": contract.ambiguous,
+                    "boundaryNoReading": contract.no_reading,
+                    "noBoundary": contract.no_boundary,
+                    // ⚠️ 预览恒按「补充」求解（`fill = true`），故这里没有 boundarySkipped：
+                    // 那个选择在预览之后、由用户在对话框里做。预览的职责是告诉他
+                    // **有多少条要做这个选择**（= boundaryFilled），不是替他先选一个。
+                } ],
+                "compatible": true,
+            }))
+        }
+    }
+
+    /// 一次**全表规模的写**做完之后，把 redb 那笔只涨不落的读缓存还回去。
+    ///
+    /// redb 2.x 不是 mmap，页是堆上的 `Arc<[u8]>`，刷盘时脏页会被直接晋升进读缓存，
+    /// 之后只涨不落（上界 ≈ min(配额, 库文件大小)，19 万词实测 41 MB）——「导入大词库
+    /// 之后内存占用变高」就是它。见 aurora-store 的 `tests/redb_cache_high_water.rs`。
+    ///
+    /// ⚠️ **失败是真故障，不是「内存没回落」**：`drop_page_cache` 内部重试过一次仍失败时，
+    /// store 已经停在暂停态，此后每一次读写都会报 `store is paused`，用户词 / 临时词 /
+    /// 词频 / shadow 全线失效到重启。所以这里 `error!` 而不是 `warn!`。
+    ///
+    /// 仍然不把它变成调用方的 `Err`：写已经成功落库了，把一次成功的导入报成失败会让用户
+    /// 重来一遍（那只会再触发一次同样的故障）。日志是唯一的诊断出口，故文案必须说清后果。
+    fn drop_page_cache_after_bulk_write(&self, op: &str) {
+        let Some(store) = self.user_store() else {
+            return;
+        };
+        if let Err(e) = store.drop_page_cache() {
+            tracing::error!(
+                "{op} 之后丢弃页缓存失败：{e}。\
+                 数据已写入，但存储层现处于暂停态，后续读写都会失败，请重启服务。"
+            );
+        }
+    }
+
+    fn web_dict_stats(&self) -> anyhow::Result<Value> {
+        let store = match self.user_store() {
+            Some(s) => s,
+            None => return Ok(json!([])),
+        };
+        let mut out = Vec::new();
+        for id in self.engine_mgr().available_schemas().iter() {
+            // ⚠️ 只要条数就用 `count_*`，别 `list(..).len()`：那会把整张表物化一遍
+            // （19 万条 × 两个 `String`，本机实测几十 MB 峰值）**只为了读一个数字**，
+            // 而且这里对**每个方案**各来一遍。口径与列表逐条一致，守门见
+            // aurora-store 的 `tests/counts_match_listings.rs`。
+            // 三个计数**同走 `data_schema_id`**，与 `dict.listPaged` / `dict.search` /
+            // `shadow.list` 等 23 处读路径同源。直传原始 id 会恒得 0：拼音族折叠后才是
+            // "pinyin"，拿 `shuangpin` 去查的是一个空桶——连全拼自己都是 0，只有方案 id
+            // 恰好等于 "pinyin" 时才碰巧对上。
+            //
+            // 由此可见的两件**设计使然、不是缺陷**的事：
+            // - 全拼与双拼显示**同一个数**：拼音族共享同一份用户词/临时词（`data_schema_id`
+            //   把 `engine.type == "pinyin"` 的方案统一折叠到 "pinyin"）。
+            // - 混输方案通常显示 **0**：混输本身不存用户词，引擎写端按来源落到它的目标方案里
+            //   （主码表方案 / "pinyin"，见 `write_data_schema_id`）。但 `data_schema_id` 对混输
+            //   返回它自己的 id，所以若真有入口直接以混输方案调 `dict.add`，词会落进混输自己
+            //   的桶，这里也会如实报出——与 `dict.listPaged` 同源，口径不会分叉。
+            let data_schema = self.engine_mgr().data_schema_id(id);
+            let user_words = store.count_user_words(&data_schema).unwrap_or(0);
+            let temp_words = store.count_temp_words(&data_schema).unwrap_or(0);
+            let shadow_rules = store
+                .list_shadow_rules(&data_schema)
+                .map(|v| {
+                    v.iter()
+                        .map(|(_, r)| r.pinned.len() + r.deleted.len())
+                        .sum::<usize>()
+                })
+                .unwrap_or(0);
+            out.push(json!({
+                "schemaId": id,
+                "name": self.engine_mgr().schema_name(id),
+                "userWords": user_words,
+                "tempWords": temp_words,
+                "shadowRules": shadow_rules,
+            }));
+        }
+        Ok(json!(out))
+    }
+
+    fn web_schema_get_config(&self, params: &Value) -> anyhow::Result<Value> {
+        let id = str_param(params, "id")?;
+        match self.engine_mgr().schema_merged(id) {
+            Some(schema) => {
+                let etype = resolve_engine_type(&schema);
+                let mut v = serde_json::to_value(schema)?;
+                // 确保 engine.type 为解析后的权威类型（schema.toml 可能未显式声明）
+                if let Some(eng) = v.get_mut("engine").and_then(|e| e.as_object_mut()) {
+                    eng.insert("type".to_string(), json!(etype));
+                }
+                // 码表方案附带「当前生效值」旁路字段：`engine.codetable` 的行为字段是
+                // Option，未设置时是 null，设置页无法把 null 显示成开关——它需要知道
+                // 「不设置的话实际是什么」。基线又分普通/特殊两种（见 codetable_baseline），
+                // UI 侧算不出来，故由此处随配置一并给出。
+                //
+                // 与 `engine.codetable` 平级但**不同名**：那份是「显式写了什么」（可为 null，
+                // 决定 saveConfig 该不该落盘），这份是「实际按什么跑」（恒为实值，只作 UI 初值）。
+                // 合并成一份会让「跟随基线」与「显式等于基线值」无从区分。
+                if etype == "codetable" {
+                    let eff = self.engine_mgr().effective_codetable(id);
+                    // 「取消覆盖后会变成什么」——设置页每一项的三态控件未勾选时显示它。
+                    let followed = self.engine_mgr().followed_codetable(id);
+                    // 「哪些项是用户自己改的」。判勾选状态**只能**问 override 层：上面那份
+                    // `engine.codetable` 是方案文件 ⊕ override 的合并结果，里面一个
+                    // `Some(3)` 既可能是方案作者写的、也可能是用户改的，合并值答不了这个问题。
+                    let ov = self
+                        .engine_mgr()
+                        .get_schema_override(id)
+                        .and_then(|t| {
+                            t.get("engine")
+                                .and_then(|e| e.get("codetable"))
+                                .map(|c| serde_json::to_value(c.clone()))
+                        })
+                        .transpose()?
+                        .unwrap_or_else(|| json!({}));
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert("effectiveCodetable".to_string(), serde_json::to_value(eff)?);
+                        obj.insert(
+                            "followedCodetable".to_string(),
+                            serde_json::to_value(followed)?,
+                        );
+                        obj.insert("codetableOverride".to_string(), ov);
+                    }
+                }
+                // override 层的 `[punct]` 段。据此分辨自定义标点表的**来源**：
+                // 合并值有、这里没有 ⇒ 方案作者写的；两边都有 ⇒ 用户自己改的。
+                // ⚠️ 设置页当前还没用上这个区别，见 `READONLY_SIDECAR_FIELDS` 里的说明。
+                //
+                // 不给「跟随全局时表里是什么」的旁路字段——那就是全局 `input.punct`，
+                // 设置页手里本来就有整份全局配置，再从这里发一遍就是第二个真相源。
+                let punct_ov = self
+                    .engine_mgr()
+                    .get_schema_override(id)
+                    .and_then(|t| t.get("punct").map(|p| serde_json::to_value(p.clone())))
+                    .transpose()?
+                    .unwrap_or_else(|| json!({}));
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("punctOverride".to_string(), punct_ov);
+                }
+                // 首码集里的符号键（键名形式）。给设置页判「按键功能表绑的这个键，是不是
+                // 同一方案的码元首码」——两者同层冲突，内核裁决是绑定优先，于是该符号
+                // 起头的编码在本方案静默失效（见 schema-key-actions.md §4.3）。
+                //
+                // 给**键名**而不是字符集原文：`input_chars` 有区间语法（`a-x/`），设置页
+                // 再写一份解析器就是两处慢慢漂移——跨仓契约无编译期约束，本仓已栽过。
+                // 边界上传语义结果，不传待解析的原料。
+                //
+                // 组装放在协调器而不是引擎：引擎层不该依赖 `aurora-keys`（层次倒置）。
+                // 引擎只出「字符集」，键名↔字符的对照表归按键层。
+                //
+                // 只报符号键：字母恒在默认码元集里，全列出来是噪音；「字母绑功能键」那条
+                // 冲突内核另有活码前缀裁决（`bound_action_key_yields`），不归本判据管。
+                let leading_keys: Vec<&str> = match self.engine_mgr().schema_code_char_set(id) {
+                    Some(set) => aurora_keys::keymap::symbol_keys()
+                        .filter(|(_, ch)| set.contains_leading(*ch))
+                        .map(|(name, _)| name)
+                        .collect(),
+                    // 读不到方案就不提示——凭空报一个不存在的冲突比不报更糟。
+                    None => Vec::new(),
+                };
+                // 按键总览（只读旁路）：本方案下每个绑过的键当前干什么、来自哪一层。
+                // 组装在这里而不是设置页：全局那份要经 `effective_session_actions` 折算，
+                // 展开规则只该有一处。见 [`keys_overview`]。
+                let (overview, overview_degraded) = keys_overview(&v);
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("leadingCodeKeys".to_string(), json!(leading_keys));
+                    obj.insert("keysOverview".to_string(), Value::Array(overview));
+                    // 全局层不可信时的说明（见 [`keys_overview`]）。恒在，无降级时为 `null`。
+                    obj.insert("keysOverviewDegraded".to_string(), overview_degraded);
+                    // 方案对话框「跟随全局（值）」要显示的值（R8.2）：方案没覆盖时实际按什么跑。
+                    // 不让设置页自己从全局配置里拼：字体那一档要回落到主题，而主题解析只在内核。
+                    obj.insert("followedBehavior".to_string(), self.followed_behavior());
+                    // 方案文件**自己**声明的辅助码来源（不含 override 层）。设置页据此区分
+                    // 「跟随方案」与「用户选的」：`engine.aux_code.files` 是合并值，两种来源
+                    // 给出的都是一个数组，答不了「这是谁写的」。
+                    let base_files = self
+                        .engine_mgr()
+                        .schema_base(id)
+                        .map(|s| s.engine.aux_code.files)
+                        .unwrap_or_default();
+                    obj.insert("auxCodeBaseFiles".to_string(), json!(base_files));
+                }
+                Ok(v)
+            }
+            None => Ok(json!({})),
+        }
+    }
+
+    /// `schema.overrideSummary`：`{ "<全局键>": ["<方案 id>", ...] }`。
+    ///
+    /// 只数 `available_schemas()`（用户启用、且未被定制版 hide 的方案）——没启用的方案
+    /// 覆盖了什么，用户在全局页上不需要被提醒。按方案**合并后**的配置判（方案文件 ⊕
+    /// override 层）：两层写同一个键是同一次覆盖，一个方案对一个键至多计一次；
+    /// 数组顺序即方案列表顺序。
+    fn web_schema_override_summary(&self) -> anyhow::Result<Value> {
+        let mgr = self.engine_mgr();
+        let mut out = serde_json::Map::new();
+        for id in mgr.available_schemas() {
+            let Some(s) = mgr.schema_merged(&id) else {
+                continue;
+            };
+            for key in aurora_config::config_schema::schema_overridden_keys(&s) {
+                if let Value::Array(ids) = out.entry(key).or_insert_with(|| json!([])) {
+                    ids.push(json!(id));
+                }
+            }
+        }
+        Ok(Value::Object(out))
+    }
+
+    /// `getConfig.followedBehavior` 的组装：读盘上的全局配置（与 [`keys_overview`] 同一取法）
+    /// + 当前主题的字体。
+    fn followed_behavior(&self) -> Value {
+        // 读不到全局配置时按出厂值给：这里只是「跟随时显示什么」的提示值，不参与写盘。
+        let cfg = aurora_config::Config::load(aurora_config::Config::data_dir().as_deref())
+            .unwrap_or_default();
+        let theme_font = self.theme_follow_values().and_then(|t| t.font_family);
+        followed_behavior_of(&cfg, theme_font)
+    }
+
+    fn web_schema_save_config(&self, params: &Value) -> anyhow::Result<Value> {
+        let id = str_param(params, "id")?;
+        let cfg = params
+            .get("cfg")
+            .ok_or_else(|| anyhow::anyhow!("缺少参数 cfg"))?;
+        let cfg = &strip_readonly_fields(cfg);
+        let base = self
+            .engine_mgr()
+            .schema_base(id)
+            .ok_or_else(|| anyhow::anyhow!("方案不存在: {}", id))?;
+        let base_json = serde_json::to_value(&base)?;
+        // 稀疏 diff（仅变化项）写入 override 层，让方案文件后续更新仍能透传未改项。
+        let mut diff = json_diff(&base_json, cfg).unwrap_or(json!({}));
+        // ★ `dictionaries` 不经本入口写：附加词库开关的唯一写入口是 setDictEnabled，
+        // 这里只把既有 override 里的那份原样带过去（论坛 t281）。
+        //
+        // 回传的 cfg 是设置页**打开对话框时**的 getConfig 快照，而设置端一次保存是先
+        // setDictEnabled 再 saveConfig。快照的 dictionaries 只要与方案文件基线不同（之前
+        // 翻过任一扩展库开关就是如此），`json_diff` 对数组整体比较，就会把整份**旧**数组
+        // 写进 override：刚落盘的 `enabled = false` 被冲回去，还顺带冻结了整份词库定义
+        // （path/label/顺序，见 `schema_dicts_api` 的 `sparse_dict_overrides`）。在入口剥掉，
+        // 而不是指望每个调用方记得先刷新快照——CLI、旧版设置端都走这里。
+        if let Some(o) = diff.as_object_mut() {
+            o.remove("dictionaries");
+        }
+        let mut ov = json_to_toml(&diff);
+        if let toml::Value::Table(t) = &mut ov
+            && let Some(prev) = self.engine_mgr().get_schema_override(id)
+            && let Some(d) = prev.get("dictionaries")
+        {
+            t.insert("dictionaries".to_string(), d.clone());
+        }
+        self.engine_mgr().write_schema_override(id, &ov)?;
+        // 吃键集等跨方案派生集合只在 ConfigBundle 构建时算；方案 override 不在 config.toml
+        // 里，不在此重建就要等重启 / 下次改全局设置才生效（GH#144）。
+        self.refresh_schema_derived_config();
+        Ok(json!({ "ok": true }))
+    }
+
+    /// 设置页「辅助码来源」下拉的两组可选项，见 `docs/design/aux-code-schema-source.md` §6。
+    ///
+    /// 码表名只读文件首行（`read_name`），缺头时退回文件名——列出来比滤掉好查。
+    fn web_schema_aux_code_sources(&self, params: &Value) -> anyhow::Result<Value> {
+        let exclude = params.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let o = self.engine_mgr().aux_code_source_options(exclude);
+        let schemas: Vec<Value> = o
+            .schemas
+            .iter()
+            .map(|(id, name)| json!({ "id": id, "name": name }))
+            .collect();
+        let files: Vec<Value> = o
+            .files
+            .iter()
+            .map(|(rel, abs)| {
+                let label = aurora_aux_code::read_name(abs).unwrap_or_else(|| {
+                    abs.file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                });
+                json!({ "path": rel, "label": label })
+            })
+            .collect();
+        Ok(json!({ "schemas": schemas, "files": files }))
+    }
+
+    fn web_schema_reset_config(&self, params: &Value) -> anyhow::Result<Value> {
+        let id = str_param(params, "id")?;
+        self.engine_mgr().delete_schema_override(id)?;
+        self.refresh_schema_derived_config(); // 同 saveConfig（GH#144）
+        Ok(json!({ "ok": true }))
+    }
+
+    /// 本体在 [`aurora_coordinator::schema_dicts_api::set_enabled`]（与移动端共用）：
+    /// override 只落 `{id, enabled}` 稀疏项、先持久化再 live 翻（含混输扇出）、`user:` 分库
+    /// 走 `dicts.toml`，都在那里。
+    fn web_schema_set_dict_enabled(&self, params: &Value) -> anyhow::Result<Value> {
+        let id = str_param(params, "id")?;
+        let dict_id = str_param(params, "dictId")?;
+        let enabled = params
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let live = aurora_coordinator::schema_dicts_api::set_enabled(self, id, dict_id, enabled)?;
+        Ok(json!({ "ok": true, "live": live }))
+    }
+
+    fn web_schema_delete(&self, params: &Value) -> anyhow::Result<Value> {
+        let id = str_param(params, "id")?;
+        if !self.engine_mgr().is_user_schema(id) {
+            anyhow::bail!("内置方案不可删除: {id}");
+        }
+        let user = Self::user_schemas_dir()?;
+        let system = Self::system_schemas_dirs();
+        // 共享检查基准 = 其余已安装方案(含内置——混输可能引用用户资源)。
+        let keep: Vec<String> = self
+            .engine_mgr()
+            .installed_schemas()
+            .into_iter()
+            .filter(|s| s != id)
+            .collect();
+        // 镜像导入的收集逻辑删文件:方案文件+引用资源+递归引用的用户方案,共享保留。
+        let r = aurora_transfer::scheme::delete_package(id, &user, &system, &keep)?;
+        // 级联清词库数据:仅清数据域=方案自身的(拼音族数据在共享 pinyin 域,
+        // data_schema_id≠自身时跳过;文件已删读不到类型时回落自身,清空域无害)。
+        //
+        // 清库出错**不得跳过下方收尾**:文件此时已删,forget / 吃键集重建不跑的话,运行时
+        // 状态要到重启才与磁盘一致。故先记下错误,收尾做完再返回。
+        let cleared: anyhow::Result<()> = (|| {
+            if let Some(store) = self.user_store() {
+                for sid in &r.schema_ids {
+                    if self.engine_mgr().data_schema_id(sid) == *sid {
+                        store.clear_user_words(sid)?;
+                        store.clear_temp_words(sid)?;
+                        // 草稿层同属该方案的数据域：方案都删了，它记下的猜测就是垃圾。
+                        // 漏掉这一条不会立刻出错（草稿带 TTL，启动清理终会收走），
+                        // 但在那之前它们仍会被召回并跃迁——往一个已不存在的方案的临时词库里写。
+                        store.clear_drafts(sid)?;
+                        store.clear_freq(sid)?;
+                        store.clear_assoc_history(sid)?;
+                        store.clear_shadow(sid)?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        for sid in &r.schema_ids {
+            self.engine_mgr().forget_deleted_schema(sid);
+        }
+        // 被删方案的自定义标点 / 码元首码 / `[key_actions]` 引导键仍在吃键集里（GH#144 同根）：
+        // 不重建的话，英文态下 DLL 会继续吃它配过英半列的键、再原样吐回 ASCII（非 TSF 宿主上
+        // 即「吃了再吐」），直到重启。
+        self.refresh_schema_derived_config();
+        cleared?;
+        Ok(json!({
+            "ok": true,
+            "deleted": r.deleted,
+            "keptShared": r.kept_shared,
+            "schemaIds": r.schema_ids,
+        }))
+    }
+
+    /// 某方案写入的全部数据方案：非混输 = 自身的数据方案；混输 = 主方案的数据方案 + 有拼音子方案时的
+    /// `pinyin`（与 `EngineManager::write_data_schema_id` 的分流一致）。
+    fn written_data_schemes(&self, id: &str) -> Vec<String> {
+        let em = self.engine_mgr();
+        if em.schema_engine_type(id).as_deref() != Some("mixed") {
+            return vec![em.data_schema_id(id)];
+        }
+        let mut v = Vec::new();
+        if em.mixed_primary_schema(id).is_some() {
+            v.extend(em.write_data_schema_id(id, aurora_candidate::CandidateSource::CodeTable));
+        }
+        if em.mixed_secondary_schema(id).is_some() {
+            v.extend(em.write_data_schema_id(id, aurora_candidate::CandidateSource::Pinyin));
+        }
+        v
+    }
+
+    /// `userdata.purgeSchema` 拒绝的原因（能删 ⇒ None）；`data.locate` 的 `purgeable` / `reason`
+    /// 用同一个判据。未安装的不删（防把 `stats` 之类的保留目录当方案）；混输的数据在主方案与拼音
+    /// 名下，自身不删；数据方案被别的已装方案写入（拼音族、混输的主 / 拼音一侧）不单删。
+    fn purge_block_reason(&self, id: &str) -> Option<String> {
+        let em = self.engine_mgr();
+        let installed = em.installed_schemas();
+        if !installed.iter().any(|s| s == id) {
+            return Some(format!("未安装方案 {id}"));
+        }
+        if em.schema_engine_type(id).as_deref() == Some("mixed") {
+            let mut at: Vec<String> = Vec::new();
+            if let Some(p) = em.mixed_primary_schema(id) {
+                at.push(format!("「{}」", em.schema_name(&p)));
+            }
+            if em.mixed_secondary_schema(id).is_some() {
+                at.push("拼音".into());
+            }
+            return Some(if at.is_empty() {
+                "混输方案没有自己的数据".into()
+            } else {
+                format!("混输方案的数据在{}里，请在那里删除", at.join("和"))
+            });
+        }
+        let ds = em.data_schema_id(id);
+        installed
+            .iter()
+            .find(|s| *s != id && self.written_data_schemes(s).contains(&ds))
+            .map(|other| format!("与「{}」共用数据，不能单独删除", em.schema_name(other)))
+    }
+
+    /// `userdata.purgeSchema {schemaId}` → `{ok, removed: [相对路径]}`：删掉该方案的全部用户数据
+    /// ——数据方案目录（用户词 / Shadow / 学到的数据 / 分库与开关）、`.backup/` 里它的那份、
+    /// `schema_overrides/<id>.toml`。数据方案与别的已装方案共用（拼音族）⇒ 拒绝；有文件正在外部
+    /// 编辑 ⇒ 拒绝。统计不动。`removed` 里数据文件相对数据目录，方案覆盖写 `schema_overrides/<id>.toml`。
+    fn web_userdata_purge_schema(&self, params: &Value) -> anyhow::Result<Value> {
+        if let Some(r) = self.storage_readonly_reason() {
+            anyhow::bail!("{r}");
+        }
+        let id = str_param(params, "schemaId")?;
+        if let Some(r) = self.purge_block_reason(id) {
+            anyhow::bail!("{r}");
+        }
+        let ds = self.engine_mgr().data_schema_id(id);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let r = store.purge_data_schema(&ds);
+        // 删到一半失败也失效：分库文件可能已删，引擎不能拿着旧数据
+        self.apply_user_text_changes(&[
+            ds.clone(),
+            format!("{}{ds}", aurora_store::user_words::USER_DICTS_CHANGED),
+        ]);
+        let mut removed = r?;
+        if self.engine_mgr().delete_schema_override(id)? {
+            removed.push(format!("schema_overrides/{id}.toml"));
+        }
+        self.refresh_schema_derived_config();
+        Ok(json!({ "ok": true, "removed": removed }))
+    }
+
+    /// 用户 schemas 根目录(%APPDATA%/AuroraInput/schemas),不存在则创建。
+    fn user_schemas_dir() -> anyhow::Result<std::path::PathBuf> {
+        let dir = aurora_config::Config::user_config_dir()
+            .ok_or_else(|| anyhow::anyhow!("无用户配置目录"))?
+            .join("schemas");
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+
+    /// **系统** schemas 根目录们：非用户层的每一层（`data_custom` 在前、`data` 在后）的
+    /// `schemas/`，只保留真实存在的（测试环境可能一个都没有）。
+    ///
+    /// 复数不是随手写的：定制版里只存在于 `data_custom` 的方案，只传 data 层时会被
+    /// `aurora_transfer::scheme::locate` 判成 `Missing` ⇒ 导出成功但包是空的/全进 missing，
+    /// 用户拿它装不回去；删除路径则连 `system_refs` 都记不上。定制层与出厂层在这里同类：
+    /// 导出一并打包（自包含），删除永不触碰。
+    fn system_schemas_dirs() -> Vec<std::path::PathBuf> {
+        aurora_config::Config::resource_layers_named()
+            .into_iter()
+            .filter(|l| !l.is_user())
+            .map(|l| l.path.join("schemas"))
+            .filter(|d| d.is_dir())
+            .collect()
+    }
+
+    fn web_scheme_export_package(&self, params: &Value) -> anyhow::Result<Value> {
+        let id = str_param(params, "id")?;
+        let out = str_param(params, "path")?;
+        let user = Self::user_schemas_dir()?;
+        let system = Self::system_schemas_dirs();
+        // 设置页方案定制层(schema_overrides/<id>.toml,见 write_schema_override):
+        // 导出必须带上,否则定制过的方案(如换过双拼布局)导出的是未定制版本,
+        // override 新指向的资源文件也会漏打包。
+        let override_dir =
+            aurora_config::Config::user_config_dir().map(|d| d.join("schema_overrides"));
+        let r = aurora_transfer::scheme::export_package(
+            id,
+            &user,
+            &system,
+            override_dir.as_deref(),
+            std::path::Path::new(out),
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            &chrono::Local::now().to_rfc3339(),
+        )?;
+        Ok(json!({
+            "path": r.path.to_string_lossy(),
+            "packed": r.packed,
+            "systemRefs": r.system_refs,
+            "missing": r.missing,
+        }))
+    }
+
+    fn web_scheme_import_package(&self, params: &Value) -> anyhow::Result<Value> {
+        use aurora_transfer::merge::Strategy;
+        let path = str_param(params, "path")?;
+        let strategy = Strategy::from_param(
+            params
+                .get("strategy")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        );
+        let user = Self::user_schemas_dir()?;
+        let r = aurora_transfer::scheme::import_package(std::path::Path::new(path), &user, strategy)?;
+        // 覆盖已加载方案时失效缓存(新方案为安全 no-op);列表可见性由 installed_schemas 实时扫盘天然生效。
+        for id in &r.schema_ids {
+            self.engine_mgr().invalidate_schema(id);
+        }
+        // 吃键集随之重建（GH#144 同根）：进了 `available` 的方案稍后会经 config.setItems 自愈，
+        // 但 overlay 方案（快符等）不进 `available`，它的自定义标点 / 符号码元 / 引导键会一直
+        // 被透传，直到重启。
+        if !r.schema_ids.is_empty() {
+            self.refresh_schema_derived_config();
+        }
+        Ok(json!({
+            "imported": r.imported,
+            "conflicts": r.conflicts,
+            "schemaIds": r.schema_ids,
+        }))
+    }
+
+    fn web_scheme_preview_import(&self, params: &Value) -> anyhow::Result<Value> {
+        let path = str_param(params, "path")?;
+        let user = Self::user_schemas_dir()?;
+        let p = aurora_transfer::scheme::preview_import(std::path::Path::new(path), &user)?;
+        Self::scheme_preview_json(&p)
+    }
+
+    /// `scheme.previewImportText { text }`：文本信封的只读预览。
+    /// 文本不是信封时错误以 `not_schema_text:` 开头，设置端据此回落配置片段管线。
+    fn web_scheme_preview_import_text(&self, params: &Value) -> anyhow::Result<Value> {
+        let text = str_param(params, "text")?;
+        let user = Self::user_schemas_dir()?;
+        let p = aurora_transfer::envelope::preview_import_text(text, &user)?;
+        Self::scheme_preview_json(&p)
+    }
+
+    /// `scheme.importText { text, strategy? }`：文本信封落盘。响应形状与
+    /// `scheme.importPackage` 一致；同样**不**应用包内配置片段（设置端两步编排）。
+    fn web_scheme_import_text(&self, params: &Value) -> anyhow::Result<Value> {
+        use aurora_transfer::merge::Strategy;
+        let text = str_param(params, "text")?;
+        let strategy = Strategy::from_param(
+            params
+                .get("strategy")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        );
+        let user = Self::user_schemas_dir()?;
+        let r = aurora_transfer::envelope::import_text(text, &user, strategy)?;
+        // 覆盖已加载方案时失效缓存（新方案为安全 no-op），与 path 版同处置。
+        for id in &r.schema_ids {
+            self.engine_mgr().invalidate_schema(id);
+        }
+        if !r.schema_ids.is_empty() {
+            self.refresh_schema_derived_config(); // 同 path 版（GH#144 同根）
+        }
+        Ok(json!({
+            "imported": r.imported,
+            "conflicts": r.conflicts,
+            "schemaIds": r.schema_ids,
+        }))
+    }
+
+    /// 预览响应的公共形状(zip 与文本信封共用,两条路复用同一个确认对话框)。
+    ///
+    /// **包级说明**(`title` / `description`,来自 package.toml / 信封 `[package]`)提到
+    /// 顶层:确认对话框在顶部显示它。空则不输出该字段——前端不必区分"没写"与"写了空串"。
+    /// 它与 `configPatch.info`(片段自带的说明)**各显各的、不合并**:包级说的是"这个包
+    /// 是什么",片段级说的是"这段配置改了什么"(§2.3)。
+    fn scheme_preview_json(
+        p: &aurora_transfer::scheme::SchemeImportPreview,
+    ) -> anyhow::Result<Value> {
+        let mut out = json!({
+            // v2:包元信息来自可选 package.toml(缺失时各字段为空串,前端显示"未知")。
+            "package": serde_json::to_value(&p.meta)?,
+            "willAdd": p.will_add,
+            "conflicts": p.conflicts,
+            "systemRefs": p.system_refs,
+            "missing": p.missing,
+        });
+        if !p.meta.package.title.is_empty() {
+            out["title"] = json!(p.meta.package.title);
+        }
+        if !p.meta.package.description.is_empty() {
+            out["description"] = json!(p.meta.package.description);
+        }
+        if let Some(text) = &p.config_patch {
+            out["configPatch"] = Self::config_patch_diff(text)?;
+        }
+        Ok(out)
+    }
+
+    /// 包内配置片段的逐键 diff(`{ text, ok, entries, info? }`),形状与 `config.previewPatch`
+    /// 同源。`info` 是**该片段自己**的说明(来自 config_patch.toml 的 `[package]` 段),
+    /// 与包级 title/description 无关,不合并也不做优先级判定。
+    ///
+    /// 只预览、**不应用**:应用编排在设置端(导入方案文件 → `config.applyPatch`),那条路
+    /// 才有热重载与镜像回灌。在文件层复刻它们就是第二份真相源。
+    fn config_patch_diff(text: &str) -> anyhow::Result<Value> {
+        let fragment = aurora_config::patch::parse_fragment(text)
+            .map_err(|e| anyhow::anyhow!("包内配置片段无法解析: {e}"))?;
+        // 说明非法即整体错误(与解析失败同级),判据与 config.previewPatch 完全一致。
+        let info = aurora_config::patch::extract_info(&fragment)
+            .map_err(|e| anyhow::anyhow!("包内配置片段说明非法: {e}"))?;
+        let cfg = aurora_config::Config::load(aurora_config::Config::data_dir().as_deref())?;
+        // `degradation` 是 `#[serde(skip)]`，转成值树就没了，故先留一份。
+        let degradation = cfg.degradation.clone();
+        let current = cfg.to_toml_value()?;
+        let mut entries = aurora_config::patch::preview(&fragment, &current);
+        // 与 `config.previewPatch` 同判据：本函数只预览，但预览要显示的正是「应用后会
+        // 变成什么」，降级时 Map 键的当前表是出厂值 ⇒ 不标出来，用户看到的 diff 是假的，
+        // 且会照着它去点应用（真正的落盘闸在 `config.applyPatch`，两处必须同判据）。
+        aurora_config::patch::mark_degraded_seeds(&mut entries, &degradation);
+        let ok = entries.iter().all(|e| e.error.is_none());
+        let mut out = json!({ "text": text, "ok": ok, "entries": entries });
+        if let Some(info) = info {
+            out["info"] = serde_json::to_value(info)?;
+        }
+        Ok(out)
+    }
+
+    fn web_backup_create(&self, params: &Value) -> anyhow::Result<Value> {
+        use aurora_transfer::backup::{BackupOptions, BackupSources, create_backup};
+        let out = str_param(params, "path")?;
+        let include_stats = params
+            .get("includeStats")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let include_state = params
+            .get("includeState")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let user_dir = aurora_config::Config::user_config_dir();
+        let cfg_file = user_dir.as_ref().map(|d| d.join("config.toml"));
+        let compat_file = user_dir.as_ref().map(|d| d.join("compat.toml"));
+        let schemas_dir = user_dir.as_ref().map(|d| d.join("schemas"));
+        let schema_overrides_dir = user_dir.as_ref().map(|d| d.join("schema_overrides"));
+        let themes_dir = user_dir.as_ref().map(|d| d.join("themes"));
+        let state_file = aurora_config::Config::state_dir().map(|d| d.join("state.toml"));
+        let src = BackupSources {
+            user_config_file: cfg_file.as_deref(),
+            compat_file: compat_file.as_deref(),
+            user_schemas_dir: schemas_dir.as_deref(),
+            user_schema_overrides_dir: schema_overrides_dir.as_deref(),
+            user_themes_dir: themes_dir.as_deref(),
+            state_file: state_file.as_deref(),
+        };
+        let r = create_backup(
+            store,
+            &src,
+            std::path::Path::new(out),
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            &chrono::Local::now().to_rfc3339(),
+            &BackupOptions {
+                include_stats,
+                include_state,
+            },
+        )?;
+        let manifest = aurora_transfer::bundle::read_manifest(&r.path)?;
+        Ok(json!({
+            "path": r.path.to_string_lossy(),
+            "manifest": serde_json::to_value(&manifest)?,
+        }))
+    }
+
+    fn web_backup_inspect(&self, params: &Value) -> anyhow::Result<Value> {
+        let path = str_param(params, "path")?;
+        let manifest = aurora_transfer::bundle::read_manifest(std::path::Path::new(path))?;
+        Ok(json!({ "manifest": serde_json::to_value(&manifest)? }))
+    }
+
+    fn web_backup_restore(&self, params: &Value) -> anyhow::Result<Value> {
+        use aurora_transfer::backup::{RestoreTargets, restore_backup};
+        use aurora_transfer::merge::Strategy;
+        let path = str_param(params, "path")?;
+        let strategy = Strategy::from_param(
+            params
+                .get("strategy")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        );
+        let sections: Option<Vec<String>> = params.get("sections").and_then(|v| {
+            v.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+        });
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let user_dir = aurora_config::Config::user_config_dir();
+        let cfg_file = user_dir.as_ref().map(|d| d.join("config.toml"));
+        let compat_file = user_dir.as_ref().map(|d| d.join("compat.toml"));
+        let schemas_dir = user_dir.as_ref().map(|d| d.join("schemas"));
+        let schema_overrides_dir = user_dir.as_ref().map(|d| d.join("schema_overrides"));
+        let themes_dir = user_dir.as_ref().map(|d| d.join("themes"));
+        let state_file = aurora_config::Config::state_dir().map(|d| d.join("state.toml"));
+        let targets = RestoreTargets {
+            user_config_file: cfg_file.as_deref(),
+            compat_file: compat_file.as_deref(),
+            user_schemas_dir: schemas_dir.as_deref(),
+            user_schema_overrides_dir: schema_overrides_dir.as_deref(),
+            user_themes_dir: themes_dir.as_deref(),
+            state_file: state_file.as_deref(),
+        };
+        // 还原期间挂起统计收集器：它后台 30 秒那次 flush 若落在「还原写完、resume 之前」，会把
+        // 还原前的今天与总计写回去（P4a 审查 I-5）。还原失败也要解除挂起。
+        let collector = self.stat_collector();
+        if let Some(c) = collector {
+            c.suspend();
+        }
+        let r = match restore_backup(
+            std::path::Path::new(path),
+            store,
+            &targets,
+            strategy,
+            sections.as_deref(),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(c) = collector {
+                    c.unsuspend();
+                }
+                return Err(e);
+            }
+        };
+        // 刷新:config 域生效、短语重建、涉及方案失效缓存(未加载时安全 no-op)。
+        let touched_config = r.restored.iter().any(|p| p.starts_with("config/"));
+        let touched_phrase = r.restored.iter().any(|p| p == "userdata/phrases.wdict");
+        // 字符类用户层进了库，运行时 registry 还是旧的——不重装就是「还原成功、判定没变」。
+        let touched_charsets = r.restored.iter().any(|p| p.starts_with("charsets/"));
+        for id in &r.schemas_touched {
+            self.engine_mgr().invalidate_schema(id);
+        }
+        for p in &r.restored {
+            if let Some(rel) = p.strip_prefix("schemas/")
+                && let Some(id) = rel.strip_suffix(".schema.toml")
+                && !id.contains('/')
+            {
+                self.engine_mgr().invalidate_schema(id);
+            }
+            // schema_overrides/<id>.toml 同样是「方案配置合并层」的一部分，改动后
+            // 必须失效该方案引擎缓存，否则还原后仍沿用还原前的旧 override 跑。
+            if let Some(rel) = p.strip_prefix("schema_overrides/")
+                && let Some(id) = rel.strip_suffix(".toml")
+                && !id.contains('/')
+            {
+                self.engine_mgr().invalidate_schema(id);
+            }
+        }
+        if touched_phrase {
+            // Replace 还原会先 `reset_user_phrases`（见 restore_backup 的 "phrase" 分支），
+            // 遮蔽了系统条目的用户行随之被删、那些系统短语一并消失 → 补回缺失的。
+            // 与设置页「清空用户短语」同一条约束，漏在这里就是备份还原后系统短语静默少几条。
+            self.restore_missing_system_phrases("备份还原");
+            self.rebuild_phrases();
+        }
+        // 方案文件 / 方案 override 变了：吃键集的跨方案并集随之过期（GH#144 同根）。只看这两个
+        // 前缀——`r.schemas_touched` 收的是词库 / 词频 / shadow 等**数据域**，不进并集。
+        // `reload_user_config` 成功时自带同一套重建与推送，故二者择一；它返回 `true` 表示
+        // **加载失败**（只报错、bundle 未重建），那时方案这一侧仍要单独补一次。
+        let touched_schemas = r
+            .restored
+            .iter()
+            .any(|p| p.starts_with("schemas/") || p.starts_with("schema_overrides/"));
+        let reload_failed = touched_config && self.reload_user_config();
+        if touched_schemas && (!touched_config || reload_failed) {
+            self.refresh_schema_derived_config();
+        }
+        if touched_charsets {
+            self.reload_charsets();
+        }
+        // 常用字 / 快捷格式的内存镜像、统计收集器都要跟着还原后的数据重载：收集器不 resume 的话，
+        // 它下一次写盘会把还原前的「今天」和总计写回去（P4a Review Focus 4）。
+        let touched = |p: &str| r.restored.iter().any(|x| x == p);
+        let mut changed = Vec::new();
+        if touched("userdata/common_chars.jsonl") {
+            changed.push("common_chars".to_string());
+        }
+        if touched("userdata/quick_format.yaml") {
+            changed.push("quick_format".to_string());
+        }
+        // 用户分库（`data/<数据方案>/…`）写回了：失效用到该数据方案的方案
+        for p in &r.restored {
+            if let Some((ds, _)) = p.strip_prefix("data/").and_then(|r| r.split_once('/')) {
+                let k = format!("{}{ds}", aurora_store::user_words::USER_DICTS_CHANGED);
+                if !changed.contains(&k) {
+                    changed.push(k);
+                }
+            }
+        }
+        self.apply_user_text_changes(&changed);
+        if let Some(c) = collector {
+            if touched("userdata/stats.jsonl") || touched("userdata/stats_meta.json") {
+                c.resume();
+            } else {
+                c.unsuspend();
+            }
+        }
+        Ok(json!({
+            "restored": r.restored,
+            "conflicts": r.conflicts,
+            "schemasTouched": r.schemas_touched,
+        }))
+    }
+
+    fn web_dict_encode(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        // 同 dict.genPinyin：取码基于真实文本，不能拿转义形态去逐字反查。
+        let text = store_text(str_param(params, "text")?);
+        let code = self
+            .encode_texts(schema, std::slice::from_ref(&text))
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        Ok(json!(code))
+    }
+
+    /// 批量出码（纯词列表导入）。规则与 `dict.encode` 完全一致——两者共用
+    /// [`Self::encode_texts`]，避免两条出码口径各自漂移。
+    ///
+    /// 契约：`codes` 与入参 `texts` **同序等长**，出不了码的位置为空串。
+    /// 调用方靠下标把码配回词，跳过失败项会让其后所有词错位配到别人的码上。
+    /// 故非字符串元素也要占位（按空串处理），不能 filter 掉。
+    fn web_dict_encode_words(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let texts: Vec<String> = params
+            .get("texts")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|x| store_text(x.as_str().unwrap_or("")))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(json!({ "codes": self.encode_texts(schema, &texts) }))
+    }
+
+    /// 出码统一入口：拼音类方案出拼音码，其余（码表/混输）按方案 `[[encoder.rules]]` 出词组码，
+    /// **单字直取其全码**（词组公式不接受单字，见 `EngineManager::encode_words`）。
+    /// 返回与 `texts` 同序等长，失败位置为空串。
+    ///
+    /// 一次性准备（读方案 / 取引擎句柄）都在这一层之下完成，故传一个词与传一万个词
+    /// 的固定开销相同——`dict.encode` 走单元素切片没有额外代价。
+    fn encode_texts(&self, schema: &str, texts: &[String]) -> Vec<String> {
+        if texts.is_empty() {
+            return Vec::new();
+        }
+        let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let is_pinyin = self
+            .engine_mgr()
+            .schema_engine_type(schema)
+            .map(|t| t == "pinyin")
+            .unwrap_or(false);
+        if !is_pinyin {
+            // 与自动造词/快捷加词同一取码入口（码源=码表词库自身，规则=方案声明的公式）。
+            // 原走 wubi_word_code：拆字表码源 + 硬编码五笔 86 规则，未配拆字的方案恒空、
+            // 非五笔方案静默出错。见 docs/design/codetable-auto-phrase.md §2「码源统一」。
+            return self.engine_mgr().encode_words(schema, &refs);
+        }
+        // 优先词级消歧（多音字按词典权重），引擎无果时回退逐字反查表。
+        // 回的是**带空格的音节码**，让用户看清拼音词库的音节格式（与 word_item 同形）。
+        // 安全前提：写入侧 normalize_add_code 会拆回扁平 key，并把空格当作**显式声明的
+        // 切分**采信。逐字反查表回退同样以空格分隔（`gen_pinyin` 以 `.join(" ")` 收尾），
+        // 故两条路出来的都是同形的音节码，无需再做区分。
+        let generated = self.engine_mgr().generate_words_pinyin(schema, &refs);
+        // 反查表的读锁在循环外取一次：逐词加锁在万级批量上纯属浪费。
+        let reverse = self
+            .reverse_lookup()
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        generated
+            .into_iter()
+            .zip(&refs)
+            .map(|(code, text)| code.unwrap_or_else(|| reverse.gen_pinyin(text)))
+            .collect()
+    }
+
+    /// 为词语生成拼音码：优先用拼音引擎词级消歧（活跃方案→"pinyin"方案），
+    /// 都无果时回退逐字反查表（pinyin_map.txt）。用于 dict.genPinyin（无方案上下文）。
+    ///
+    /// 同 `dict.encode`：回带空格的音节码，写入侧负责拆回扁平 key。
+    fn gen_pinyin_word(&self, text: &str) -> String {
+        let active = self.engine_mgr().active_schema_id();
+        self.engine_mgr()
+            .generate_word_pinyin(&active, text)
+            .or_else(|| self.engine_mgr().generate_word_pinyin("pinyin", text))
+            .unwrap_or_else(|| {
+                self.reverse_lookup()
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .gen_pinyin(text)
+            })
+    }
+
+    fn web_freq_list_paged(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let prefix = params.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+        let offset = usize_param(params, "offset", 0);
+        let limit = usize_param(params, "limit", 50);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let sort = parse_sort(params, &["code", "text", "count", "lastUsed"]);
+        // 无搜索且无排序：走 store 分页快路径；否则全量拉取
+        //（编码前缀 ∪ 词条内容包含）→ 排序 → 内存切片。
+        let (page, total) = if prefix.is_empty() && sort.is_none() {
+            store.list_freq_paged(&schema, "", offset, limit)?
+        } else {
+            // 词频表的 key 是扁平码；用户可能从用户词库列表复制带空格的串来搜，先拆
+            //（对无空格串恒等，故无副作用）。
+            let (code_prefix, _) = aurora_store::wdict::split_spaced_code(prefix);
+            let mut all = if prefix.is_empty() {
+                // 只排序不搜索：排序是跨页全局的，只能全量物化。
+                store.list_freq_paged(&schema, &code_prefix, 0, 0)?.0
+            } else {
+                // **一遍**扫描分两组，编码前缀命中在前、其余命中在后：
+                //   ① 词条内容包含搜索词（拿汉字匹配 text，用原串）
+                //   ② **编码中段包含**搜索词 —— 前缀扫描只能命中开头，`haoya` 搜 `ya`
+                //      一条也出不来，而用户并不知道搜索框只认前缀。
+                //
+                // 从前这里与 `web_dict_list_paged` 同款：扫两遍全表（一遍前缀、一遍全量）
+                // 再拿一个全量 clone 的 `HashSet<(String,String)>` 去重。前缀命中本就是
+                // 全量扫描的子集，第二遍纯属重复；分两组天然互斥，去重结构一并不需要了。
+                // 顺序与从前逐条相同。
+                let q = prefix.to_lowercase();
+                let code_q = code_prefix.to_lowercase();
+                let mut head = Vec::new();
+                let mut tail = Vec::new();
+                store.for_each_freq(&schema, "", &mut |c, t, rec| {
+                    if c.starts_with(code_prefix.as_str()) {
+                        head.push((c.to_string(), t.to_string(), rec));
+                    } else if t.to_lowercase().contains(&q)
+                        || (!code_q.is_empty() && c.to_lowercase().contains(&code_q))
+                    {
+                        tail.push((c.to_string(), t.to_string(), rec));
+                    }
+                    true
+                })?;
+                head.append(&mut tail);
+                head
+            };
+            let total = all.len();
+            if let Some((by, desc)) = sort {
+                all.sort_by(|(ca, ta, ra), (cb, tb, rb)| {
+                    let ord = match by {
+                        "count" => ra.count.cmp(&rb.count),
+                        "lastUsed" => ra.last_used.cmp(&rb.last_used),
+                        "text" => ta.cmp(tb),
+                        _ => ca.cmp(cb),
+                    };
+                    if desc { ord.reverse() } else { ord }
+                });
+            }
+            let page = all.into_iter().skip(offset).take(limit).collect();
+            (page, total)
+        };
+        let items: Vec<Value> = page
+            .into_iter()
+            .map(|(code, text, rec)| {
+                let code = self.freq_display_code(&schema, &code, &text);
+                json!({ "code": code, "text": ui_text(&text), "count": rec.count, "lastUsed": rec.last_used })
+            })
+            .collect();
+        Ok(json!({ "items": items, "total": total }))
+    }
+
+    /// 词频列表的编码显示：反查音节边界后渲染成带空格的音节码，与用户词库/临时词库列表同形。
+    ///
+    /// **词频表是唯一不带 boundary 的持久层**（value 仅 `count + last_used`），边界只能反查。
+    /// 三处依次问：系统词典（mmap 点查，最快也最可能命中）→ 用户词表 → 临时词表。
+    /// 都查不到即原样返回扁平码——存量的简拼码记录、码表方案、以及词条已被删除的
+    /// 遗留记录都会落到这里，属正常降级。
+    ///
+    /// 只对**当前页**（≤ limit 条）反查，开销与词频表总规模无关。
+    ///
+    /// 之所以选反查而非给词频表扩容加 boundary 字段：词频是长期积累的数据，扩容只能让
+    /// 此后新写入的记录带边界，用户会看到「新词有空格、老词没有」的混杂列表。
+    fn freq_display_code(&self, schema: &str, code: &str, text: &str) -> String {
+        let mut b = self.engine_mgr().syllable_boundary_of(schema, code, text);
+        if b == 0
+            && let Some(store) = self.user_store()
+        {
+            let from = |recs: Vec<aurora_store::user_words::UserWordRecord>| {
+                recs.into_iter()
+                    .find(|w| w.text == text)
+                    .map(|w| w.boundary)
+                    .filter(|x| *x != 0)
+            };
+            b = store
+                .get_user_words(schema, code)
+                .ok()
+                .and_then(from)
+                .or_else(|| store.get_temp_words(schema, code).ok().and_then(from))
+                .unwrap_or(0);
+        }
+        aurora_store::wdict::join_code_by_boundary(code, b)
+    }
+
+    fn web_freq_delete(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // 列表项的 code 带音节空格（见 freq_display_code），而词频表 key 是扁平的。
+        let (code, _) = aurora_store::wdict::split_spaced_code(code);
+        store.delete_freq(&schema, &code, &store_text(text))?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_freq_clear(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // 联想历史（t185）同是「用出来的」使用数据，随「清空词频」一并清。
+        store.clear_assoc_history(&schema)?;
+        Ok(json!(store.clear_freq(&schema)?))
+    }
+
+    /// 补全学习数据的分页列表（邮箱后缀 / 网址历史共用）。
+    ///
+    /// 不分方案：这两类都是全局属性（见 `aurora_store::completion` 模块文档），故参数里
+    /// **没有** `schemaId`——设置端那侧对应 `CategorySpec::scoped_by_schema = false`。
+    fn web_completion_list_paged(
+        &self,
+        kind: CompletionKind,
+        params: &Value,
+    ) -> anyhow::Result<Value> {
+        // `prefix` 与 `query` 是设置端发的同值别名（`build_list_params`），取到哪个算哪个。
+        let query = params
+            .get("prefix")
+            .or_else(|| params.get("query"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let offset = usize_param(params, "offset", 0);
+        let limit = usize_param(params, "limit", 50);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let sort = parse_sort(params, &["text", "count", "lastUsed"]);
+
+        // 搜索是**包含**而非前缀：用户记得的多半是网址中段（搜 `example` 要能找出
+        // `www.example.com`），而 store 侧只提供前缀扫描。故有搜索词或要自定义排序时
+        // 全量拉取后在内存里过滤/排序——这两类数据有 `history_max` 封顶，规模可控。
+        let (page, total) = if query.is_empty() && sort.is_none() {
+            store.list_completions(kind, "", offset, limit)?
+        } else {
+            let (all, _) = store.list_completions(kind, "", 0, 0)?;
+            let q = query.to_lowercase();
+            let mut all: Vec<_> = all
+                .into_iter()
+                .filter(|(text, _)| q.is_empty() || text.to_lowercase().contains(&q))
+                .collect();
+            if let Some((by, desc)) = sort {
+                all.sort_by(|(ta, ra), (tb, rb)| {
+                    let ord = match by {
+                        "count" => ra.count.cmp(&rb.count),
+                        "lastUsed" => ra.last_used.cmp(&rb.last_used),
+                        _ => ta.cmp(tb),
+                    };
+                    if desc { ord.reverse() } else { ord }
+                });
+            }
+            let total = all.len();
+            let page = all.into_iter().skip(offset).take(limit).collect();
+            (page, total)
+        };
+        let items: Vec<Value> = page
+            .into_iter()
+            .map(|(text, rec)| {
+                json!({ "text": ui_text(&text), "count": rec.count, "lastUsed": rec.last_used })
+            })
+            .collect();
+        Ok(json!({ "items": items, "total": total }))
+    }
+
+    /// 删一条补全学习数据。返回它本来在不在。
+    fn web_completion_delete(&self, kind: CompletionKind, params: &Value) -> anyhow::Result<Value> {
+        let text = str_param(params, "text")?;
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        Ok(json!(store.remove_completion(kind, &store_text(text))?))
+    }
+
+    /// 清空某一类补全学习数据，返回删除条数。
+    ///
+    /// 无内存镜像要一并清（不像 `stats.clear` 那样还要 `stat_collector().reset()`）：
+    /// 补全候选每次刷新都现查库，没有缓存层。
+    fn web_completion_clear(&self, kind: CompletionKind) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        Ok(json!(store.clear_completions(kind)?))
+    }
+
+    fn web_shadow_list(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        Ok(json!(self.shadow_rows(&schema)?))
+    }
+
+    /// 影子规则的展平行集：一条 `ShadowRecord` 里的每个 pinned / deleted 各占一行。
+    ///
+    /// [`Self::web_shadow_list`] 与 [`Self::web_shadow_list_paged`] 共用同一份展平——
+    /// 两处各写一遍的话，加字段时必漏一边，而症状是「不分页时看得到、分页后这一列空着」。
+    fn shadow_rows(&self, schema: &str) -> anyhow::Result<Vec<Value>> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let mut out = Vec::new();
+        for (code, rec) in store.list_shadow_rules(schema)? {
+            for p in rec.pinned {
+                out.push(json!({
+                    "code": code,
+                    "word": p.word,
+                    "candId": p.cand_id,
+                    "type": "pin",
+                    "position": p.position,
+                }));
+            }
+            for d in rec.deleted {
+                out.push(json!({
+                    "code": code,
+                    "word": d,
+                    "candId": Value::Null,
+                    "type": "delete",
+                }));
+            }
+        }
+        Ok(out)
+    }
+
+    /// 影子规则分页列表（`{items,total}`，与 dict/freq 同形）。
+    ///
+    /// 规则数随使用量单调增长且没有上限，一次全取要把整份 json 推过 IPC，设置端再把
+    /// 每条都建成表格行 widget（那张表不做虚拟化），条目上万时开页即卡。
+    ///
+    /// 搜索/排序都在切片**之前**做，故是跨页全局的——只对当页那几十条排序毫无意义。
+    fn web_shadow_list_paged(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let query = params
+            .get("prefix")
+            .and_then(|v| v.as_str())
+            .or_else(|| params.get("query").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let offset = usize_param(params, "offset", 0);
+        let limit = usize_param(params, "limit", 50);
+        let mut all = self.shadow_rows(&schema)?;
+        // 「词」这一列显示的是 candId 里的模板原文而非 `word`（见 [`shadow_display_text`]），
+        // 故搜索与排序都得按显示文本来：不然用户照着屏幕上的 `{time("HH:mm")}` 去搜，
+        // 一条也搜不到。
+        if !query.is_empty() {
+            let q = query.to_lowercase();
+            all.retain(|r| {
+                let f = |k: &str| {
+                    r.get(k)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_lowercase()
+                };
+                f("code").contains(&q)
+                    || f("word").contains(&q)
+                    || shadow_display_text(r).to_lowercase().contains(&q)
+            });
+        }
+        let total = all.len();
+        // `text` 是设置端列模型里「词」列的字段名（各类别统一叫 text），此处落到 word 上。
+        if let Some((by, desc)) = parse_sort(params, &["code", "word", "text", "type", "position"])
+        {
+            all.sort_by(|a, b| {
+                let ord = match by {
+                    // delete 类规则不带 position，缺字段按 0 排（与设置端 from_json 的回落一致）。
+                    "position" => {
+                        let n = |v: &Value| v.get("position").and_then(|x| x.as_i64()).unwrap_or(0);
+                        n(a).cmp(&n(b))
+                    }
+                    "word" | "text" => shadow_display_text(a).cmp(&shadow_display_text(b)),
+                    k => {
+                        let g = |v: &'_ Value| {
+                            v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
+                        };
+                        g(a).cmp(&g(b))
+                    }
+                };
+                if desc { ord.reverse() } else { ord }
+            });
+        }
+        let items: Vec<Value> = all.into_iter().skip(offset).take(limit).collect();
+        Ok(json!({ "items": items, "total": total }))
+    }
+
+    /// 撤销该方案下的全部影子规则，返回撤销条数。
+    fn web_shadow_clear(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        Ok(json!(store.clear_shadow(&schema)?))
+    }
+
+    fn web_shadow_pin(&self, params: &Value) -> anyhow::Result<Value> {
+        let (schema, code, word) = (
+            str_param(params, "schemaId")?,
+            str_param(params, "code")?,
+            str_param(params, "word")?,
+        );
+        let cand_id = params.get("candId").and_then(|v| v.as_str());
+        let position = usize_param(params, "position", 0);
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        store.pin_shadow(&schema, code, word, cand_id, position)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_shadow_delete(&self, params: &Value) -> anyhow::Result<Value> {
+        let (schema, code, word) = (
+            str_param(params, "schemaId")?,
+            str_param(params, "code")?,
+            str_param(params, "word")?,
+        );
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        store.delete_shadow(&schema, code, word)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_shadow_remove_rule(&self, params: &Value) -> anyhow::Result<Value> {
+        let (schema, code, word) = (
+            str_param(params, "schemaId")?,
+            str_param(params, "code")?,
+            str_param(params, "word")?,
+        );
+        // 设置页删规则时回传 `shadow.list` 给出的 candId：动态短语规则的 word 是写入当天的
+        // 求值文本，只按 word 定位会删不掉（列表里看得见、点删除无效）。
+        let cand_id = params.get("candId").and_then(|v| v.as_str());
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        store.remove_shadow_rule(&schema, code, word, cand_id)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// 候选调整手动添加/编辑：type="hide" 转屏蔽；否则（pin）按 position 置顶。
+    /// 匹配设置端候选调整对话框契约。
+    ///
+    /// **编辑既有规则时设置端会回传 `candId`，必须透传下去**：短语规则靠稳定 id 跨日命中，
+    /// 而这条路会先按 `same_target` 匹配掉同一条旧规则再插入新规则——不带 id 就等于
+    /// 把原规则的 id 擦掉（退化成按当日文本匹配，次日必失配）。用户侧表现为
+    /// 「在设置页改了一下位置，第二天整条规则就不生效了」。
+    fn web_shadow_add_rule(&self, params: &Value) -> anyhow::Result<Value> {
+        let (schema, code, word) = (
+            str_param(params, "schemaId")?,
+            str_param(params, "code")?,
+            str_param(params, "word")?,
+        );
+        let kind = params.get("type").and_then(|v| v.as_str()).unwrap_or("pin");
+        let cand_id = params.get("candId").and_then(|v| v.as_str());
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        if kind == "hide" {
+            store.delete_shadow(&schema, code, word)?;
+        } else {
+            let position = usize_param(params, "position", 0);
+            store.pin_shadow(&schema, code, word, cand_id, position)?;
+        }
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_temp_list(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // code 带音节空格，与用户词库列表（word_item）同形。remove/promote 两个入口
+        // 会收到这个串，各自拆回扁平码——三处必须同改，否则「显示得了、删不掉」。
+        // text 同理：出口投影成转义形态、两个入口用 `store_text` 还原，缺一即同样症状。
+        let items: Vec<Value> = store
+            .search_temp_words_prefix(&schema, "", 0)?
+            .into_iter()
+            .map(|r| {
+                let code = aurora_store::wdict::join_code_by_boundary(&r.code, r.boundary);
+                json!({ "code": code, "text": ui_text(&r.text), "count": r.count })
+            })
+            .collect();
+        Ok(json!(items))
+    }
+
+    /// 临时词分页列表（`{items,total}`，与 dict/freq 同形）。
+    ///
+    /// 临时词是打字过程中自动攒下的，只增不减直到用户转正或清空，量级与用户词库同级，
+    /// 一次全取同样会把整份 json 推过 IPC 并让设置端建出上万个表格行 widget。
+    ///
+    /// 搜索语义与 [`Self::web_dict_list_paged`] 对齐（编码前缀 ∪ 编码中段 ∪ 词条内容），
+    /// 排序同样在切片前做，故跨页全局有效。
+    fn web_temp_list_paged(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let prefix = params
+            .get("prefix")
+            .and_then(|v| v.as_str())
+            .or_else(|| params.get("query").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let offset = usize_param(params, "offset", 0);
+        let limit = usize_param(params, "limit", 50);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // 列表显示的是带音节空格的码（见 web_temp_list），用户很可能照着搜；key 是扁平的。
+        let (code_prefix, _) = aurora_store::wdict::split_spaced_code(prefix);
+        let mut all = store.search_temp_words_prefix(&schema, &code_prefix, 0)?;
+        // 并入两类补充命中（与编码前缀取并集，去重），与 web_dict_list_paged 同款：
+        //   ① 词条内容包含搜索词；② 编码**中段**包含搜索词——前缀扫描只能命中开头，
+        // 而用户并不知道搜索框只认前缀。仅在有搜索词时才付出这次全量扫描。
+        if !prefix.is_empty() {
+            let q = prefix.to_lowercase();
+            let code_q = code_prefix.to_lowercase();
+            let seen: std::collections::HashSet<(String, String)> = all
+                .iter()
+                .map(|w| (w.code.clone(), w.text.clone()))
+                .collect();
+            for w in store.search_temp_words_prefix(&schema, "", 0)? {
+                let hit = w.text.to_lowercase().contains(&q)
+                    || (!code_q.is_empty() && w.code.to_lowercase().contains(&code_q));
+                if hit && !seen.contains(&(w.code.clone(), w.text.clone())) {
+                    all.push(w);
+                }
+            }
+        }
+        // 最近使用（t63「筛出长期没再输入的」）：词频表里的 last_used 与加入时间取大者。
+        // 只取词频那份不行——从没被选中过的临时词（count==1 那批，正是要清理的主力）
+        // 在词频表里根本没有记录，会全部并列成「从未使用」而丢掉新旧之分。
+        let keys: Vec<(String, String, String)> = all
+            .iter()
+            .map(|w| (schema.to_string(), w.code.clone(), w.text.clone()))
+            .collect();
+        let freq = store.get_freq_batch(&keys)?;
+        let mut all: Vec<(_, i64)> = all
+            .into_iter()
+            .zip(freq)
+            .map(|(w, f)| {
+                let used = f.map_or(0, |f| f.last_used).max(w.created_at);
+                (w, used)
+            })
+            .collect();
+        // 筛选在切片前做：`maxCount` 次数上限、`usedBefore` 最近使用早于该时刻（unix 秒）。
+        let max_count = params.get("maxCount").and_then(|v| v.as_u64());
+        let used_before = params.get("usedBefore").and_then(|v| v.as_i64());
+        all.retain(|(w, used)| {
+            max_count.is_none_or(|n| u64::from(w.count) <= n)
+                && used_before.is_none_or(|t| *used < t)
+        });
+        let total = all.len();
+        if let Some((by, desc)) = parse_sort(params, &["code", "text", "count", "lastUsed"]) {
+            all.sort_by(|(a, au), (b, bu)| {
+                let ord = match by {
+                    "count" => a.count.cmp(&b.count),
+                    "text" => a.text.cmp(&b.text),
+                    "lastUsed" => au.cmp(bu),
+                    _ => a.code.cmp(&b.code),
+                };
+                if desc { ord.reverse() } else { ord }
+            });
+        }
+        let items: Vec<Value> = all
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|(r, used)| {
+                let code = aurora_store::wdict::join_code_by_boundary(&r.code, r.boundary);
+                json!({ "code": code, "text": ui_text(&r.text), "count": r.count, "lastUsed": used })
+            })
+            .collect();
+        Ok(json!({ "items": items, "total": total }))
+    }
+
+    fn web_temp_promote(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // 列表项的 code 带音节空格（见 web_temp_list），key 是扁平的。
+        let (code, _) = aurora_store::wdict::split_spaced_code(code);
+        store.promote_temp_word(&schema, &code, &store_text(text))?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_temp_remove(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // 同 promote：列表项的 code 带音节空格，不拆则删不掉。
+        let (code, _) = aurora_store::wdict::split_spaced_code(code);
+        store.remove_temp_word(&schema, &code, &store_text(text))?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_temp_promote_all(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let mut n = 0u64;
+        for r in store.search_temp_words_prefix(&schema, "", 0)? {
+            if store.promote_temp_word(&schema, &r.code, &r.text)? {
+                n += 1;
+            }
+        }
+        Ok(json!(n))
+    }
+
+    fn web_temp_clear(&self, params: &Value) -> anyhow::Result<Value> {
+        let schema = str_param(params, "schemaId")?;
+        let schema = self.engine_mgr().data_schema_id(schema); // 拼音族折叠到 "pinyin"
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let all = store.search_temp_words_prefix(&schema, "", 0)?;
+        let n = all.len();
+        for r in all {
+            store.remove_temp_word(&schema, &r.code, &r.text)?;
+        }
+        Ok(json!(n))
+    }
+
+    fn web_phrase_list(&self) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let items: Vec<Value> = store
+            .list_phrases()?
+            .into_iter()
+            .map(|p| {
+                json!({
+                    "code": p.code,
+                    "text": ui_text(&p.text),
+                    "position": p.position,
+                    "weight": p.weight,
+                    "enabled": p.enabled,
+                    "isSystem": p.is_system,
+                })
+            })
+            .collect();
+        Ok(json!(items))
+    }
+
+    fn web_phrase_add(&self, params: &Value) -> anyhow::Result<Value> {
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        let position = i32_param(params, "position");
+        // 缺省值与取值依据见 `aurora_store::phrases::DEFAULT_USER_PHRASE_WEIGHT`
+        // （分发导入走同一个常量）。
+        let weight = params
+            .get("weight")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(aurora_store::phrases::DEFAULT_USER_PHRASE_WEIGHT as i64)
+            as i32;
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        store.add_phrase(code, &store_text(text), position, weight)?;
+        self.rebuild_phrases();
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_phrase_update(&self, params: &Value) -> anyhow::Result<Value> {
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        let new_code = params.get("newCode").and_then(|v| v.as_str());
+        let new_text = params.get("newText").and_then(|v| v.as_str());
+        let position = params
+            .get("position")
+            .and_then(|v| v.as_i64())
+            .map(|n| n as i32);
+        let weight = params
+            .get("weight")
+            .and_then(|v| v.as_i64())
+            .map(|n| n as i32);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // text 是查找键、new_text 是新值，两者都来自设置页，都要还原成存储域。
+        let text = store_text(text);
+        let new_text = new_text.map(store_text);
+        store.update_phrase(code, &text, new_code, new_text.as_deref(), position, weight)?;
+        // 若同时携带 enabled，应用到新键。
+        if let Some(en) = params.get("enabled").and_then(|v| v.as_bool()) {
+            store.set_phrase_enabled(
+                new_code.unwrap_or(code),
+                new_text.as_deref().unwrap_or(&text),
+                en,
+            )?;
+        }
+        // 改 code/text 时 `update_phrase` 内部会 remove 旧键——若改的是一条遮蔽了系统条目的
+        // 用户短语，旧键一删那条系统短语也没了。与 `web_phrase_remove` 同一条约束。
+        self.restore_missing_system_phrases("编辑短语");
+        self.rebuild_phrases();
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_phrase_remove(&self, params: &Value) -> anyhow::Result<Value> {
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        store.remove_phrase(code, &store_text(text))?;
+        // 删掉的可能是一条**遮蔽了系统条目**的用户短语（`overrides_system`）——主键只有
+        // 一把，删掉它等于把那条系统短语也删了。用户的预期恰恰相反：删掉自己加的那条
+        // 就该露出系统默认那条。故补回缺失的系统条目。
+        self.restore_missing_system_phrases("删除短语");
+        self.rebuild_phrases();
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_phrase_set_enabled(&self, params: &Value) -> anyhow::Result<Value> {
+        let (code, text) = (str_param(params, "code")?, str_param(params, "text")?);
+        let enabled = params
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // text 是查找键，须还原成存储域（见 `store_text`）——漏了就「开关点了没反应」。
+        store.set_phrase_enabled(code, &store_text(text), enabled)?;
+        self.rebuild_phrases();
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_phrase_reset(&self) -> anyhow::Result<Value> {
+        if let Some(store) = self.user_store() {
+            store.reset_user_phrases()?;
+            // 用户行里可能有遮蔽了系统条目的（`overrides_system`），删掉后那些系统短语
+            // 也一并没了 → 补回缺失的，否则要等到 TOML 哈希变动才恢复。
+            self.restore_missing_system_phrases("清空用户短语");
+        }
+        self.rebuild_phrases();
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_phrase_list_system(&self) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let items: Vec<Value> = store
+            .list_system_phrases()?
+            .into_iter()
+            .map(|p| {
+                json!({
+                    "code": p.code, "text": ui_text(&p.text), "weight": p.weight,
+                    "position": p.position, "enabled": p.enabled, "isSystem": true,
+                })
+            })
+            .collect();
+        Ok(json!(items))
+    }
+
+    fn web_phrase_list_user(&self, params: &Value) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let prefix = params.get("prefix").and_then(|v| v.as_str());
+        let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+        // 带 sortBy 时全量拉取 → 排序 → 内存切片；否则走 store 分页路径
+        let (rows, total) = if let Some((by, desc)) =
+            parse_sort(params, &["code", "text", "weight", "position", "enabled"])
+        {
+            let (mut all, total) = store.list_user_phrases_paged(prefix, 0, usize::MAX)?;
+            all.sort_by(|a, b| {
+                let ord = match by {
+                    "weight" => a.weight.cmp(&b.weight),
+                    "position" => a.position.cmp(&b.position),
+                    "enabled" => a.enabled.cmp(&b.enabled),
+                    "text" => a.text.cmp(&b.text),
+                    _ => a.code.cmp(&b.code),
+                };
+                if desc { ord.reverse() } else { ord }
+            });
+            let page = all.into_iter().skip(offset).take(limit).collect();
+            (page, total)
+        } else {
+            store.list_user_phrases_paged(prefix, offset, limit)?
+        };
+        let items: Vec<Value> = rows
+            .into_iter()
+            .map(|p| {
+                json!({
+                    "code": p.code, "text": ui_text(&p.text), "weight": p.weight,
+                    "position": p.position, "enabled": p.enabled, "isSystem": false,
+                    // 这条用户短语遮蔽了同码同内容的系统条目（该系统条目已从系统列表隐去，
+                    // 输入期生效的是这条）。供 UI 标注来源，并提示「删除本条即恢复系统默认」。
+                    "overridesSystem": p.overrides_system,
+                })
+            })
+            .collect();
+        Ok(json!({ "items": items, "total": total }))
+    }
+
+    fn web_phrase_export(&self) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let content = store.export_user_phrases_wdict("")?;
+        Ok(json!({ "content": content }))
+    }
+
+    fn web_phrase_import(&self, params: &Value) -> anyhow::Result<Value> {
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let content = str_param(params, "content")?;
+        let (imported, skipped) = store.import_user_phrases_wdict(content)?;
+        self.rebuild_phrases();
+        Ok(json!({ "imported": imported, "skipped": skipped }))
+    }
+
+    /// 逐行短语文本（`wind:p1` 分发格式）的导入预览。
+    ///
+    /// 与 `phrase.import`（wdict，备份还原语义）分开是刻意的：那条是整表 upsert、原样写回
+    /// position；本条只新增、位置本地重算，且预览要回答「会不会动到我已有的短语」。
+    fn web_phrase_preview_import_text(&self, params: &Value) -> anyhow::Result<Value> {
+        let content = str_param(params, "content")?;
+        let (doc, items, checks, plan) = self.phrase_text_plan(content)?;
+
+        let mut counts = (0usize, 0usize, 0usize);
+        let entries: Vec<Value> = doc
+            .entries
+            .iter()
+            .zip(&items)
+            .zip(&checks)
+            .zip(&plan)
+            .map(|(((e, (_, stored)), ck), st)| {
+                use aurora_store::phrases::PhraseImportStatus as S;
+                match st {
+                    S::New => counts.0 += 1,
+                    S::ExistsUser => counts.1 += 1,
+                    S::ShadowsSystem => counts.2 += 1,
+                }
+                json!({
+                    "line": e.line,
+                    "code": e.code,
+                    // 回显分发原文：分发域与设置页显示域同形，用户在预览里看到的
+                    // 与他在群里读到的、在短语列表里看到的是同一串。
+                    "text": e.text,
+                    "status": match st {
+                        S::New => "new",
+                        S::ExistsUser => "existsUser",
+                        S::ShadowsSystem => "shadowsSystem",
+                    },
+                    "hints": ck.hints.iter().map(hint_json).collect::<Vec<_>>(),
+                    "error": ck.error,
+                    // 存储域与分发域不同（普通文本的 `\\`）时给 UI 一个对照位；相同则省略。
+                    "storedText": (stored != &e.text).then(|| stored.clone()),
+                })
+            })
+            .collect();
+
+        let problems: Vec<Value> = doc
+            .problems
+            .iter()
+            .map(|p| json!({ "line": p.line, "raw": p.raw, "message": p.reason.message() }))
+            .collect();
+
+        Ok(json!({
+            "title": doc.title,
+            "entries": entries,
+            "problems": problems,
+            "counts": {
+                "new": counts.0,
+                "existsUser": counts.1,
+                "shadowsSystem": counts.2,
+                "skippedLines": doc.problems.len(),
+            },
+        }))
+    }
+
+    /// 应用逐行短语文本。
+    ///
+    /// `accept` = 要导入的**源行号**数组（来自预览的 `line`）；**缺省导入全部可导入条目**。
+    ///
+    /// 语法错的条目无论是否被 `accept` 列出都不装——它们装进去只会在触发时失败，
+    /// 而失败点离导入很远。
+    fn web_phrase_import_text(&self, params: &Value) -> anyhow::Result<Value> {
+        let content = str_param(params, "content")?;
+        let (doc, items, checks, _) = self.phrase_text_plan(content)?;
+        let accept: Option<std::collections::HashSet<u64>> = params
+            .get("accept")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect());
+
+        let mut selected: Vec<(String, String)> = Vec::new();
+        let (mut skipped_invalid, mut skipped_unselected) = (0, 0);
+        for ((e, item), ck) in doc.entries.iter().zip(&items).zip(&checks) {
+            if !ck.is_importable() {
+                skipped_invalid += 1;
+                continue;
+            }
+            if accept
+                .as_ref()
+                .is_some_and(|set| !set.contains(&(e.line as u64)))
+            {
+                skipped_unselected += 1;
+                continue;
+            }
+            selected.push(item.clone());
+        }
+
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        let rep = store
+            .import_phrases_appending(&selected, aurora_store::phrases::DEFAULT_USER_PHRASE_WEIGHT)?;
+        self.rebuild_phrases();
+        Ok(json!({
+            "added": rep.added,
+            "skippedExisting": rep.skipped_existing,
+            "shadowedSystem": rep.shadowed_system,
+            "skippedInvalid": skipped_invalid,
+            "skippedUnselected": skipped_unselected,
+        }))
+    }
+
+    /// 解析 + 存储域投影 + 静态检查 + 落点判定。预览与应用共用，保证两次看到的是
+    /// 同一份判定——各算各的会让「预览一个样、应用装了另一个」成为可能。
+    #[allow(clippy::type_complexity)]
+    fn phrase_text_plan(
+        &self,
+        content: &str,
+    ) -> anyhow::Result<(
+        aurora_store::phrase_text::PhraseTextDoc,
+        Vec<(String, String)>,
+        Vec<aurora_store::phrase_text::EntryCheck>,
+        Vec<aurora_store::phrases::PhraseImportStatus>,
+    )> {
+        let doc =
+            aurora_store::phrase_text::parse_phrase_text(content).map_err(|e| anyhow::anyhow!(e))?;
+        let store = self
+            .user_store()
+            .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
+        // 存储域投影与手动新增（`web_phrase_add`）走同一个 `store_text`——新增一条入口
+        // 就得配一对转换，否则同一条短语经不同入口进库会变成两个字符串。
+        let items: Vec<(String, String)> = doc
+            .entries
+            .iter()
+            .map(|e| (e.code.clone(), store_text(&e.text)))
+            .collect();
+        let plan = store.plan_phrase_import(&items)?;
+        let texts: Vec<String> = items.iter().map(|(_, t)| t.clone()).collect();
+        let checks = aurora_store::phrase_text::check_entries(&texts);
+        Ok((doc, items, checks, plan))
+    }
+
+    fn web_phrase_reset_system(&self) -> anyhow::Result<Value> {
+        let n = self.restore_system_phrases();
+        Ok(json!({ "ok": true, "changed": n }))
+    }
+
+    // ───────── quick.*（快捷输入格式表）─────────
+
+    /// 全部格式条目，**含被停用的**。
+    ///
+    /// `displayPos` 与 `moveIndex` 是两个不同的下标，别混用：前者是列表行号（停用项也占
+    /// 一行，只给人看），后者是这条在候选里的位置、也是 `quick.move` 唯一认的口径。
+    /// 停用项 `moveIndex` 为 null——它不在候选里，移动没有意义。
+    fn web_quick_list(&self) -> anyhow::Result<Value> {
+        let rows: Vec<Value> = self
+            .quick_format_rows()
+            .into_iter()
+            .map(|r| {
+                json!({
+                    "kind": r.kind,
+                    "id": r.id,
+                    "text": r.text,
+                    "displayPos": r.display_pos,
+                    "moveIndex": r.move_index,
+                    "enabled": r.enabled,
+                    "adjusted": r.adjusted,
+                    "user": r.user,
+                    "sample": r.sample,
+                })
+            })
+            .collect();
+        Ok(json!(rows))
+    }
+
+    fn web_quick_move(&self, params: &Value) -> anyhow::Result<Value> {
+        let (kind, id) = (str_param(params, "kind")?, str_param(params, "id")?);
+        let index = usize_param(params, "index", 0);
+        self.quick_format_edit(kind, id, QuickFormatEdit::MoveTo(index))?;
+        Ok(json!({ "ok": true }))
+    }
+
+    // ── 常用字表（右键「设为生僻字/常用字」的设置页一侧）────────────────────
+    //
+    // 列表是**全表**（出厂字 + 用户加的），不是只列改过的那几条：用户来这个页面最常问的
+    // 是「这个字现在算不算常用」，只列改动答不了。改过的行带 `adjusted` 标记，
+    // 「恢复默认」据此只对它们放行。
+
+    /// 全表 + 搜索 + 分页。
+    ///
+    /// **分页而不是一次全发**：8104 条约 400KB JSON，每次刷新都整份过一遍 IPC 不划算，
+    /// 而且设置页那套表格框架本就有服务端分页（`dict`/`freq` 走的同一条）。
+    /// 故返回 `{items,total}` 而不是裸数组——与非分页类别的形状**刻意不同**，
+    /// 由 spec 的 `paged: true` 决定走哪个解析分支。
+    fn web_common_chars_list(&self, params: &Value) -> anyhow::Result<Value> {
+        let query = params
+            .get("prefix")
+            .or_else(|| params.get("query"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        // 「只看已修改」：全表 8104 条里自己动过的那几个，靠翻页是找不到的。
+        let only_modified = params
+            .get("onlyModified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let mut rows = self.common_char_rows(query, only_modified);
+        sort_common_char_rows(
+            &mut rows,
+            params.get("sortBy").and_then(|v| v.as_str()).unwrap_or(""),
+            params.get("sortOrder").and_then(|v| v.as_str()) == Some("desc"),
+        );
+        let total = rows.len();
+        let offset = usize_param(params, "offset", 0);
+        // limit=0 视为不限（调用方不分页时直接全取）。
+        let limit = match usize_param(params, "limit", 0) {
+            0 => total,
+            n => n,
+        };
+        let items: Vec<Value> = rows
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|r| {
+                json!({
+                    "char": r.text,
+                    "common": r.common,
+                    // 默认判定要一起给：界面靠它显示「默认 → 现在」的对照。
+                    // 只给 common 的话，用户看到一行「的 · 生僻」不知道自己改的是什么。
+                    "baseCommon": r.base_common,
+                    // 这一行改过没有。设置页据此决定「恢复默认」灰不灰。
+                    "adjusted": r.overridden,
+                    // 类型：所属 Unicode 块。光看字形分不清 ⺡(部首) 与 氵(基本汉字)、
+                    // ℃(字母式符号) 与 ㎡(CJK 兼容符号)，而它们的处置方式完全不同。
+                    "block": r.block,
+                    "blockRange": aurora_candidate::block_of_cluster(&r.text).range_text(),
+                    // 整类批量能不能点。汉字块恒 false——见 `block_allows_bulk_edit`。
+                    "blockBulkEditable": r.block_bulk_editable,
+                    // **决定这个字常用性的那个字符类**（null = 没有类命中它）。
+                    //
+                    // ⚠️ 与 `block` 是两个不同的问题，各自绑着一个不同的操作：
+                    // `block` 决定「整类批量」扫哪个码位区间（写上千条 redb 覆盖），
+                    // `class` 决定「改类的 default」影响谁（写一行 yaml，作用于整个类）。
+                    // 拿后者顶掉前者，用户就会看着「emoji」去点一个按「表情符号」块
+                    // 工作的按钮。
+                    "class": r.class,
+                })
+            })
+            .collect();
+        Ok(json!({ "items": items, "total": total }))
+    }
+
+    fn web_common_chars_query(&self, params: &Value) -> anyhow::Result<Value> {
+        let ch = char_param(params, "char")?;
+        let st = self.common_char_state(&ch);
+        Ok(json!({
+            "char": ch.to_string(),
+            // false ⇒ 界面应拒绝添加：读端根本不查这类字符，存了也永不生效。
+            "governed": st.governed,
+            "baseCommon": st.base_common,
+            "override": st.over,
+            // 当前生效判定，省得前端再算一遍（算错了就是两边显示不一致）。
+            "effective": st.over.unwrap_or(st.base_common),
+        }))
+    }
+
+    fn web_common_chars_set(&self, params: &Value) -> anyhow::Result<Value> {
+        let ch = char_param(params, "char")?;
+        let common = params
+            .get("common")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| anyhow::anyhow!("缺少参数 common"))?;
+        self.common_char_edit(&ch, CommonCharEdit::Set(common))?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// 按当前行所属的 Unicode 块整类设常用/生僻。`apply` 缺省为 `false`（只预览）。
+    ///
+    /// ★ 预览与执行**走同一个方法、同一次扫描**，只差一个 `apply` 开关。分成两条实现的话，
+    /// 预览说「43 个字」而执行写了别的数目，用户没法察觉——两条路各扫一遍词库，中间还隔着
+    /// 用户的思考时间，方案切换、词库热插拔都能让它们对不上。
+    /// `charset.list` —— 字符类全表。
+    ///
+    /// ⚠️ `overrideCount` **界面必须显示**：用户曾整类点过生僻的话，库里躺着上千条逐条
+    /// 覆盖压着这个类，他改 `default` 会一点反应都没有（设计文档 §7.2）。
+    fn web_charset_list(&self) -> anyhow::Result<Value> {
+        let items: Vec<Value> = self
+            .charset_rows()
+            .into_iter()
+            .map(|r| {
+                json!({
+                    "key": r.key,
+                    "name": r.name,
+                    "ranges": r.ranges,
+                    "memberCount": r.member_count,
+                    "order": r.order,
+                    // 三态：null = 本类不表态（跟随下层/兜底判常用）。
+                    "default": r.default_common,
+                    "noFreq": r.no_freq,
+                    "inRare": r.in_rare,
+                    "enabled": r.enabled,
+                    // 内置区块类的 ranges 只读——要改范围请新建自己的类（§4.3）。
+                    "builtin": r.builtin,
+                    "overridden": r.overridden,
+                    "overrideCount": r.override_count,
+                })
+            })
+            .collect();
+        // ⚠️ **裸数组**，不是 `{items,total}`。设置页的 `parse_list` 按「分页与否」分流：
+        // 分页类收 `{items,total}`，其余收裸数组。字符类只有几十个、spec 里 `paged: false`
+        // ——包成对象的话客户端解析出 0 行，表现是「暂无数据」，没有报错也没有日志。
+        Ok(Value::Array(items))
+    }
+
+    /// `charset.set` —— 改一个类的属性。缺席的字段不动。
+    fn web_charset_set(&self, params: &Value) -> anyhow::Result<Value> {
+        let key = params
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("缺少参数 key"))?;
+        let edit = aurora_coordinator::handle_charset::CharsetEdit {
+            // "common" / "rare" / "inherit"——后者是「本层不表态」，与显式设成常用
+            // 不是一回事：它跟随出厂更新，显式值会钉死。
+            default_common: params
+                .get("default")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            no_freq: params.get("noFreq").and_then(|v| v.as_bool()),
+            in_rare: params.get("inRare").and_then(|v| v.as_bool()),
+            enabled: params.get("enabled").and_then(|v| v.as_bool()),
+            order: params
+                .get("order")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32),
+        };
+        self.charset_edit(key, &edit)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// `charset.reset` —— 撤掉用户层对这个类的全部调整。
+    fn web_charset_reset(&self, params: &Value) -> anyhow::Result<Value> {
+        let key = params
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("缺少参数 key"))?;
+        self.charset_reset(key)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// `charset.clearRedundant` —— 清理压在这个类上、方向与默认相同的逐条覆盖。
+    fn web_charset_clear_redundant(&self, params: &Value) -> anyhow::Result<Value> {
+        let key = params
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("缺少参数 key"))?;
+        let o = self.charset_clear_redundant(key)?;
+        Ok(json!({ "scanned": o.scanned, "removed": o.removed }))
+    }
+
+    /// `charset.create {key, name, default?, order?}` —— 新建一个空的自建分类。`default` 同
+    /// `charset.set`（`common` / `rare` / `inherit`）；不给 `order` 排在出厂常用汉字表之前。
+    fn web_charset_create(&self, params: &Value) -> anyhow::Result<Value> {
+        let key = str_param(params, "key")?;
+        let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let edit = aurora_coordinator::handle_charset::CharsetEdit {
+            default_common: params
+                .get("default")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            order: params
+                .get("order")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32),
+            ..Default::default()
+        };
+        self.charset_create(key, name, &edit)?;
+        Ok(json!({ "ok": true, "key": key }))
+    }
+
+    /// `charset.delete` —— 删一个自建类。出厂类会被拒绝。
+    fn web_charset_delete(&self, params: &Value) -> anyhow::Result<Value> {
+        let key = str_param(params, "key")?;
+        self.charset_delete(key)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_common_chars_bulk(&self, params: &Value) -> anyhow::Result<Value> {
+        let ch = char_param(params, "char")?;
+        let common = params
+            .get("common")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| anyhow::anyhow!("缺少参数 common"))?;
+        let apply = params
+            .get("apply")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let o = self.common_char_bulk_by_block(&ch, common, apply)?;
+        Ok(json!({
+            "block": o.block,
+            "chars": o.chars,
+            // ★ 界面**必须**把它显示出来：`，` 只是 1 个字符却出现在 326 条词条里。
+            // 只报 chars，用户会严重低估一键操作的影响面。
+            "entries": o.entries,
+            "written": o.written,
+            "sample": o.sample,
+        }))
+    }
+
+    fn web_common_chars_reset(&self, params: &Value) -> anyhow::Result<Value> {
+        let ch = char_param(params, "char")?;
+        self.common_char_edit(&ch, CommonCharEdit::Reset)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_common_chars_clear(&self) -> anyhow::Result<Value> {
+        // 整表操作没有单字归属，传一个占位字符（`ClearAll` 忽略它），
+        // 与 `quick.resetKind` 传空 id 同一惯例。
+        self.common_char_edit("", CommonCharEdit::ClearAll)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// 导出用户调整为 TOML 文本。与 `quick.export` 同形（`{content}`），设置页那一路
+    /// 写文件的代码因此可以照抄。
+    fn web_common_chars_export(&self) -> anyhow::Result<Value> {
+        Ok(json!({ "content": self.common_chars_export()? }))
+    }
+
+    fn web_common_chars_preview_import(&self, params: &Value) -> anyhow::Result<Value> {
+        let p = self.common_chars_preview_import(str_param(params, "content")?)?;
+        Ok(json!({
+            "common": p.common,
+            "rare": p.rare,
+            "skipped": p.skipped,
+        }))
+    }
+
+    fn web_common_chars_import(&self, params: &Value) -> anyhow::Result<Value> {
+        let content = str_param(params, "content")?;
+        // 与词库/短语/快捷输入导入同一套参数名：`strategy = "replace"` 先清空，其余为合并。
+        let replace = params
+            .get("strategy")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("replace"));
+        let o = self.common_chars_import(content, replace)?;
+        Ok(json!({
+            "imported": o.imported,
+            // 与默认同向、无需落库的字。设置页文案必须把它说出来：否则「导入 100 条
+            // 只写了 30 条」看起来就像丢了数据。
+            "sameAsDefault": o.same_as_default,
+            "skipped": o.skipped,
+        }))
+    }
+
+    fn web_quick_set_enabled(&self, params: &Value) -> anyhow::Result<Value> {
+        let (kind, id) = (str_param(params, "kind")?, str_param(params, "id")?);
+        let enabled = params
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| anyhow::anyhow!("缺少参数 enabled"))?;
+        self.quick_format_edit(kind, id, QuickFormatEdit::SetEnabled(enabled))?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_quick_reset_entry(&self, params: &Value) -> anyhow::Result<Value> {
+        let (kind, id) = (str_param(params, "kind")?, str_param(params, "id")?);
+        self.quick_format_edit(kind, id, QuickFormatEdit::ResetEntry)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_quick_reset_kind(&self, params: &Value) -> anyhow::Result<Value> {
+        let kind = str_param(params, "kind")?;
+        // 整类操作没有单条归属，id 传空串（`QuickFormatEdit::ResetKind` 忽略它）。
+        self.quick_format_edit(kind, "", QuickFormatEdit::ResetKind)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// 每类可用的模板变量清单，供设置页的模板输入框提示。
+    ///
+    /// 静态数据，一次取完即可缓存。真相源在 core 的 `FormatKind::var_hints`——设置仓自己
+    /// 硬编码一份会在加新变量时静默过时（照提示写的模板反被拒，或提示里的变量已删）。
+    fn web_quick_vars(&self) -> anyhow::Result<Value> {
+        let kinds: Vec<Value> = self
+            .quick_format_var_hints()
+            .into_iter()
+            .map(|(kind, vars)| {
+                json!({
+                    "kind": kind,
+                    "vars": vars
+                        .into_iter()
+                        .map(|(name, desc)| json!({ "name": name, "desc": desc }))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok(json!(kinds))
+    }
+
+    /// 新增用户自定义条目。返回分配到的 id，好让设置页立刻高亮/滚到那一行。
+    ///
+    /// 没有对应的「改出厂条目模板」RPC：那条路径被刻意否决，出厂条目只能停用与调序
+    /// （见 `docs/design/quick-input-format-table.md` §11.1）。
+    fn web_quick_add(&self, params: &Value) -> anyhow::Result<Value> {
+        let (kind, text) = (str_param(params, "kind")?, str_param(params, "text")?);
+        let id = self.quick_format_add(kind, text)?;
+        Ok(json!({ "ok": true, "id": id }))
+    }
+
+    fn web_quick_set_text(&self, params: &Value) -> anyhow::Result<Value> {
+        let (kind, id) = (str_param(params, "kind")?, str_param(params, "id")?);
+        self.quick_format_set_text(kind, id, str_param(params, "text")?)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_quick_delete(&self, params: &Value) -> anyhow::Result<Value> {
+        let (kind, id) = (str_param(params, "kind")?, str_param(params, "id")?);
+        self.quick_format_delete(kind, id)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// `compat.*` 的薄分派：纯逻辑在 `compat_admin::rpc`，这里只负责取目录、
+    /// 写成功后让宿主重载。
+    fn web_compat_rpc(&self, method: &str, params: &Value) -> anyhow::Result<Value> {
+        let data_dir = aurora_config::Config::data_dir();
+        let custom_dir = aurora_config::Config::custom_data_dir();
+        let user_dir = aurora_config::Config::user_config_dir();
+        let out = aurora_config::compat_admin::rpc(
+            method,
+            params,
+            data_dir.as_deref(),
+            custom_dir.as_deref(),
+            user_dir.as_deref(),
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+        if out.wrote {
+            self.reload_compat();
+        }
+        Ok(out.value)
+    }
+
+    fn web_quick_export(&self) -> anyhow::Result<Value> {
+        Ok(json!({ "content": self.quick_format_export()? }))
+    }
+
+    fn web_quick_preview_import(&self, params: &Value) -> anyhow::Result<Value> {
+        let p = self.quick_format_preview_import(str_param(params, "content")?)?;
+        Ok(json!({
+            "moved": p.moved,
+            "disabled": p.disabled,
+            "formats": p.formats,
+            "skipped": p.skipped,
+            "kinds": p.kinds,
+        }))
+    }
+
+    fn web_quick_import(&self, params: &Value) -> anyhow::Result<Value> {
+        let content = str_param(params, "content")?;
+        // 与词库/短语导入同一套参数名：`strategy = "replace"` 先清空，其余为合并。
+        let replace = params
+            .get("strategy")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("replace"));
+        let o = self.quick_format_import(content, replace)?;
+        Ok(json!({
+            "moved": o.moved,
+            "disabled": o.disabled,
+            "formats": o.formats,
+            "skipped": o.skipped,
+        }))
+    }
+
+    fn web_stats_summary(&self) -> anyhow::Result<Value> {
+        let (collector, store) = match (self.stat_collector(), self.user_store()) {
+            (Some(c), Some(s)) => (c, s),
+            _ => return Ok(Self::empty_stats_summary()),
+        };
+        // 算法在 aurora-store（与移动端共用一份），这里只管序列化
+        let s = aurora_store::stats_report::summary(store, collector);
+        Ok(json!({
+            "today_chars": s.today_chars,
+            "today_chinese": s.today_chinese,
+            "today_english": s.today_english,
+            "total_chars": s.total_chars,
+            "active_days": s.active_days,
+            "daily_avg": s.daily_avg,
+            "streak_current": s.streak_current,
+            "streak_max": s.streak_max,
+            "week_chars": s.week_chars,
+            "month_chars": s.month_chars,
+            "max_day_chars": s.max_day_chars,
+            "max_day_date": s.max_day_date,
+            "avg_code_len": s.avg_code_len,
+            "first_select_rate": s.first_select_rate,
+            "today_speed": s.today_speed,
+            "overall_speed": s.overall_speed,
+            "max_speed": s.max_speed,
+        }))
+    }
+
+    fn web_stats_daily(&self, params: &Value) -> anyhow::Result<Value> {
+        let from = str_param(params, "from")?.to_string();
+        let to = str_param(params, "to")?.to_string();
+        let store = match self.user_store() {
+            Some(s) => s,
+            None => return Ok(json!([])),
+        };
+        // 区间内连续日期补零值，输出完整 DailyStatItem（便于前端绘图）。
+        let days = aurora_store::stats_report::daily_range(store, self.stat_collector(), &from, &to)?;
+        Ok(json!(
+            days.iter()
+                .map(|(d, r)| Self::daily_item_json(d, r))
+                .collect::<Vec<_>>()
+        ))
+    }
+
+    fn web_stats_clear(&self) -> anyhow::Result<Value> {
+        aurora_store::stats_report::clear(self.user_store().map(|s| &**s), self.stat_collector())?;
+        Ok(json!({ "ok": true }))
+    }
+
+    fn web_stats_prune(&self, params: &Value) -> anyhow::Result<Value> {
+        // 参数 days：删除早于 (今天 - days) 的统计。
+        let days = params
+            .get("days")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .max(0);
+        let store = match self.user_store() {
+            Some(s) => s,
+            None => return Ok(json!({ "pruned": 0 })),
+        };
+        let before = (chrono::Local::now().date_naive() - chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string();
+        let n = store.prune_stats_before(&before)?;
+        // 重建元数据（剔除已删历史）并让采集器重载：先 flush 今日落库，recalc 后 resume。
+        if let Some(c) = self.stat_collector() {
+            c.flush();
+            store.recalculate_stats_meta(c.speed_factor())?;
+            c.resume();
+        } else {
+            // 无采集器时没有系数可读，按 1.0 重算：这条分支只在无 store 的测试壳里走得到。
+            store.recalculate_stats_meta(1.0)?;
+        }
+        Ok(json!({ "pruned": n }))
+    }
+
+    /// 组装前端 DailyStatItem JSON（紧凑字段名，含按方案 bs / 按来源 src）。
+    fn daily_item_json(date: &str, r: &aurora_store::stats::DailyStats) -> Value {
+        let (sp_chars, sp_millis) = r.speed_parts();
+        let bs: serde_json::Map<String, Value> = r
+            .by_schema
+            .iter()
+            .map(|(k, s)| {
+                (
+                    k.clone(),
+                    json!({
+                        "tc": s.total_chars,
+                        "cn": s.commit_count,
+                        "cls": s.code_len_sum,
+                        "clc": s.code_len_count,
+                        "cpd": s.cand_pos_dist,
+                    }),
+                )
+            })
+            .collect();
+        json!({
+            "d": date,
+            "tc": r.total(),
+            "cc": r.chinese,
+            "ec": r.english,
+            "pc": r.punct,
+            "oc": r.other,
+            "h": r.hours,
+            "cn": r.commit_count,
+            "cls": r.code_len_sum,
+            "clc": r.code_len_count,
+            "cld": r.code_len_dist,
+            "cpd": r.cand_pos_dist,
+            "as": r.active_seconds,
+            // 速度专用分子/分母（v2 模型）：与 tc/as 分开，前端画速度曲线用这两个。
+            "sc": sp_chars,
+            "am": sp_millis,
+            "bs": bs,
+            "src": r.by_source,
+        })
+    }
+
+    /// 无采集器/存储时的空摘要（17 字段全 0，对齐前端 StatsSummary 形状）。
+    fn empty_stats_summary() -> Value {
+        json!({
+            "today_chars": 0, "today_chinese": 0, "today_english": 0,
+            "total_chars": 0, "active_days": 0, "daily_avg": 0,
+            "streak_current": 0, "streak_max": 0, "week_chars": 0, "month_chars": 0,
+            "max_day_chars": 0, "max_day_date": "", "avg_code_len": 0.0,
+            "first_select_rate": 0.0, "today_speed": 0, "overall_speed": 0, "max_speed": 0,
+        })
+    }
+
+    /// 主题查找目录：各资源层的 `themes/`，按层序 `user > custom > data`
+    /// （宿主的 `theme_search_dirs()` 是唯一真相源）。
+    fn theme_dirs(&self) -> Vec<std::path::PathBuf> {
+        // 直接复用宿主的搜索链，**不再自己拼一份**：此前这里是「用户目录 + 安装目录」
+        // 的第二份实现，与 `theme_search_dirs` 逐字重复。加 data_custom 层时两份各改各的
+        // ⇒ 设置页列表与实际生效的主题解析用的不是同一条链，现象是「主题列表里有它、
+        // 选了却没变化」。
+        self.theme_search_dirs()
+    }
+
+    /// 用户主题写入目录（导入/删除）。
+    fn user_themes_dir(&self) -> Option<std::path::PathBuf> {
+        aurora_config::Config::user_config_dir().map(|u| u.join("themes"))
+    }
+
+    fn web_theme_preview(&self, params: &Value) -> anyhow::Result<Value> {
+        let name = str_param(params, "name")?;
+        let dirs = self.theme_dirs();
+        // 合并 base 链 + 归一化（扁平人写形态 → 嵌套内存形态）后的主题配置（toml::Value → JSON），
+        // 供前端预览渲染（保持历史 views.* 嵌套契约）。
+        let merged = aurora_theme::load_merged_dirs(&dirs, name, 0)?;
+        let normalized = aurora_theme::normalize::normalize_theme(merged);
+        Ok(serde_json::to_value(&normalized)?)
+    }
+
+    /// 按 slug 在主题搜索链里定位主题目录 —— **读取主题的入口共用这一套判据**。
+    ///
+    /// 与 [`Self::theme_target_dir`]（写入侧）分开是刻意的：写入只认用户目录，读取要
+    /// 跨整条链（内置主题也读得到）。但读取侧自己**不该有第二份**——slug 合法性、
+    /// 找哪一层、找不到怎么报，`getText` 与导出各写一遍的话，迟早出现「能导出却读不
+    /// 到原文」这种只在某一层成立的分歧。
+    ///
+    /// 定制版 `[themes] hide` 掉的 id 按**不存在**处理，与列表（`list_themes_full` 滤掉）
+    /// 和导入（`theme_target_dir` 当场拒）一致：`custom_hides_theme` 的绝对性是写死在
+    /// 那边的文档里的，读取侧放行就意味着「列表里看不见、却导得出一个装不回去的包」。
+    fn theme_dir_of(&self, slug: &str) -> anyhow::Result<std::path::PathBuf> {
+        if slug.is_empty() || slug.contains('/') || slug.contains('\\') || slug.contains("..") {
+            anyhow::bail!("非法主题 slug");
+        }
+        if aurora_config::Config::custom_hides_theme(slug) {
+            anyhow::bail!("主题不存在");
+        }
+        self.theme_dirs()
+            .into_iter()
+            .map(|d| d.join(slug))
+            .find(|d| d.join(aurora_transfer::theme::THEME_ENTRY_NAME).is_file())
+            .ok_or_else(|| anyhow::anyhow!("主题不存在"))
+    }
+
+    fn web_theme_get_text(&self, params: &Value) -> anyhow::Result<Value> {
+        let slug = str_param(params, "slug")?;
+        let path = self
+            .theme_dir_of(slug)?
+            .join(aurora_transfer::theme::THEME_ENTRY_NAME);
+        let toml =
+            std::fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("读取主题失败：{e}"))?;
+        Ok(json!({ "slug": slug, "toml": toml }))
+    }
+
+    fn web_theme_delete(&self, params: &Value) -> anyhow::Result<Value> {
+        let name = str_param(params, "name")?;
+        let user_dir = self
+            .user_themes_dir()
+            .ok_or_else(|| anyhow::anyhow!("无用户主题目录"))?;
+        let target = user_dir.join(name);
+        if !target.join("theme.toml").exists() {
+            anyhow::bail!("内置主题不可删除或主题不存在: {}", name);
+        }
+        std::fs::remove_dir_all(&target)?;
+        Ok(json!({ "ok": true }))
+    }
+
+    /// 主题落到哪个目录 id —— **文本导入与包导入共用这一套判据**。
+    ///
+    /// 两条路各写一份的话，「哪个 id 能用、落到哪个目录」迟早会各说各话，而那种分歧
+    /// 只有在用户那边表现为「导入成功却哪儿都找不到」。
+    ///
+    /// - 传了 `slug`（主题唯一 id）：目录已存在则就地写回（不新建），否则以 slug 建目录；
+    /// - 未传（兼容旧客户端）：退回按 `meta.name` 建目录。
+    ///
+    /// 定制版 `[themes] hide` 掉的 id **当场拒掉，不给成功回执**：hide 是绝对的（用户层
+    /// 同名主题也不复活，见 `Config::custom_hides_theme` 的取舍说明），而导入是用户唯一
+    /// 能主动撞上这个 id 的入口——放行的话文件写下去了、回执是 ok，但它永远不进列表、
+    /// 选它也会被 `push_theme` 兜底掉，用户只看到「导入成功了却哪儿都找不到」。
+    fn theme_target_dir(
+        &self,
+        params: &Value,
+        fallback_name: &str,
+    ) -> anyhow::Result<(String, std::path::PathBuf)> {
+        let user_dir = self
+            .user_themes_dir()
+            .ok_or_else(|| anyhow::anyhow!("无用户主题目录"))?;
+        let slug = params
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| {
+                !s.is_empty() && !s.contains('/') && !s.contains('\\') && !s.contains("..")
+            });
+        let theme_id = slug.unwrap_or(fallback_name).to_string();
+        if aurora_config::Config::custom_hides_theme(&theme_id) {
+            anyhow::bail!("本定制版已移除主题 id「{theme_id}」，该 id 不可用；请换一个 id 再导入");
+        }
+        let target = user_dir.join(&theme_id);
+        Ok((theme_id, target))
+    }
+
+    /// 「同名已存在」的机器可读回执。
+    ///
+    /// 这是**可预期的业务性失败**：客户端拿它去弹「是否覆盖」再以 force=true 重推，因此走
+    /// result 字段而非 error 通道——error 通道只有一个 String，客户端只能靠匹配文案来认
+    /// 冲突，改一次文案，设置端的覆盖确认就会静默退化成一条普通报错（没有任何测试或编译
+    /// 期检查看得见这种耦合）。
+    fn theme_conflict_json(theme_id: &str, display_name: &str) -> Value {
+        json!({
+            "ok": false,
+            "conflict": true,
+            "slug": theme_id,
+            "display_name": display_name,
+            "error": format!("主题「{display_name}」已存在"),
+        })
+    }
+
+    /// 推的正好是当前生效主题 → 立刻重解析下发，编辑器里改完即见效。返回是否重载了。
+    ///
+    /// 不做则只落盘，用户得手动切走再切回来（或重启）才看得到自己刚推的改动。
+    ///
+    /// 判据是**目录 id 相同**，不比对文件内容：主题可能被 base 继承链间接影响，且重解析
+    /// 一次远比误判便宜。用户目录优先于安装目录，所以推一个与内置主题同 id 的用户主题
+    /// （如 slug=default）同样会改变实际生效外观，这里一并覆盖。
+    fn theme_reload_if_current(&self, theme_id: &str) -> bool {
+        if self.current_theme_name() != theme_id {
+            return false;
+        }
+        // 明暗沿用当前 style（system 时按系统实时判定），与 on_system_theme_changed 同一出口。
+        let dark = self.current_theme_is_dark();
+        tracing::info!("导入的是当前主题 {}，重新加载以即时生效", theme_id);
+        self.push_theme(theme_id, dark);
+        true
+    }
+
+    fn web_theme_import_text(&self, params: &Value) -> anyhow::Result<Value> {
+        // 参数键沿用 "yaml"（前端契约未改），内容为 TOML 文本。
+        let text = str_param(params, "yaml")?;
+        let force = params
+            .get("force")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // 校验可解析为合法主题（仅自身，未校验 base 依赖链）。
+        aurora_theme::validate_text(text)?;
+        let meta = aurora_theme::meta_from_text(text)
+            .ok_or_else(|| anyhow::anyhow!("主题缺少 meta.name"))?;
+        if meta.name.trim().is_empty() {
+            anyhow::bail!("主题 meta.name 为空");
+        }
+        let (theme_id, target) = self.theme_target_dir(params, &meta.name)?;
+        let file = target.join("theme.toml");
+        let existed_before = file.exists();
+        if existed_before && !force {
+            return Ok(Self::theme_conflict_json(&theme_id, &meta.name));
+        }
+        // 覆盖已存在主题前备份原文本，供依赖链校验失败时回滚。
+        let backup = if existed_before {
+            std::fs::read(&file).ok()
+        } else {
+            None
+        };
+        std::fs::create_dir_all(&target)?;
+        let tmp = file.with_extension("toml.tmp");
+        std::fs::write(&tmp, text.as_bytes())?;
+        std::fs::rename(&tmp, &file)?;
+
+        // 依赖链校验：写入后按真实主题目录做完整 base 链合并求值，
+        // 捕获「base 引用的基础主题不存在」「继承成环」「合并后结构非法」等 validate_text 单文件校验
+        // 无法发现的问题。校验失败则回滚（新写入的删除目录；覆盖的恢复原文本）。
+        let dirs = self.theme_dirs();
+        if let Err(e) = aurora_theme::theme::load_typed_dirs(&dirs, &theme_id) {
+            match backup {
+                Some(bytes) => {
+                    let _ = std::fs::write(&file, bytes);
+                }
+                None => {
+                    let _ = std::fs::remove_dir_all(&target);
+                }
+            }
+            anyhow::bail!(
+                "主题依赖校验失败：{}（请检查 base 引用的基础主题是否存在）",
+                e
+            );
+        }
+
+        let reloaded = self.theme_reload_if_current(&theme_id);
+        Ok(json!({
+            "ok": true,
+            "slug": theme_id,
+            "display_name": meta.name,
+            // 供设置层如实回报给编辑器（此前那一层硬编码 false）。
+            "reloaded": reloaded,
+        }))
+    }
+
+    /// `theme.previewPackage { path }`：只读预览一个 `.wtheme`，不落任何盘。
+    ///
+    /// 设置端拿它弹「要导入这个主题吗」——双击文件关联进来的包，用户在确认之前有权
+    /// 知道自己要装的是什么。
+    fn web_theme_preview_package(&self, params: &Value) -> anyhow::Result<Value> {
+        let path = str_param(params, "path")?;
+        let p = aurora_transfer::theme::preview_package(std::path::Path::new(path))?;
+        Ok(json!({
+            "display_name": p.display_name,
+            "author": p.author,
+            "version": p.version,
+            "asset_count": p.asset_count,
+            "has_preview": p.has_preview,
+        }))
+    }
+
+    /// `theme.importPackage { path, slug?, force? }`：主题包落盘。
+    ///
+    /// 回执形状与 `theme.importFromText` 一致（ok/slug/display_name/reloaded/conflict），
+    /// 设置端的覆盖确认与「已生效」提示因此是同一套，不必为包再写一份。
+    fn web_theme_import_package(&self, params: &Value) -> anyhow::Result<Value> {
+        let path = str_param(params, "path")?;
+        let package = std::path::Path::new(path);
+        let force = params
+            .get("force")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // 先预览：既拿到展示名（未传 slug 时用它定目录 id），也把坏包挡在动目录之前。
+        let preview = aurora_transfer::theme::preview_package(package)?;
+        let (theme_id, target) = self.theme_target_dir(params, &preview.display_name)?;
+        if target.exists() && !force {
+            return Ok(Self::theme_conflict_json(&theme_id, &preview.display_name));
+        }
+
+        // 依赖链校验交给 transfer 的校验回调：它要在新目录**已就位、旧目录还没删**的
+        // 那一刻跑，失败才回滚得掉。单文件那条路是自己备份原文再校验的——两者落盘形态
+        // 不同（整目录 vs 单文件），回滚共用不了，但判据（能不能按 base 链加载起来）
+        // 是同一条。
+        let dirs = self.theme_dirs();
+        let id_for_verify = theme_id.clone();
+        let out = aurora_transfer::theme::import_package(package, &target, move |_| {
+            aurora_theme::theme::load_typed_dirs(&dirs, &id_for_verify)
+                .map(|_| ())
+                .map_err(|e| {
+                    anyhow::anyhow!("主题依赖校验失败：{e}（请检查 base 引用的基础主题是否存在）")
+                })
+        })?;
+
+        let reloaded = self.theme_reload_if_current(&theme_id);
+        Ok(json!({
+            "ok": true,
+            "slug": theme_id,
+            "display_name": out.display_name,
+            "files": out.files,
+            "reloaded": reloaded,
+        }))
+    }
+
+    /// `theme.exportPackage { slug, path }`：把一个已装主题打成 `.wtheme`。
+    ///
+    /// 源目录走整条搜索链而不是只认用户目录——把内置主题改了色想发给别人，是主题包
+    /// 最常见的来路；只让用户层导得出，那份改动就得先手工复制一遍目录才能分享。
+    ///
+    /// 落点由调用方给全路径（与 `scheme.exportPackage` 同形）：core 不猜「导到哪」，
+    /// 那是设置端的文件对话框与 CLI 的参数各自该管的事。
+    ///
+    /// ⚠️ `path` **不做任何校验**，这条成立的前提是这条 RPC 只经本机 ctrl 通道由设置端
+    /// 与 CLI 调用、不对外暴露。哪天这条链上多一个远程或网页入口，它连同下面的
+    /// `create_dir_all(parent)` 就是一个任意写——**那时必须先加落点白名单再接入**，
+    /// 而不是指望「现在没人远程调」。
+    fn web_theme_export_package(&self, params: &Value) -> anyhow::Result<Value> {
+        let slug = str_param(params, "slug")?;
+        let out = str_param(params, "path")?;
+        let dir = self.theme_dir_of(slug)?;
+        let png = self.theme_preview_png(&dir);
+        let out_path = std::path::Path::new(out);
+
+        // **先写 `.tmp` 兄弟文件，自检通过才 rename 到位**——与导入侧同一条纪律
+        // （见 `aurora_transfer::theme::import_package` 的「中途失败目标原封不动」）。
+        // 直接往 `out_path` 上写的话，超限的主题（条目数 / 解压体积越过包格式上限）
+        // 会走成这样：包已经完整落盘 → 自检报错 → 调用方看到失败，但磁盘上留着一个
+        // core 自己都不认的包；而 `File::create` 是截断写，那个路径上原有的好包已经
+        // 被毁了——**一次报错的导出销毁用户数据**，比不给导出严重得多。
+        let tmp = out_path.with_extension("wtheme.tmp");
+        let done = (|| -> anyhow::Result<aurora_transfer::theme::ThemePreview> {
+            aurora_transfer::theme::export_package(&dir, &tmp, png.as_deref())?;
+            // 读回自检：刚打出来的包必须能被自己的解析器认出来。这一步不是多余的仪式——
+            // 导出与导入各有一套条目判据（收什么 vs 认什么），哪天两边走岔了，这里当场
+            // 就报，而不是等用户把包发出去之后在对方机器上报。
+            aurora_transfer::theme::preview_package(&tmp)
+        })();
+        let p = match done {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                // 用户做的是「导出我的主题」，收到的却是包格式的限额措辞；补一句主语，
+                // 否则他不知道该去改自己的哪个主题。底下那层原因不会丢——RPC 出口
+                // （`aurora-rpc::dispatch`）按 `{:#}` 展开整条链发给客户端。
+                return Err(e.context(format!("导出主题「{slug}」失败")));
+            }
+        };
+        std::fs::rename(&tmp, out_path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            anyhow::anyhow!("写入 {} 失败：{e}", out_path.display())
+        })?;
+
+        Ok(json!({
+            "ok": true,
+            "path": out_path.to_string_lossy(),
+            "display_name": p.display_name,
+            "asset_count": p.asset_count,
+            "has_preview": p.has_preview,
+        }))
+    }
+
+    /// 主题目录下的市场预览图，没有或读不动就当没有。
+    ///
+    /// 有界读取：`aurora-transfer` 对导入侧的每个条目都立了限额，导出侧把一张来路不明的
+    /// 图整个吃进内存则没人拦——而这是常驻的输入法服务进程，一张误拷进主题目录的
+    /// 原图就能把它撑爆。超限与读失败都只是「这个包没有预览图」，但都要留下痕迹：
+    /// 静默的话，用户只会看到导出回执里少了「含市场预览图」而无从追查。
+    fn theme_preview_png(&self, dir: &std::path::Path) -> Option<Vec<u8>> {
+        /// 与 `aurora-transfer` 给主题文本的限额同档（4 MiB）：预览图是分发用的缩略图，
+        /// 越过这个量级的必然是误放的原图。
+        const MAX_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
+
+        let path = dir.join(aurora_transfer::theme::THEME_PREVIEW_NAME);
+        match std::fs::metadata(&path) {
+            Err(_) => None, // 没有预览图是常态，不值得一条日志
+            Ok(m) if m.len() > MAX_PREVIEW_BYTES => {
+                tracing::warn!(
+                    "主题预览图过大（{} 字节，上限 {MAX_PREVIEW_BYTES}），本次导出不含预览图",
+                    m.len()
+                );
+                None
+            }
+            Ok(_) => match std::fs::read(&path) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    tracing::warn!("主题预览图读取失败（{e}），本次导出不含预览图");
+                    None
+                }
+            },
+        }
+    }
+
+    /// `appearance.previewTemplate`：模板在当前主题下的渲染效果（设置页输入框下方的预览行）。
+    ///
+    /// 入参 `{ template, scene: "comment" | "label" | "content", each?, swatches?: [名字] }`。回包：
+    /// ```text
+    /// { text, fg, bg, runs: [{start, end, rgba}],
+    ///   selected: { fg, bg, runs } | null,      // 仅 comment：高亮候选里的样子
+    ///   problems: [{start, end, message}],
+    ///   swatches: { 名字: rgba } }              // 入参 swatches 里每个名字写成 `$[名字]` 的实际颜色
+    /// ```
+    /// `swatches` 给设置页「插入颜色」的色块着色：求法与模板里的内联色完全相同（气泡场景先查
+    /// `tooltip_<名>`），色块因此就是插进去以后的样子。
+    /// ⚠️ 两类区间坐标系不同：`runs` 是**输出偏移**（`text` 里的 UTF-8 字节区间，给预览上色）；
+    /// `problems` 是**模板偏移**（入参 `template` 里的 UTF-8 字节区间，给输入框标位置）。设置端
+    /// 的输入框显示转义后的模板（`\t` 以两个字符显示），要把 `problems` 换算到显示文本上再标。
+    /// 颜色一律 `[R, G, B, A]`。等于正文色的区间不下发（与渲染层同一口径）。
+    fn web_appearance_preview_template(&self, params: &Value) -> anyhow::Result<Value> {
+        use aurora_coordinator::template_preview::TemplateScene;
+        use aurora_theme::fallback;
+        use aurora_theme::{Atom, Rgba, TextState};
+        let template = str_param(params, "template")?;
+        // 入参上限：设置页的模板输入框是单行，真实模板几十字节；上限只为挡住异常入参
+        // （引擎本身已有嵌套上限与线性配对，这里再省掉无意义的大块求值）。
+        anyhow::ensure!(
+            template.len() <= PREVIEW_TEMPLATE_MAX,
+            "模板过长（{} 字节，上限 {PREVIEW_TEMPLATE_MAX}）",
+            template.len()
+        );
+        let swatch_names: Vec<&str> = params
+            .get("swatches")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        anyhow::ensure!(
+            swatch_names.len() <= PREVIEW_SWATCHES_MAX,
+            "swatches 过多（{} 个，上限 {PREVIEW_SWATCHES_MAX}）",
+            swatch_names.len()
+        );
+        let scene = match str_param(params, "scene")? {
+            "comment" => TemplateScene::Comment,
+            "label" => TemplateScene::TooltipLabel,
+            "content" => TemplateScene::TooltipContent {
+                each: params
+                    .get("each")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            },
+            other => anyhow::bail!("未知 scene：{other}"),
+        };
+        let is_tooltip = scene != TemplateScene::Comment;
+        let sample = self.template_sample(template, &scene);
+        // 主题现取：与候选窗同一条搜索链、同一个当前主题与明暗。每次预览都从磁盘解析一次
+        // （设计 §11 已知局限：低频的设置页操作，不值得为它挂一份缓存）。取不到（主题文件坏了）
+        // 时退化为兜底色的预览，并给一条总的提示——不逐个把颜色名误报成「当前主题没有」。
+        let loaded = aurora_theme::load_resolved_dirs(
+            &self.theme_search_dirs(),
+            &self.current_theme_name(),
+            self.current_theme_is_dark(),
+        );
+        let theme_ok = loaded.is_ok();
+        let theme = loaded.unwrap_or_default();
+        let default_node = aurora_theme::RvNode::default();
+        // 兜底色与渲染层（aurora-ui 候选窗 / 气泡）取同一组常量。
+        let (node, fallback): (&aurora_theme::RvNode, Rgba) = if is_tooltip {
+            (
+                theme.views.tooltip.as_ref().unwrap_or(&default_node),
+                theme.color("tooltip_text", fallback::TOOLTIP_TEXT),
+            )
+        } else {
+            (&theme.views.comment, fallback::COMMENT_TEXT)
+        };
+        let runs_of = |state: TextState| -> (Value, Rgba) {
+            let body = aurora_theme::body_color(node, state, fallback);
+            let runs: Vec<Value> = sample
+                .text
+                .spans()
+                .iter()
+                .filter_map(|sp| {
+                    let c = aurora_theme::span_color(
+                        &theme,
+                        node,
+                        is_tooltip,
+                        state,
+                        fallback,
+                        sp.role,
+                        sp.in_title,
+                        sp.separator,
+                        sp.color.as_deref(),
+                    );
+                    (c != body).then(|| json!({"start": sp.start, "end": sp.end, "rgba": c}))
+                })
+                .collect();
+            (Value::Array(runs), body)
+        };
+        let (runs, fg) = runs_of(TextState::Normal);
+        let bg = if is_tooltip {
+            // 同 aurora-ui 气泡：调色板兜底，节点底色覆盖。
+            node.bg_color
+                .unwrap_or(theme.color("tooltip_bg", fallback::TOOLTIP_BG))
+        } else {
+            theme.views.window.bg_color.unwrap_or(fallback::WINDOW_BG)
+        };
+        let selected = (!is_tooltip).then(|| {
+            let (runs, fg) = runs_of(TextState::Selected);
+            let bg = theme
+                .views
+                .item
+                .selected
+                .as_ref()
+                .and_then(|n| n.bg_color)
+                .unwrap_or(fallback::SELECTED_BG);
+            json!({"fg": fg, "bg": bg, "runs": runs})
+        });
+
+        // 问题：变量（主题无关，含场景外变量）+ 内联色（写法 / 当前主题查不查得到 / 全透明 /
+        // 被忽略的 SPEC 片段）。
+        let mut problems: Vec<Value> = sample
+            .problems
+            .iter()
+            .map(|p| json!({"start": p.start, "end": p.end, "message": p.message}))
+            .collect();
+        if !theme_ok && !sample.colors.is_empty() {
+            problems.push(json!({
+                "start": 0, "end": 0,
+                "message": "当前主题加载失败，预览按兜底色显示，颜色名无法核对",
+            }));
+        }
+        // 名字在当前场景下查到的颜色：气泡先查 `tooltip_<名>`（与 span_color 同一顺序）。
+        let lookup = |n: &str| -> Option<Rgba> {
+            is_tooltip
+                .then(|| theme.palette.get(&format!("tooltip_{n}")))
+                .flatten()
+                .or_else(|| theme.palette.get(n))
+                .copied()
+        };
+        let transparent = "全透明的颜色看不见，按正文色显示".to_string();
+        for c in &sample.colors {
+            let mut msgs: Vec<String> = Vec::new();
+            let mut refs = vec![&c.color.normal];
+            match &c.color.selected {
+                // `selected=` 只在候选注释里有意义：气泡没有选中态，引擎忽略它，不必查名字。
+                Some(_) if is_tooltip => msgs.push("「selected=」在气泡里不生效，已忽略".into()),
+                Some(sel) => refs.push(sel),
+                None => {}
+            }
+            for r in refs {
+                for atom in [&r.light, &r.dark] {
+                    let m = match atom {
+                        Atom::Invalid => Some(
+                            "颜色写法不对：写 #RGB / #RRGGBB / #RRGGBBAA 或调色板颜色名"
+                                .to_string(),
+                        ),
+                        Atom::Rgba(rgba) if rgba[3] == 0 => Some(transparent.clone()),
+                        Atom::Rgba(_) => None,
+                        Atom::Name(n) if &**n == "transparent" => Some(transparent.clone()),
+                        // 主题没加载成功：上面已给总提示，不逐个误报。
+                        Atom::Name(_) if !theme_ok => None,
+                        Atom::Name(n) => match lookup(n) {
+                            None => Some(format!("当前主题没有颜色「{n}」，按正文色显示")),
+                            Some(rgba) if rgba[3] == 0 => {
+                                Some(format!("「{n}」在当前主题里是全透明，按正文色显示"))
+                            }
+                            Some(_) => None,
+                        },
+                    };
+                    if let Some(m) = m
+                        && !msgs.contains(&m)
+                    {
+                        msgs.push(m);
+                    }
+                }
+            }
+            msgs.extend(c.notes.iter().cloned());
+            for m in msgs {
+                problems.push(json!({"start": c.start, "end": c.end, "message": m}));
+            }
+        }
+        problems.sort_by_key(|p| p["start"].as_u64());
+
+        let swatches: serde_json::Map<String, Value> = swatch_names
+            .into_iter()
+            .map(|name| {
+                let c = aurora_theme::InlineColor::parse(name);
+                let rgba = aurora_theme::span_color(
+                    &theme,
+                    node,
+                    is_tooltip,
+                    TextState::Normal,
+                    fallback,
+                    None,
+                    false,
+                    false,
+                    Some(&c),
+                );
+                (name.to_string(), json!(rgba))
+            })
+            .collect();
+
+        Ok(json!({
+            "text": sample.text.as_str(),
+            "fg": fg,
+            "bg": bg,
+            "runs": runs,
+            "selected": selected,
+            "problems": problems,
+            "swatches": swatches,
+        }))
+    }
+
+    fn web_theme_list(&self) -> anyhow::Result<Value> {
+        // 复用右键菜单的 list_themes_full 顺序，保证与菜单一致 (#5/主题)。
+        let dirs = self.theme_search_dirs();
+        let out: Vec<Value> = self
+            .list_themes_full()
+            .into_iter()
+            .map(|(id, display, builtin)| {
+                let meta = aurora_theme::read_meta(&dirs, &id);
+                json!({
+                    "name": id,
+                    "display_name": display,
+                    "author": meta.as_ref().map(|m| m.author.clone()).unwrap_or_default(),
+                    "version": meta.as_ref().map(|m| m.version.clone()).unwrap_or_default(),
+                    "builtin": builtin,
+                })
+            })
+            .collect();
+        Ok(json!(out))
+    }
+}
+
+// 不用 blanket impl：`Arc<Coordinator>` 的方法解析会先命中 T=Arc 的 blanket 候选、
+// bound 不满足即报错而不再 deref；具体 impl 才能让 Arc 自动 deref 到 &Coordinator。
+impl WebDataRpc for aurora_coordinator::Coordinator {}
+
+/// 存储域 → 设置页显示域：真实文本投影为可编辑的转义形态（真换行→`\n`、制表→`\t`、
+/// 反斜杠→`\\`）。
+///
+/// 设置页是**文本编辑界面**，而编辑界面里"看不见的字符"是不可编辑的：一条含真换行的
+/// 短语在输入框里只显示成一个断行，用户既分不清那是换行还是别的空白，也无从表达
+/// "我要一个字面反斜杠"。投影成转义形态后，所见即所得。
+///
+/// 与 [`word_item`] 里 `code` 的处理同源——那里也是把存储域的扁平码投影成带空格的
+/// 音节码给人看。**存储域与显示域本就该分开**，此处只是把同一原则用到 text 上。
+///
+/// 命令栏语法条目只投影换行/制表、反斜杠原样——见 [`aurora_store::wdict::escape_text_field`]。
+/// 设置页是这类条目最主要的书写入口，双重转义在这里最致命：文档写「路径要写 `\\`」，
+/// 照做却因为本层先吃掉一个而在 lexer 里变成换行。
+fn ui_text(s: &str) -> String {
+    aurora_store::wdict::escape_text_field(s)
+}
+
+/// 影子规则行的**显示文本**：`candId` 形如 `phrase:{code}:{模板}` 时取模板原文，否则回落 `word`。
+///
+/// 与设置端 `pages::dict::spec::WordRow::display_text` 同一判据——那边决定列表显示什么，
+/// 这边决定搜索/排序按什么算，两者一旦漂移就成了「看得见却搜不着、点了排序顺序对不上」。
+///
+/// ⚠️ 取的是**第二个冒号之后的全部内容**，不能按冒号切三段取第三段：模板自身常含冒号
+/// （`{time("HH:mm:ss")}`），按段取会把它截断成 `{time("HH`。
+fn shadow_display_text(row: &Value) -> String {
+    let word = row.get("word").and_then(|v| v.as_str()).unwrap_or("");
+    row.get("candId")
+        .and_then(|v| v.as_str())
+        .and_then(|id| id.strip_prefix("phrase:"))
+        .and_then(|rest| rest.split_once(':'))
+        .map(|(_code, tpl)| tpl)
+        .filter(|tpl| !tpl.is_empty())
+        .unwrap_or(word)
+        .to_string()
+}
+
+/// 疑似笔误 → JSON。`kind` 供 UI 判定，`message` 是给人看的一句话。
+fn hint_json(h: &aurora_cmdbar::Hint) -> Value {
+    use aurora_cmdbar::Hint as H;
+    match h {
+        H::ControlCharInPath(f) => json!({
+            "kind": "controlCharInPath",
+            "func": f,
+            "message": format!("{f} 的路径里出现了换行或制表符，通常是反斜杠只写了一个"),
+        }),
+    }
+}
+
+/// 设置页显示域 → 存储域：[`ui_text`] 的逆。
+///
+/// **凡是从设置页收 text 的 RPC 都必须先过它**，不只是写入类：`dict.remove`/`update`、
+/// `freq.delete`、`temp.promote` 等拿 text 当 **key** 去匹配记录，若拿转义形态去查
+/// 真实文本的库，结果是查不到——表现为「删了没反应」，且不报错。
+fn store_text(s: &str) -> String {
+    aurora_store::wdict::unescape_text_field(s)
+}
+
+/// UserWordRecord → 前端 UserWordItem。
+/// 用户词 → 设置页列表项。
+///
+/// `code` 输出**带空格的音节码**（`ni hao`），与 `dict.encode` 的出码结果同形，
+/// 让用户直观看到拼音词库的音节格式。存储侧 key 仍是扁平的——设置页把这个串原样回传
+/// 给 add/update/remove 时，由 `user_words_api` 的 `normalize_add_code` / `remove` 拆回扁平码。
+/// 无边界（旧数据/手输码/五笔码）则不含空格，与改动前一致。
+fn word_item(r: aurora_store::user_words::UserWordRecord) -> Value {
+    let code = user_words_api::display_code(&r);
+    json!({ "code": code, "text": ui_text(&r.text), "weight": r.weight, "enabled": true })
+}
+
+/// 稀疏 diff：返回 `cfg` 相对 `base` 的变化项（仅含改动的叶子/键）；无变化返回 None。
+/// `appearance.previewTemplate` 的模板长度上限（字节）。设置页输入框是单行，真实模板几十字节。
+pub const PREVIEW_TEMPLATE_MAX: usize = 4096;
+/// `appearance.previewTemplate` 一次最多求几个色块（设置页用 8 个）。
+pub const PREVIEW_SWATCHES_MAX: usize = 32;
+
+/// 对象逐键递归；数组/标量按整体比较（不同则取 cfg）。用于 schema override 最小化。
+/// `getConfig` 附带的只读旁路字段——回传 `saveConfig` 时必须剥掉。
+///
+/// 它们是「当前生效值」的快照，不是方案配置的一部分。设置页的做法是拿整份 getConfig
+/// 结果、改几个字段、原样回传；若不剥，`json_diff` 会认定方案文件缺这个键，于是把整份
+/// 快照写进 override——从此该方案的行为被**冻结在打开设置页那一刻**，之后改全局配置对
+/// 它再无影响，而用户根本没动过这些项。
+///
+/// 在服务端剥而不是要求调用方自觉：这是契约边界，任何客户端都该受保护。
+pub const READONLY_SIDECAR_FIELDS: &[&str] = &[
+    "effectiveCodetable",
+    // 取消覆盖后的回落值 + override 层原文。前者若不剥会把一整份实值快照写进 override
+    // （＝上面说的冻结），后者若不剥会在 override 里多出一段 `[codetableOverride]`——
+    // 方案照常能用，但那一段从此谁也不读、也没人会想到去删。
+    "followedCodetable",
+    "codetableOverride",
+    // override 层的 `[punct]` 段原文。回答「这张自定义标点表是方案作者写的还是我改的」——
+    // 合并值里的 `Some(表)` 两种来源给不出区别。
+    //
+    // ⚠️ **当前设置页尚未消费它**：整表替换下 UI 只有开/关两态，还没有像码表那节一样标出
+    // 「方案自带」。留着是因为那个区别对用户可见——作者写了表时取消勾选回到的是**作者的
+    // 表**而不是全局。要做那一档时直接用它，别再去合并值里猜。登记在此则是无论用不用都
+    // 不能让它随 saveConfig 落回 override。
+    "punctOverride",
+    "leadingCodeKeys",
+    "keysOverview",
+    // 「这张总览的全局层不完整」的说明（段级降级时非 null）。与 `keysOverview` 同进同出：
+    // 漏登记的话它会随 saveConfig 落进 override，从此方案文件里带着一段**某次启动的**
+    // 降级快照，谁也不读、也没人会想到去删。
+    "keysOverviewDegraded",
+    // 「跟随全局」时的实际值（布局/字体/辅助码）。不剥的话一整份全局快照会落进 override，
+    // 方案从此把这几项钉死在打开设置页那一刻——正是上面说的冻结。
+    "followedBehavior",
+    // 方案文件自己的辅助码来源（设置页判「跟随方案」用）。不剥的话一份基线快照会落进
+    // override，从此方案作者改了推荐码表也透不过来。
+    "auxCodeBaseFiles",
+];
+
+/// [`WebDataRpc::followed_behavior`] 的纯函数内核：配置与主题字体由调用方给定。
+///
+/// - `layout`：与运行时同一裁决（`Orientation::from_layout_str`），只出 `horizontal`/`vertical`；
+/// - `fontFamily`：全局 `ui.font.family`，空（= 跟随主题）则取主题字体，再空为 `""`；
+/// - `auxEnabled` / `auxMaxPhraseLen` / `auxDirect`：全局 `schema.pinyin.aux_code`。
+fn followed_behavior_of(cfg: &aurora_config::Config, theme_font: Option<String>) -> Value {
+    let font = if cfg.ui.font.family.is_empty() {
+        theme_font.unwrap_or_default()
+    } else {
+        cfg.ui.font.family.clone()
+    };
+    let aux = &cfg.schema.pinyin.aux_code;
+    json!({
+        "layout": aurora_config::Orientation::from_layout_str(&cfg.ui.candidate.layout).layout_str(),
+        "fontFamily": font,
+        "auxEnabled": aux.enabled,
+        "auxMaxPhraseLen": aux.max_phrase_len,
+        "auxDirect": aux.direct,
+    })
+}
+
+/// 按键总览：这个方案下每个绑过的键**当前**干什么、来自哪一层。
+///
+/// # 为什么由内核组装
+///
+/// 设置页读得到两层的原始表，却算不出全局那份的**折算结果**：`page_keys = ["minus_equal"]`
+/// 这类组名要展开成 `minus` / `equal`，展开规则住在 `KeysConfig::effective_session_actions`。
+/// 设置页再写一份组名展开表就是两处慢慢漂移——跨仓契约无编译期约束，本仓已栽过
+/// （同 `leadingCodeKeys` 那条：边界上传语义结果，不传待解析的原料）。
+///
+/// # 为什么只读
+///
+/// 一个键的当前动作可能来自折算、也可能来自方案层，反写就要决定写哪一层，那就是第二个
+/// 真相源，会重蹈 `trigger_keys` 五处并存的覆辙。设置页据此展示并**跳转**到对应编辑处。
+/// 判据见 `docs/design/key-resolver-unification.md` §4.3。
+///
+/// # 动词不翻译
+///
+/// 给动词原值（`page_prev`）而不是中文名：文案值域已经在设置页的下拉里（两处各一份中文名
+/// 必然漂移），而这里给的是**语义结果**——哪个键、什么动作、来自哪层。翻译归 UI。
+///
+/// # 段级降级时这张表会骗人
+///
+/// `Config::load` 不再因为一个坏键整份失败（P0 的段级降级），而是把坏段换成 **L1 出厂值**
+/// 再返回 `Ok`。于是「读不到全局配置就整表不给」这条老判据够不着新的失效形态：`keys` 段
+/// 降级时 `load()` 成功、`cfg.keys.key_actions` 是一张**只有出厂绑定的表**，照原样渲染
+/// 出去就是把出厂默认当成「用户的真实绑定」展示——用户看着一张对的表，却怎么也对不上
+/// 实际按键行为，而唯一的线索埋在日志里。
+///
+/// 处置与老判据同构、只是判得更细：**不可信的那一层就不列**（不是列出来再打个标），
+/// 同时经第二个返回值说明「哪张表的全局层缺了、因为哪些段降级」。只标不删的话，设置页
+/// 那侧漏读一个字段就退化成「把出厂表当真实绑定展示」，而那正是要防的事。
+///
+/// 判据按**表**分别取，不是「keys 段一坏两张表全清」：两张表互不相干，一起清会把本来
+/// 完好的那张也变成空白。每张表问的是它的**全部来源路径**，见 [`keys_overview_of`] 里
+/// 那张表——那不是形式，漏一条就退回本节开头描述的失效形态。
+///
+/// 返回 `(总览, 不完整说明)`；后者无降级时为 `Value::Null`。
+fn keys_overview(schema_cfg: &Value) -> (Vec<Value>, Value) {
+    let cfg = match aurora_config::Config::load(aurora_config::Config::data_dir().as_deref()) {
+        Ok(mut cfg) => {
+            // 与 `ConfigBundle::build` 一样先 normalize：那里还有存量迁移（旧字段折算进
+            // `key_actions` / `session_actions`），跳过它算出来的表与运行时不一致。
+            cfg.normalize();
+            cfg
+        }
+        // 读不到全局配置：整个全局层不可信，与 `total_fallback` 是同一件事，故合流到
+        // 同一套处置（下面的 taints 对每张表都成立 ⇒ 全局层一律不列）。
+        //
+        // ⚠️ 这**是一处行为变更**（不是等价重构）：老行为是整表不给（`return Vec::new()`，
+        // 连方案层也不列），新行为是列出方案层 + 给标记。改的理由是老行为对调用方而言与
+        // 「这个方案一个键都没绑」无从区分；方案层的数据来自方案文件、不受 `Config` 降级
+        // 影响，扣着不给并不更安全。
+        //
+        // ⚠️ 且这条分支在 P0 之后**已基本不可达**：`Config::load` 内部的反序列化失败已由
+        // 段级降级接住，`?` 只剩 `toml::Value::try_from(Config::default())` 那一处（默认值
+        // 序列化失败，实际上不会发生）。留着是防御性的——不留就得写 `unwrap`，而
+        // 「不可达」这个判断依赖的是下层实现，不该在这里钉死。
+        Err(_) => {
+            let mut cfg = aurora_config::Config::default();
+            cfg.degradation.total_fallback = true;
+            cfg
+        }
+    };
+    keys_overview_of(&cfg, schema_cfg)
+}
+
+/// [`keys_overview`] 的纯函数内核：配置由调用方给定，不碰磁盘也不碰环境变量。
+///
+/// 拆出来是为了让「降级时全局层不列 + 带出不完整标记」这条判据能被**普通单测**盯住：
+/// 走 [`keys_overview`] 的话，要造一份真会降级的配置就得重定向 `AURORA_INSTALL_ROOT` /
+/// `AURORA_DATADIR_CONF`，那两个杠杆经 OnceLock、同一测试二进制里只认第一次，于是这条
+/// 判据要么单独占一个测试二进制，要么静默测到错误的目标。而 `degradation` 是 `Config`
+/// 上的公开字段，直接置上去就是等价的输入。
+fn keys_overview_of(cfg: &aurora_config::Config, schema_cfg: &Value) -> (Vec<Value>, Value) {
+    let schema_table = |key: &str| -> std::collections::BTreeMap<String, String> {
+        schema_cfg
+            .get(key)
+            .and_then(|x| x.as_object())
+            .map(|o| {
+                o.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let empty = std::collections::BTreeMap::new();
+    let session = cfg.keys.effective_session_actions();
+    let mut out = Vec::new();
+    let mut tainted: Vec<(&str, &[&str])> = Vec::new();
+    // 每张表：(总览表名, 方案文件里的字段名, **全部来源路径**, 全局层的值)。
+    //
+    // 表名与字段名刻意不同（总览面向用户，方案文件里是 `key_actions` / `session_actions`），
+    // 故写在同一行里配对，别再另设一处映射。
+    //
+    // ★★ 来源路径是**并集**，不是「同名字段」。这里曾经只问 `keys.session_actions`，
+    // 理由写的是「折算来源是标量/列表键，出问题会整段记 `keys`，祖先判据照样成立」——
+    // **那条理由是错的**：`narrow_bad_section`（aurora-config）对坏段的**每一个直接子键**
+    // 都做探针，不分子表还是标量/数组（`probe_section` 把待测值贴到全默认骨架上试，
+    // 标量一样试得出来）。实测 `[keys] page_keys = 5` ⇒ `sections = ["keys.page_keys"]`、
+    // `taints("keys.session_actions") == false`，而 `page_keys` 已被换成出厂值 ⇒ 总览
+    // 照常列出折算自出厂组名的翻页键、标记还是 `null`，正是本函数要消灭的那个形态。
+    //
+    // ⚠️ **通用形状，别只记住这一个例子**：折算型数据的降级判据必须覆盖**全部来源路径**，
+    // 而不是同名字段。给 `KeysConfig::effective_session_actions` 加新的折算来源时，这张表
+    // 要一起加——漏一个没有任何编译期或测试信号，只会让那一格悄悄退回「把出厂值当成
+    // 用户的真实绑定展示」。
+    //
+    // ⚠️ 同一形状还有一处更窄的，**刻意不进判据**：`normalize()` 里的
+    // `migrate_trigger_keys_into_key_actions` 把 `input.temp_english.trigger_keys` 等
+    // **跨段**折算进 `key_actions`，于是 `input` 段降级也能污染 lead 表。它只对
+    // `key_actions_materialized < VERSION` 的存量用户跑一次，是过渡态；为它把整个 `input`
+    // 段拉进按键表的判据，代价（存量用户 `input` 一坏，按键总览整片消失）大于收益。
+    for (table, field, sources, global) in [
+        (
+            "lead",
+            "key_actions",
+            &["keys.key_actions"][..],
+            &cfg.keys.key_actions,
+        ),
+        (
+            "session",
+            "session_actions",
+            &[
+                "keys.session_actions",
+                "keys.page_keys",
+                "keys.select_char_keys",
+                "keys.highlight_keys",
+                "keys.select_key_groups",
+            ][..],
+            &session,
+        ),
+    ] {
+        let global = if sources.iter().any(|p| cfg.degradation.taints(p)) {
+            tainted.push((table, sources));
+            &empty
+        } else {
+            global
+        };
+        push_overview_layer(&mut out, table, global, &schema_table(field));
+    }
+
+    let degraded = if tainted.is_empty() {
+        // ★ 恒在的字段、无降级时显式 `null`（不是「不给字段」）：跨仓契约无编译期约束，
+        // 「字段不存在」与「这版 core 还没实现」在设置端看来完全一样。
+        Value::Null
+    } else {
+        // ★ 只列**真正导致上面这些表被判不可信**的降级段，不是本次加载的全部降级段。
+        // 全量传出去的话，`ui.font` 坏了也会出现在按键总览的「缺失原因」里，设置端照
+        // 字面渲染就成了「字体那格坏了所以按键表不全」——一条自信的错误解释比不解释更糟。
+        //
+        // 判定复用生产判据本身（单段构造一份 `ConfigDegradation` 去问 `taints`），而不是
+        // 在这里重写一遍「相等 / 祖先 / 后代」那三种关系：重写就是第二个真相源，一旦
+        // 与 `taints` 分叉，标记会指向一组没导致任何事情发生的段。
+        let causes: Vec<&String> = cfg
+            .degradation
+            .sections
+            .iter()
+            .filter(|s| {
+                let one = aurora_config::config::ConfigDegradation {
+                    sections: vec![(*s).clone()],
+                    total_fallback: false,
+                    unparsable: Vec::new(),
+                };
+                tainted
+                    .iter()
+                    .any(|(_, srcs)| srcs.iter().any(|p| one.taints(p)))
+            })
+            .collect();
+        json!({
+            // 这些表的**全局层未列出**；表名与 `keysOverview` 条目里的 `table` 同域。
+            "tables": tainted.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            // 点分路径原样传出（`keys.page_keys`），与 `config.degradation` 同一份来源。
+            // `totalFallback` 时本表为空——那种情形下 `sections` 本来就定位不到任何段。
+            "sections": causes,
+            "totalFallback": cfg.degradation.total_fallback,
+        })
+    };
+    (out, degraded)
+}
+
+/// 一张表的两层仲裁：方案层表了态就用方案的，否则用全局的。
+///
+/// ★ 方案层的**显式 `none` 也是表态**（＝本方案禁用），不回落全局。这与内核
+/// `Coordinator::session_action_for` / `bound_action_with_source` 的处置逐条一致；
+/// 若在这里改成「none 视同没配」，总览显示的就与实际行为相反。
+///
+/// # `ineffective`：方案层 `[key_actions]` 的组合键**没有消费通路**
+///
+/// 组合键只由 `Compiler::compile` 从全局 `keys.key_actions` 编进热键表；方案层那张表只在
+/// 按键链上按**单键** VK 查（修饰键轻敲 / 有字符的引导键）。于是方案文件里写的
+/// `"ctrl+alt+j" = …` 按下去什么都不发生——对**所有**动词都成立。补这条通路要让方案级组合键
+/// 进 C++ 的转发集并按活跃方案分派，会破「C++ 吃键集 ⊆ Rust 出字集」，故不补，只如实标出。
+///
+/// 这类条目带 `ineffective: true` 照常列出（用户写了什么就显示什么），且**不遮盖**同名的
+/// 全局条目——全局那条照常列出，它才是实际生效的那一条。判据用 core 的
+/// `route_of_key_action`（与热键编译器同一个分流口），设置端不另判。
+///
+/// ★ 字段恒在（其余条目为 `false`）：跨仓契约无编译期约束，「字段不存在」与「这版 core
+/// 还没实现」在设置端看来完全一样。
+fn push_overview_layer(
+    out: &mut Vec<Value>,
+    table: &str,
+    global: &std::collections::BTreeMap<String, String>,
+    schema: &std::collections::BTreeMap<String, String>,
+) {
+    let schema_ineffective = |k: &str| {
+        table == "lead"
+            && aurora_config::hotkey::route_of_key_action(k)
+                == Some(aurora_config::hotkey::KeyActionRoute::Hotkey)
+    };
+    let row = |k: &str, action: &str, from: &str, ineffective: bool| {
+        json!({
+            "key": k,
+            "table": table,
+            "action": action,
+            "from": from,
+            "ineffective": ineffective,
+        })
+    };
+    let mut keys: std::collections::BTreeSet<&String> = global.keys().collect();
+    keys.extend(schema.keys());
+    for k in keys {
+        match schema.get(k) {
+            Some(v) if schema_ineffective(k) => {
+                // 不生效的方案条目不遮盖全局：全局那条先列（它才是实际生效的）。
+                if let Some(g) = global.get(k) {
+                    out.push(row(k, g, "global", false));
+                }
+                out.push(row(k, v, "schema", true));
+            }
+            Some(v) => out.push(row(k, v, "schema", false)),
+            None => out.push(row(
+                k,
+                global.get(k).map(String::as_str).unwrap_or(""),
+                "global",
+                false,
+            )),
+        }
+    }
+}
+
+fn strip_readonly_fields(cfg: &Value) -> Value {
+    let Some(o) = cfg.as_object() else {
+        return cfg.clone();
+    };
+    if !READONLY_SIDECAR_FIELDS.iter().any(|k| o.contains_key(*k)) {
+        return cfg.clone();
+    }
+    let mut o = o.clone();
+    for k in READONLY_SIDECAR_FIELDS {
+        o.remove(*k);
+    }
+    Value::Object(o)
+}
+
+fn json_diff(base: &Value, cfg: &Value) -> Option<Value> {
+    match (base, cfg) {
+        (Value::Object(b), Value::Object(c)) => {
+            let mut out = serde_json::Map::new();
+            for (k, cv) in c {
+                match b.get(k) {
+                    // ★★ `custom_mappings` 必须作**原子叶子**，与 `merge_toml` 那侧的整体
+                    // 替换例外配对。逐键下钻的话，用户改一行 ⇒ override 里只有那一行 ⇒
+                    // 读侧整体替换 ⇒ **方案作者写的其余行全部丢失**。
+                    //
+                    // ⇒ 可复用判据：**改了合并语义（读侧），必须同步查产生 override 的写侧。**
+                    // 「整体替换 + 稀疏 diff」这个组合是数据丢失，而两侧各自看都合理。
+                    //
+                    // 键空间是用户数据（标点 token 可含 `.`/`/`），本就不该按路径下钻——
+                    // 全局配置那侧早有同一条铁律（`Capabilities::map_keys` 的原子叶子）。
+                    Some(bv) if k == "custom_mappings" => {
+                        if bv != cv {
+                            out.insert(k.clone(), cv.clone());
+                        }
+                    }
+                    Some(bv) => {
+                        if let Some(d) = json_diff(bv, cv) {
+                            out.insert(k.clone(), d);
+                        }
+                    }
+                    None => {
+                        out.insert(k.clone(), cv.clone());
+                    }
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(Value::Object(out))
+            }
+        }
+        _ => {
+            if base == cfg {
+                None
+            } else {
+                Some(cfg.clone())
+            }
+        }
+    }
+}
+
+/// JSON → toml::Value（写 override 文件）。null 在对象中跳过（TOML 无 null）。
+fn json_to_toml(v: &Value) -> toml::Value {
+    match v {
+        Value::Null => toml::Value::String(String::new()),
+        Value::Bool(b) => toml::Value::Boolean(*b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                toml::Value::Integer(i)
+            } else {
+                toml::Value::Float(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        Value::String(s) => toml::Value::String(s.clone()),
+        // 跳过数组内 null（TOML 无 null），与对象分支语义一致，避免注入空串污染类型。
+        Value::Array(a) => toml::Value::Array(
+            a.iter()
+                .filter(|x| !x.is_null())
+                .map(json_to_toml)
+                .collect(),
+        ),
+        Value::Object(o) => {
+            let mut t = toml::map::Map::new();
+            for (k, val) in o {
+                if !val.is_null() {
+                    t.insert(k.clone(), json_to_toml(val));
+                }
+            }
+            toml::Value::Table(t)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 数据域 RPC 契约测试：真实 Coordinator + 临时 redb store，断言 web_data_rpc 输出形状
+    //! 与 WindInputSetting 的 mock.ts / models.ts 一致。
+    use super::*;
+    use std::sync::Arc;
+    use aurora_config::Config;
+    use aurora_coordinator::Coordinator;
+    use aurora_store::Store;
+
+    // 拼音准入契约的处置表测试随 `dispose_contract_rows` 搬到了
+    // `aurora_coordinator::dict_transfer_api`（contract_disposition_table_covers_both_fill_choices）。
+
+    /// 导入导出的**文件路径通道**：`dict.export` 直接写盘、`dict.*Import` 直接读盘。
+    ///
+    /// ★ 这条守的是 issue #101 的修法。走 `content` 时整库要穿过一帧 JSON-RPC，而设置端
+    /// 读帧上限 16MB，几十万条必撞（用户实测报「帧长超限」）。传路径后 payload 是 O(1)。
+    ///
+    /// ⚠️ **必须真做一次往返**，不能只断言「没报错」：`path` 参数被忽略、退回读 `content`
+    /// 是最可能的回归形态，而那时缺 `content` 只会报「缺少参数」——看起来像别的毛病。
+    /// 这里 import 一侧**只传 path 不传 content**，正是为了让那种退化立刻现形。
+    #[test]
+    fn dict_io_round_trips_through_file_path() {
+        let c = coord("dictpath");
+        c.web_data_rpc(
+            "dict.add",
+            &json!({ "schemaId": "wb", "code": "a", "text": "工", "weight": 100 }),
+        )
+        .unwrap();
+
+        let out = std::env::temp_dir().join("wind_webdata_dictpath_export.wdict.yaml");
+        let _ = std::fs::remove_file(&out);
+        let path = out.to_string_lossy().to_string();
+
+        // 导出：回的是落点与字节数，**不再回全文**
+        let exp = c
+            .web_data_rpc("dict.export", &json!({ "schemaId": "wb", "path": path }))
+            .unwrap();
+        assert!(
+            exp.get("content").is_none(),
+            "带 path 时不该再回全文：{exp}"
+        );
+        assert_eq!(
+            exp.get("path").and_then(|v| v.as_str()),
+            Some(path.as_str())
+        );
+        let written = std::fs::read_to_string(&out).expect("core 应已把文件写出来");
+        assert!(
+            written.contains("--- !words"),
+            "写出来的得是 wdict：{written}"
+        );
+        assert_eq!(
+            exp.get("bytes").and_then(|v| v.as_u64()),
+            Some(written.len() as u64),
+            "回报的字节数要与落盘一致"
+        );
+
+        // 预览 + 导入：只给路径
+        let prev = c
+            .web_data_rpc(
+                "dict.previewImport",
+                &json!({ "schemaId": "wb2", "path": path }),
+            )
+            .unwrap();
+        assert_eq!(
+            sec(&prev, "userWords")
+                .get("willAdd")
+                .and_then(|v| v.as_u64()),
+            Some(1),
+            "★ 预览必须从文件里读到内容，而不是把 path 当没看见"
+        );
+        let imported = c
+            .web_data_rpc("dict.import", &json!({ "schemaId": "wb2", "path": path }))
+            .unwrap();
+        assert_eq!(
+            sec(&imported, "userWords")
+                .get("added")
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        // 反向对照：路径不存在要**报错**，不能静默当成空文件导入 0 条。
+        let bad = c.web_data_rpc(
+            "dict.import",
+            &json!({ "schemaId": "wb2", "path": "Z:\\no\\such\\file.yaml" }),
+        );
+        assert!(
+            bad.is_err(),
+            "读不到的路径必须报错，否则用户看到「导入 0 条」会以为文件坏了"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    /// 构造一个带临时 store 的无头 Coordinator。
+    /// 造一个只带 `common_han` 类的临时数据目录。
+    ///
+    /// # ⚠️ 为什么测试装置必须有它
+    ///
+    /// 常用性判定已归 `CharsetRegistry`：没有 `common_han` 类就**没有人表态**，一切兜底
+    /// 判常用。而本文件多条用例的前提是「域内的汉字默认判生僻」（好让 `common: true`
+    /// 与默认相反、真的落一条记录）——那个前提正是 `common_han` 类的
+    /// `scope: han` + `outside: rare` 给出的。
+    ///
+    /// 名单只放几个字：够用来区分「在表内 ⇒ 常用」和「域内表外 ⇒ 生僻」即可，
+    /// 不必搬 8104 字进来。
+    /// ⚠️ 用 `ranges` 而不是列名单：本文件多条用例假定「初始是空表」，而全表列的正是
+    /// **表态类的成员**——列了名单，那几个字就会出现在列表里。给一段用不到的 PUA 码位，
+    /// 既让这个类有内容（不触发「名单为空就撤销表态」那道安全阀），又不往全表里塞东西。
+    fn charsets_data_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("wind_webdata_data_{tag}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("charsets")).unwrap();
+        std::fs::write(
+            d.join("charsets").join("common_han.yaml"),
+            "---
+key: common_han
+name: 常用汉字
+order: 50
+scope: han
+ranges:
+  - U+E000-U+E001
+default: common
+outside: rare
+",
+        )
+        .unwrap();
+        d
+    }
+
+    fn coord(tag: &str) -> Arc<Coordinator> {
+        let path =
+            std::env::temp_dir().join(format!("wind_webdata_{tag}_{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let store = Arc::new(Store::open(&path).unwrap());
+        let data = charsets_data_dir(tag);
+        Coordinator::new_headless_with_store(Config::default(), Some(&data), store)
+    }
+
+    /// 在 `{sections:[{key,...}]}` 响应里按 key 取某段（无则 Null）。
+    fn sec(v: &Value, key: &str) -> Value {
+        v.get("sections")
+            .and_then(|s| s.as_array())
+            .and_then(|a| {
+                a.iter()
+                    .find(|x| x.get("key").and_then(|k| k.as_str()) == Some(key))
+                    .cloned()
+            })
+            .unwrap_or(Value::Null)
+    }
+
+    /// **设置页显示带空格的音节码，存储 key 保持扁平**——两个域在 RPC 边界上的往返契约。
+    ///
+    /// 用户在设置页看到 `ni hao`（`dict.encode` / 列表回显同形），把它原样提交回来时，
+    /// 写入侧必须拆成扁平 key，否则 `niha` 前缀匹配不到这条记录、逐键出候选就废了。
+    /// 反过来 remove/search 收到带空格的串也必须拆，不然删不掉、搜不着。
+    ///
+    /// 顺带确认一条增益：用户打的空格被当作**显式声明的切分**采信，优先于
+    /// `normalize_add_code` 的求解链。
+    #[test]
+    fn dict_spaced_code_display_flat_storage_roundtrip() {
+        let c = coord("spaced_roundtrip");
+        let p = |code: &str| {
+            serde_json::json!({
+                "schemaId": "pinyin", "code": code, "text": "你好", "weight": 500
+            })
+        };
+
+        // 提交带空格的码（模拟用户从「出码」按钮拿到后直接保存）
+        c.web_data_rpc("dict.add", &p("ni hao")).unwrap();
+
+        // 存储侧：key 扁平、边界由空格得来（ni|hao → {0,2}）
+        let store = c.user_store().expect("有 store");
+        let recs = store.get_user_words("pinyin", "nihao").unwrap();
+        assert_eq!(recs.len(), 1, "key 必须是扁平的 nihao，不能带空格");
+        assert_eq!(recs[0].boundary, 0b101, "用户打的空格即显式切分，须被采信");
+
+        // 显示侧：列表与搜索都回带空格的码
+        let items = c
+            .web_data_rpc(
+                "dict.search",
+                &serde_json::json!({ "schemaId": "pinyin", "query": "ni hao" }),
+            )
+            .unwrap();
+        assert_eq!(
+            items[0].get("code").and_then(|v| v.as_str()),
+            Some("ni hao"),
+            "列表回显须与出码同形；搜索词带空格也要能命中（查询侧同样拆）"
+        );
+
+        // 删除：带空格的码同样要能删掉
+        c.web_data_rpc("dict.remove", &p("ni hao")).unwrap();
+        assert!(
+            store.get_user_words("pinyin", "nihao").unwrap().is_empty(),
+            "remove 收到带空格的码须先拆再删"
+        );
+    }
+
+    /// 临时词库与用户词库同款：列表显示带空格，remove / promote 收到后各自拆回扁平码。
+    /// **三处必须同改**——只改列表就成了「显示得了、删不掉、也晋升不了」。
+    #[test]
+    fn temp_word_spaced_code_roundtrip() {
+        let c = coord("temp_spaced");
+        let store = c.user_store().expect("有 store");
+        // hao|ya → 起始字节位 {0,3}
+        store
+            .learn_temp_word("pinyin", "haoya", "好呀", 500, 0b1001)
+            .unwrap();
+        store
+            .learn_temp_word("pinyin", "nihao", "你好", 500, 0b101)
+            .unwrap();
+
+        let items = c
+            .web_data_rpc("temp.list", &serde_json::json!({ "schemaId": "pinyin" }))
+            .unwrap();
+        let codes: Vec<&str> = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.get("code").and_then(|c| c.as_str()))
+            .collect();
+        assert!(
+            codes.contains(&"hao ya") && codes.contains(&"ni hao"),
+            "临时词库列表须显示带空格的音节码，实际 {codes:?}"
+        );
+
+        // 晋升：带空格的 code 要能查到 temp 记录并写进用户词库
+        c.web_data_rpc(
+            "temp.promote",
+            &serde_json::json!({ "schemaId": "pinyin", "code": "ni hao", "text": "你好" }),
+        )
+        .unwrap();
+        assert!(
+            !store.get_user_words("pinyin", "nihao").unwrap().is_empty(),
+            "promote 收到带空格的码须先拆再晋升"
+        );
+
+        // 删除：同理
+        c.web_data_rpc(
+            "temp.remove",
+            &serde_json::json!({ "schemaId": "pinyin", "code": "hao ya", "text": "好呀" }),
+        )
+        .unwrap();
+        assert!(
+            store
+                .get_temp_words("pinyin", "haoya")
+                .unwrap_or_default()
+                .is_empty(),
+            "remove 收到带空格的码须先拆再删"
+        );
+    }
+
+    /// ★ 两张回收名单里的每个方法名都必须真在分派表里：改名而忘了改名单，回收就静默失效。
+    /// 拿空参数逐个调一遍：分派表认得的方法会因缺参报错（或照常返回），只有不认得的才报
+    /// `unknown method`。名单里的方法都只读或缺参即返回，空参数调用不会动数据。
+    #[test]
+    fn rpc_name_tables_match_the_dispatch_table() {
+        let c = coord("rpc_name_tables");
+        for &m in FULL_SCAN_METHODS
+            .iter()
+            .chain(BULK_WRITE_METHODS)
+            .chain(&["dict.search"])
+        {
+            if let Err(e) = c.web_data_rpc(m, &json!({})) {
+                assert!(
+                    !e.to_string().contains("unknown method"),
+                    "{m} 不在分派表里（改名了？同步更新名单）"
+                );
+            }
+        }
+    }
+
+    /// dict.reload / dict.flush：分派在表里；reload 越界路径报错。
+    #[test]
+    fn dict_reload_and_flush_are_dispatched() {
+        let c = coord("dict_reload_flush");
+        let r = c.web_data_rpc("dict.reload", &json!({})).unwrap();
+        assert!(r.get("reloaded").is_some_and(|v| v.is_array()), "{r}");
+        let r = c.web_data_rpc("dict.flush", &json!({})).unwrap();
+        assert_eq!(r, json!({"ok": true, "held": []}));
+        assert!(
+            c.web_data_rpc("dict.reload", &json!({"paths": ["/etc/passwd"]}))
+                .is_err()
+        );
+    }
+
+    /// 外部编辑（设计 user-dict-libraries-and-external-edit §4.2）：begin 返回路径与类别，编辑期间
+    /// 界面改同一张表被拒，end 载入手改并重建镜像，之后照常可改；越界与程序维护的文件拒绝。
+    #[test]
+    fn data_edit_session_rpcs() {
+        let c = coord("data_edit");
+        let root = c.user_store().unwrap().user_text_dir().to_path_buf();
+        let r = c
+            .web_data_rpc("data.beginEdit", &json!({"path": "phrases.dict.yaml"}))
+            .unwrap();
+        let abs = root.join("phrases.dict.yaml");
+        assert_eq!(r["path"], abs.to_string_lossy().as_ref(), "{r}");
+        assert_eq!(r["file"], "phrases.dict.yaml");
+        assert_eq!(r["kind"], "phrases");
+        let s = c.web_data_rpc("data.editSessions", &json!({})).unwrap();
+        assert_eq!(s[0]["file"], "phrases.dict.yaml", "{s}");
+        assert!(s[0]["since_secs"].is_u64(), "{s}");
+        let e = c
+            .web_data_rpc("phrase.add", &json!({"code": "dz", "text": "地址"}))
+            .unwrap_err();
+        assert!(e.to_string().contains("正在外部编辑"), "{e}");
+        std::fs::write(
+            &abs,
+            std::fs::read_to_string(&abs).unwrap() + "yx\tme@x.com\t1\n",
+        )
+        .unwrap();
+        let r = c
+            .web_data_rpc("data.endEdit", &json!({"path": abs.to_string_lossy()}))
+            .unwrap();
+        assert_eq!(r, json!({"changed": true, "issues": []}));
+        assert!(c.debug_phrase_texts("yx").contains(&"me@x.com".to_string()));
+        c.web_data_rpc("phrase.add", &json!({"code": "dz", "text": "地址"}))
+            .unwrap();
+        assert_eq!(
+            c.web_data_rpc("data.editSessions", &json!({})).unwrap(),
+            json!([])
+        );
+        assert!(
+            c.web_data_rpc("data.beginEdit", &json!({"path": "/etc/passwd"}))
+                .is_err()
+        );
+        assert!(
+            c.web_data_rpc("data.beginEdit", &json!({"path": "../user.dict.yaml"}))
+                .is_err()
+        );
+        let e = c
+            .web_data_rpc("data.beginEdit", &json!({"path": "pinyin/draft.dict.yaml"}))
+            .unwrap_err();
+        assert!(e.to_string().contains("自动维护"), "{e}");
+    }
+
+    /// 用户词会话：dict.flush 跳过暂停写回的文件并在返回里列出；endEdit 带回坏行。
+    #[test]
+    fn data_edit_words_holds_flush_and_reports_issues() {
+        let c = coord("data_edit_words");
+        let r = c
+            .web_data_rpc("data.beginEdit", &json!({"path": "pinyin/user.dict.yaml"}))
+            .unwrap();
+        assert_eq!(r["kind"], "words");
+        let r = c.web_data_rpc("dict.flush", &json!({})).unwrap();
+        assert_eq!(r, json!({"ok": true, "held": ["pinyin/user.dict.yaml"]}));
+        let f = std::path::PathBuf::from(
+            c.web_data_rpc("data.locate", &json!({"path": "pinyin/user.dict.yaml"}))
+                .unwrap()["path"]
+                .as_str()
+                .unwrap(),
+        );
+        std::fs::write(&f, std::fs::read_to_string(&f).unwrap() + "只有一列\n").unwrap();
+        let r = c
+            .web_data_rpc("data.endEdit", &json!({"path": "pinyin/user.dict.yaml"}))
+            .unwrap();
+        assert_eq!(r["issues"][0]["path"], "pinyin/user.dict.yaml", "{r}");
+        assert_eq!(r["issues"][0]["kind"], "bad_lines", "{r}");
+        assert_eq!(r["issues"][0]["lines"], 1, "{r}");
+        let r = c.web_data_rpc("dict.flush", &json!({})).unwrap();
+        assert_eq!(r, json!({"ok": true, "held": []}));
+        aurora_store::issues::clear(&f);
+    }
+
+    /// 租约到期按 end 处理：手改的短语载入，输入期短语层随之重建（协调器装的回调）。
+    #[test]
+    fn expired_edit_session_rebuilds_phrase_layer() {
+        let c = coord("data_edit_lease");
+        let store = c.user_store().cloned().unwrap();
+        c.web_data_rpc("data.beginEdit", &json!({"path": "phrases.dict.yaml"}))
+            .unwrap();
+        let f = store.phrases_path();
+        std::fs::write(
+            &f,
+            std::fs::read_to_string(&f).unwrap() + "yx\tme@x.com\t1\n",
+        )
+        .unwrap();
+        assert!(
+            !c.debug_phrase_texts("yx").contains(&"me@x.com".to_string()),
+            "前置：镜像未变"
+        );
+        assert_eq!(store.expire_edit_sessions(std::time::Duration::ZERO), 1);
+        assert!(c.debug_phrase_texts("yx").contains(&"me@x.com".to_string()));
+        assert_eq!(
+            c.web_data_rpc("data.editSessions", &json!({})).unwrap(),
+            json!([])
+        );
+    }
+
+    /// 编辑目标按类别给：用户词 / 候选调整带方案（拼音族折叠到 pinyin），小表只给类别；
+    /// begin 与 end 两种参数形式指向同一会话；locate 认方案。
+    #[test]
+    fn data_edit_accepts_kind_and_schema() {
+        let tag = "data_edit_kind";
+        let path =
+            std::env::temp_dir().join(format!("wind_webdata_{tag}_{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let store = Arc::new(Store::open(&path).unwrap());
+        let data = charsets_data_dir(tag);
+        std::fs::create_dir_all(data.join("schemas")).unwrap();
+        std::fs::write(
+            data.join("schemas/double_pinyin.schema.toml"),
+            "[engine]\ntype = \"pinyin\"\n",
+        )
+        .unwrap();
+        let c = Coordinator::new_headless_with_store(Config::default(), Some(&data), store);
+        let begin = |p: Value| c.web_data_rpc("data.beginEdit", &p);
+        let r = begin(json!({"schemaId": "double_pinyin", "kind": "words"})).unwrap();
+        assert_eq!(
+            (&r["file"], &r["kind"]),
+            (&json!("pinyin/user.dict.yaml"), &json!("words"))
+        );
+        let r = begin(json!({"schemaId": "wubi86", "kind": "shadow"})).unwrap();
+        assert_eq!(
+            (&r["file"], &r["kind"]),
+            (&json!("wubi86/shadow.dict.yaml"), &json!("shadow"))
+        );
+        for (kind, file) in [
+            ("phrases", "phrases.dict.yaml"),
+            ("quick_format", "quick_format.toml"),
+            ("common_chars", "common_chars.yaml"),
+        ] {
+            let r = begin(json!({"kind": kind})).unwrap();
+            assert_eq!(
+                (&r["file"], &r["kind"]),
+                (&json!(file), &json!(kind)),
+                "{r}"
+            );
+        }
+        for (kind, file) in [
+            ("temp", "pinyin/temp.dict.yaml"),
+            ("freq", "pinyin/freq.table.yaml"),
+        ] {
+            let r = begin(json!({"schemaId": "double_pinyin", "kind": kind})).unwrap();
+            assert_eq!(
+                (&r["file"], &r["kind"]),
+                (&json!(file), &json!(kind)),
+                "{r}"
+            );
+        }
+        assert!(begin(json!({"kind": "words"})).is_err(), "用户词要带方案");
+        assert!(begin(json!({"kind": "temp"})).is_err(), "临时词要带方案");
+        assert!(begin(json!({"kind": "draft", "schemaId": "wubi86"})).is_err());
+        assert!(begin(json!({"schemaId": "../x", "kind": "words"})).is_err());
+        assert_eq!(
+            c.web_data_rpc("data.editSessions", &json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            7
+        );
+        let r = c.web_data_rpc("dict.flush", &json!({})).unwrap();
+        let mut held: Vec<String> = serde_json::from_value(r["held"].clone()).unwrap();
+        held.sort();
+        assert_eq!(
+            held,
+            [
+                "pinyin/freq.table.yaml",
+                "pinyin/temp.dict.yaml",
+                "pinyin/user.dict.yaml"
+            ]
+        );
+        let end = |p: Value| c.web_data_rpc("data.endEdit", &p).unwrap();
+        end(json!({"schemaId": "double_pinyin", "kind": "words"}));
+        end(json!({"schemaId": "double_pinyin", "kind": "temp"}));
+        end(json!({"schemaId": "double_pinyin", "kind": "freq"}));
+        end(json!({"schemaId": "wubi86", "kind": "shadow"}));
+        for kind in ["phrases", "quick_format", "common_chars"] {
+            end(json!({"kind": kind}));
+        }
+        assert_eq!(
+            c.web_data_rpc("data.editSessions", &json!({})).unwrap(),
+            json!([])
+        );
+        let root = c.user_store().unwrap().user_text_dir().to_path_buf();
+        let at = |p: Value| c.web_data_rpc("data.locate", &p).unwrap()["path"].clone();
+        assert_eq!(
+            at(json!({"schemaId": "double_pinyin"})),
+            root.join("pinyin").to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            at(json!({"schemaId": "wubi86"})),
+            root.join("wubi86").to_string_lossy().as_ref()
+        );
+    }
+
+    /// 字符分类按 key 编辑：没有个人调整就先建一份只带 key 的；不认识的 key 拒绝。结束时格式坏
+    /// 报 invalid、改出厂范围 / 整表替换被忽略并报 invalid，修好后问题消失。
+    #[test]
+    fn data_edit_charsets_by_key_and_reports_invalid() {
+        let c = coord("data_edit_cs");
+        let store = c.user_store().cloned().unwrap();
+        let p = store.charset_path("common_han").unwrap();
+        assert!(!p.exists());
+        let begin =
+            |k: &str| c.web_data_rpc("data.beginEdit", &json!({"kind": "charsets", "key": k}));
+        let end = || {
+            c.web_data_rpc(
+                "data.endEdit",
+                &json!({"kind": "charsets", "key": "common_han"}),
+            )
+            .unwrap()
+        };
+        let e = begin("nope").unwrap_err().to_string();
+        assert!(e.contains("字符分类"), "{e}");
+        let r = begin("common_han").unwrap();
+        assert_eq!(
+            (&r["file"], &r["kind"]),
+            (&json!("charsets/common_han.yaml"), &json!("charsets"))
+        );
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.starts_with(aurora_config::charset_def::STORED_DOC_BANNER),
+            "{text}"
+        );
+        assert!(text.contains("key: common_han"), "{text}");
+        assert_eq!(end(), json!({"changed": false, "issues": []}));
+
+        begin("common_han").unwrap();
+        std::fs::write(&p, "---\nkey: common_han\nname: [\n").unwrap();
+        let r = end();
+        assert_eq!(r["issues"][0]["kind"], "invalid", "{r}");
+        assert_eq!(r["issues"][0]["file"], "charsets/common_han.yaml", "{r}");
+        assert!(
+            r["issues"][0]["message"].as_str().unwrap().contains("格式"),
+            "{r}"
+        );
+
+        begin("common_han").unwrap();
+        std::fs::write(
+            &p,
+            "---\nkey: common_han\nname: 我的常用\nranges: [U+4E00-U+4E01]\nreplace: true\n",
+        )
+        .unwrap();
+        let r = end();
+        assert_eq!(r["issues"][0]["kind"], "invalid", "{r}");
+        assert!(
+            r["issues"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("出厂字符分类的范围不能改"),
+            "{r}"
+        );
+        assert!(
+            c.engine_mgr()
+                .charsets()
+                .class_by_key("common_han")
+                .is_some()
+        );
+
+        begin("common_han").unwrap();
+        std::fs::write(&p, "---\nkey: common_han\nname: 我的常用\n").unwrap();
+        assert_eq!(end()["issues"], json!([]));
+    }
+
+    /// data.locate：数据目录、方案目录、数据文件；越界拒绝。
+    #[test]
+    fn data_locate_returns_paths_inside_data_dir() {
+        let c = coord("data_locate");
+        let root = c.user_store().unwrap().user_text_dir().to_path_buf();
+        let at = |p: Value| c.web_data_rpc("data.locate", &p);
+        assert_eq!(
+            at(json!({})).unwrap()["path"],
+            root.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            at(json!({"path": "wubi86"})).unwrap()["path"],
+            root.join("wubi86").to_string_lossy().as_ref()
+        );
+        assert!(at(json!({"path": "/etc"})).is_err());
+        assert!(at(json!({"path": "../x"})).is_err());
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(at(json!({})).unwrap()["exists"], true);
+        assert_eq!(at(json!({"path": "wubi86"})).unwrap()["exists"], false);
+        assert_eq!(
+            at(json!({"path": "wubi86/user.dict.yaml"})).unwrap()["exists"],
+            false
+        );
+        assert_eq!(
+            at(json!({"path": "pinyin_misread.yaml"})).unwrap()["path"],
+            root.join("pinyin_misread.yaml").to_string_lossy().as_ref(),
+            "设置端「误读表 → 打开文件」"
+        );
+    }
+
+    /// `correction.conflictExample`：设置页自定义纠错规则行的冲突示例。
+    #[test]
+    fn correction_conflict_example_contract() {
+        let c = coord("correction_conflict");
+        let call = |rule: &str| {
+            c.web_data_rpc("correction.conflictExample", &json!({ "rule": rule }))
+                .unwrap()
+        };
+        let r = call("uen=un");
+        assert_eq!(r["valid"], true, "{r}");
+        assert!(r["example"].as_str().unwrap().ends_with("u+en"), "{r}");
+        assert_eq!(call("ioa=iao"), json!({ "valid": true, "example": null }));
+        let bad = call("ogn");
+        assert_eq!(bad["valid"], false, "{bad}");
+        assert!(
+            bad["reason"].as_str().is_some_and(|s| !s.is_empty()),
+            "{bad}"
+        );
+        assert!(
+            c.web_data_rpc("correction.conflictExample", &json!({}))
+                .is_err()
+        );
+    }
+
+    /// ★ S3 复审 M3：这些方法也扫整表 / 是批量写，名单里不能缺。
+    #[test]
+    fn rpc_name_tables_cover_reviewed_methods() {
+        for m in ["dict.previewImport", "freq.clear", "shadow.clear"] {
+            assert!(scans_whole_table(m, &json!({})), "{m} 应标记扫描待回收");
+        }
+        assert!(
+            BULK_WRITE_METHODS.contains(&"schema.delete"),
+            "schema.delete 级联清六张表，应与 dict.clear 一样立即回收"
+        );
+    }
+
+    /// 协调器起来就迁完了全部旧数据、放下了 redb：设置页翻页（`dict.listPaged`）与窄查询照常，
+    /// 不再触发 redb 页缓存回收（无缓存可回收）。
+    #[test]
+    fn dict_list_paged_after_migration_has_no_redb_to_reclaim() {
+        use std::time::Duration;
+        const TICK: Duration = Duration::from_millis(20);
+        const SCAN_IDLE: Duration = Duration::from_millis(300);
+        const NEVER: Duration = Duration::from_secs(3600);
+        let wait_drops = |store: &Store, n: u64, timeout: Duration| {
+            let t0 = std::time::Instant::now();
+            while t0.elapsed() < timeout {
+                if store.page_cache_drops() >= n {
+                    return true;
+                }
+                std::thread::sleep(TICK / 2);
+            }
+            false
+        };
+
+        // 窄查询：只访问、不标记 ⇒ 长档一小时，短档不生效。
+        let c = coord("scan_reclaim_narrow");
+        let store = c.user_store().expect("有 store").clone();
+        store.spawn_idle_cache_reclaimer(NEVER, SCAN_IDLE, TICK);
+        c.web_data_rpc(
+            "dict.search",
+            &json!({ "schemaId": "pinyin", "query": "ni", "limit": 50 }),
+        )
+        .unwrap();
+        std::thread::sleep(SCAN_IDLE * 3);
+        assert_eq!(store.page_cache_drops(), 0, "窄查询不触发回收");
+
+        let c = coord("scan_reclaim");
+        let store = c.user_store().expect("有 store").clone();
+        store
+            .add_user_word("pinyin", "nihao", "你好", 100, 0)
+            .unwrap();
+        store.spawn_idle_cache_reclaimer(NEVER, SCAN_IDLE, TICK);
+        let page = json!({ "schemaId": "pinyin", "offset": 0, "limit": 50 });
+        let first = c.web_data_rpc("dict.listPaged", &page).unwrap();
+        let second = c.web_data_rpc("dict.listPaged", &page).unwrap();
+        assert!(store.is_paused(), "迁完即放下旧库");
+        assert!(
+            !wait_drops(&store, 1, SCAN_IDLE * 3),
+            "没有 redb 页缓存可回收"
+        );
+        let after = c.web_data_rpc("dict.listPaged", &page).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first, after);
+        assert_eq!(after["total"], json!(1));
+    }
+
+    /// 临时词分页：切片、跨页 total、服务端搜索（含编码中段命中）、跨页排序。
+    ///
+    /// 分页之前设置端是「一次全取 + 客户端过滤」，条目上万时开页即卡；搬到服务端后
+    /// 这四件事都得由 core 兑现，缺一样的症状分别是：翻页翻不动 / 页数算错 /
+    /// 搜索搜不全 / 排序只排当页那几十条。
+    /// ★ `dict.listPaged` 的三条路必须给出彼此自洽的结果。
+    ///
+    /// 这个入口被拆成了三条分流（不搜不排序走流式、只物化一页；要排序走全量；搜索走
+    /// 一遍扫描分两组），而它们从前是同一段代码。拆开之后最容易坏的不是某一条本身，
+    /// 而是**它们彼此不一致**——分页拼起来少一条、搜索路径的 total 与列表对不上、
+    /// 排序路径把某些条目漏掉。逐条比对是唯一测得到这些的办法。
+    #[test]
+    fn dict_list_paged_stays_consistent_across_its_three_paths() {
+        let c = coord("dict_paged");
+        let store = c.user_store().expect("有 store");
+        // `ni*` 三条供前缀命中；`haoya` 只能由「编码中段含 ya」命中；
+        // 「你好呀」只能由「词条内容含 你」命中。
+        for (code, text) in [
+            ("ni hao", "你好"),
+            ("ni men", "你们"),
+            ("ni hao ya", "你好呀"),
+            ("hao ya", "好呀"),
+            ("wo men", "我们"),
+        ] {
+            store
+                .add_user_word("pinyin", &code.replace(' ', ""), text, 100, 0)
+                .unwrap();
+        }
+        let call = |p: Value| c.web_data_rpc("dict.listPaged", &p).unwrap();
+        let texts = |v: &Value| -> Vec<String> {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|it| it["text"].as_str().unwrap_or("").to_string())
+                .collect()
+        };
+
+        // ── ① 流式路（不搜不排序）：分页拼起来必须等于一次取全部 ──────────────
+        let all = call(json!({ "schemaId": "pinyin", "offset": 0, "limit": 100 }));
+        assert_eq!(all["total"], json!(5));
+        let whole = texts(&all);
+        assert_eq!(whole.len(), 5);
+
+        let mut stitched = Vec::new();
+        for off in [0, 2, 4] {
+            let page = call(json!({ "schemaId": "pinyin", "offset": off, "limit": 2 }));
+            assert_eq!(page["total"], json!(5), "翻页不得改变总数");
+            stitched.extend(texts(&page));
+        }
+        assert_eq!(stitched, whole, "分页拼接必须逐条等于一次取全部");
+
+        // offset 越界给空页，但 total 照旧——分页器靠它算页数。
+        let over = call(json!({ "schemaId": "pinyin", "offset": 99, "limit": 2 }));
+        assert_eq!(over["total"], json!(5));
+        assert!(texts(&over).is_empty());
+
+        // ── ② 排序路：集合与 ① 相同，只是次序不同 ───────────────────────────
+        let sorted = call(json!({
+            "schemaId": "pinyin", "offset": 0, "limit": 100, "sortBy": "text", "sortDesc": false
+        }));
+        assert_eq!(sorted["total"], json!(5), "排序不得改变总数");
+        let mut a = texts(&sorted);
+        let mut b = whole.clone();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "排序路与流式路必须是同一批条目");
+
+        // ── ③ 搜索路：前缀命中在前，其余命中在后，且不重复 ──────────────────
+        let hit = call(json!({ "schemaId": "pinyin", "query": "ni", "offset": 0, "limit": 100 }));
+        let got = texts(&hit);
+        assert_eq!(
+            hit["total"].as_u64().unwrap() as usize,
+            got.len(),
+            "total 必须等于实际条数"
+        );
+        let mut dedup = got.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(dedup.len(), got.len(), "同一条不得同时进两组");
+        // `ni*` 三条靠编码前缀命中，必须排在最前。
+        assert_eq!(
+            &got[..3],
+            // key 序（扁平码字典序）：nihao < nihaoya < nimen。
+            &["你好".to_string(), "你好呀".to_string(), "你们".to_string()],
+            "编码前缀命中必须在前，实际 {got:?}"
+        );
+
+        // 只能由「编码中段」命中的那条：搜 `ya` 要捞到 `haoya`。
+        let mid = texts(&call(
+            json!({ "schemaId": "pinyin", "query": "ya", "offset": 0, "limit": 100 }),
+        ));
+        assert!(
+            mid.contains(&"好呀".to_string()),
+            "编码中段命中丢了：{mid:?}"
+        );
+        assert!(
+            mid.contains(&"你好呀".to_string()),
+            "编码中段命中丢了：{mid:?}"
+        );
+
+        // 只能由「词条内容」命中的：搜汉字。
+        let by_text = texts(&call(
+            json!({ "schemaId": "pinyin", "query": "我", "offset": 0, "limit": 100 }),
+        ));
+        assert_eq!(by_text, vec!["我们".to_string()], "按词条内容搜不到");
+    }
+
+    #[test]
+    fn temp_list_paged_slices_searches_and_sorts() {
+        let c = coord("temp_paged");
+        let store = c.user_store().expect("有 store");
+        // hao|ya → 起始字节位 {0,3}；另两条用于凑够三条好切片。
+        store
+            .learn_temp_word("pinyin", "haoya", "好呀", 500, 0b1001)
+            .unwrap();
+        store
+            .learn_temp_word("pinyin", "nihao", "你好", 500, 0b101)
+            .unwrap();
+        store
+            .learn_temp_word("pinyin", "women", "我们", 500, 0)
+            .unwrap();
+
+        let call = |params: Value| c.web_data_rpc("temp.listPaged", &params).unwrap();
+        let codes = |v: &Value| -> Vec<String> {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|it| it["code"].as_str().unwrap_or("").to_string())
+                .collect()
+        };
+
+        // ① 切片：total 是全集大小而非当页长度，否则设置端算出来的页数恒是 1。
+        let page1 = call(json!({ "schemaId": "pinyin", "offset": 0, "limit": 2 }));
+        assert_eq!(page1["total"], json!(3));
+        assert_eq!(codes(&page1).len(), 2);
+        let page2 = call(json!({ "schemaId": "pinyin", "offset": 2, "limit": 2 }));
+        assert_eq!(page2["total"], json!(3), "翻页不改变总数");
+        assert_eq!(codes(&page2).len(), 1, "末页只剩一条");
+
+        // ② 编码仍带音节空格（与 temp.list 同形，remove/promote 那两个入口靠它往返）。
+        let all = call(json!({ "schemaId": "pinyin", "offset": 0, "limit": 100 }));
+        assert!(
+            codes(&all).contains(&"hao ya".to_string()),
+            "分页版也得显示带空格的音节码，实际 {:?}",
+            codes(&all)
+        );
+
+        // ③ 搜索：编码**中段**命中。前缀扫描找不到 `haoya` 里的 `ya`，而用户并不知道
+        //    搜索框只认前缀。
+        let mid = call(json!({ "schemaId": "pinyin", "prefix": "ya", "offset": 0, "limit": 100 }));
+        assert_eq!(mid["total"], json!(1), "中段命中要算进 total");
+        assert_eq!(codes(&mid), vec!["hao ya".to_string()]);
+
+        // ④ 搜索：词条内容命中（拿汉字搜）。
+        let by_text =
+            call(json!({ "schemaId": "pinyin", "prefix": "我们", "offset": 0, "limit": 100 }));
+        assert_eq!(by_text["total"], json!(1));
+
+        // ⑤ 排序在切片**之前**做，故第一页拿到的是全局最大者，不是当页最大者。
+        let desc = call(json!({
+            "schemaId": "pinyin", "offset": 0, "limit": 1,
+            "sortBy": "code", "sortOrder": "desc"
+        }));
+        // `women` 那条 boundary 传的是 0（无切分信息），故显示码不插空格。
+        assert_eq!(codes(&desc), vec!["women".to_string()], "全局倒序的头一条");
+    }
+
+    /// 临时词筛选（t63）：按次数上限 / 最近使用截止时刻过滤，按最近使用排序；
+    /// 过滤在切片前做，`total` 是过滤后的全集大小（设置端据此翻页、按筛选结果批量删）。
+    #[test]
+    fn temp_list_paged_filters_by_count_and_last_used() {
+        let c = coord("temp_filter");
+        let store = c.user_store().expect("有 store");
+        store
+            .learn_temp_word("pinyin", "haoya", "好呀", 500, 0)
+            .unwrap();
+        store
+            .learn_temp_word("pinyin", "nihao", "你好", 500, 0)
+            .unwrap();
+        for _ in 0..2 {
+            store
+                .learn_temp_word("pinyin", "women", "我们", 500, 0)
+                .unwrap();
+        }
+        let call = |params: Value| c.web_data_rpc("temp.listPaged", &params).unwrap();
+        let texts = |v: &Value| -> Vec<String> {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|it| it["text"].as_str().unwrap_or("").to_string())
+                .collect()
+        };
+
+        // ① 次数上限：count ≤ 1 的只有两条（「我们」学了三次）。
+        let low = call(json!({ "schemaId": "pinyin", "maxCount": 1, "offset": 0, "limit": 1 }));
+        assert_eq!(low["total"], json!(2), "total 须是过滤后的全集而非全表");
+        assert_eq!(texts(&low).len(), 1, "过滤后照样切片");
+
+        // ② 每条都带 lastUsed（无词频记录时回落到加入时间，恒 > 0）。
+        let all = call(json!({ "schemaId": "pinyin", "offset": 0, "limit": 100 }));
+        for it in all["items"].as_array().unwrap() {
+            assert!(
+                it["lastUsed"].as_i64().unwrap_or(0) > 0,
+                "缺 lastUsed：{it}"
+            );
+        }
+
+        // ③ 最近使用截止：截止在未来 ⇒ 全中；截止在很久以前 ⇒ 一条不中。
+        let now = chrono::Utc::now().timestamp();
+        let future = call(
+            json!({ "schemaId": "pinyin", "usedBefore": now + 3600, "offset": 0, "limit": 100 }),
+        );
+        assert_eq!(future["total"], json!(3));
+        let past = call(
+            json!({ "schemaId": "pinyin", "usedBefore": now - 86400, "offset": 0, "limit": 100 }),
+        );
+        assert_eq!(past["total"], json!(0));
+
+        // ④ 词频记录里的最近使用优先于加入时间：选过一次的那条 lastUsed 取词频那份。
+        //    写一个确定的、远在加入时间之后的时间戳，才能断言「取的就是词频那份」——
+        //    用 record_freq 取当前时间，与加入时间常落在同一秒，`>=` 恒真、测不出东西。
+        let freq_ts = now + 7 * 86400;
+        store
+            .import_freq_rows(
+                "pinyin",
+                &[aurora_store::wdict::FreqIo {
+                    code: "nihao".into(),
+                    text: "你好".into(),
+                    count: 1,
+                    last_used: freq_ts,
+                }],
+            )
+            .unwrap();
+        let v = call(json!({ "schemaId": "pinyin", "offset": 0, "limit": 100,
+            "sortBy": "lastUsed", "sortOrder": "desc" }));
+        assert_eq!(texts(&v).len(), 3);
+        let last = |t: &str| {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|it| it["text"] == json!(t))
+                .unwrap()["lastUsed"]
+                .as_i64()
+                .unwrap()
+        };
+        assert_eq!(last("你好"), freq_ts, "有词频记录时 lastUsed 须取词频那份");
+        assert!(last("好呀") < freq_ts, "无词频记录的仍取加入时间");
+
+        // ⑤ 两个过滤条件取交集。
+        let both = call(
+            json!({ "schemaId": "pinyin", "maxCount": 1, "usedBefore": now - 86400,
+            "offset": 0, "limit": 100 }),
+        );
+        assert_eq!(both["total"], json!(0));
+    }
+
+    /// 影子规则分页：切片 + total，以及**按显示文本搜索/排序**。
+    ///
+    /// ★ 要害在显示文本：设置页「词」那一列显示的是 `candId` 里的模板原文，而 `word`
+    /// 存的是最后一次调整时的候选文本（`date`/`time` 这类求值型短语次日即过期）。
+    /// core 若只按 `word` 匹配，用户照着屏幕上的模板去搜会一条也搜不到——列表里明明
+    /// 就摆着那一行。
+    #[test]
+    fn shadow_list_paged_searches_by_display_text() {
+        let c = coord("shadow_paged");
+        let store = c.user_store().expect("有 store");
+        // 短语规则：word 是**过期的**候选文本，模板原文只存在于 candId 里。
+        store
+            .pin_shadow(
+                "pinyin",
+                "sj",
+                "2026-07-30",
+                Some("phrase:sj:{time(\"HH:mm:ss\")}"),
+                0,
+            )
+            .unwrap();
+        store.pin_shadow("pinyin", "nh", "你好", None, 1).unwrap();
+        store.delete_shadow("pinyin", "wm", "我们").unwrap();
+        // ★ 这一条是排序断言的支点：它的 word（`zzz`）与显示文本（模板 `阿`）在排序里
+        //   落在相反的两端。少了它，两种排法的头尾恰好重合，断言就成了摆设。
+        store
+            .pin_shadow("pinyin", "zz", "zzz", Some("phrase:zz:阿"), 0)
+            .unwrap();
+
+        let call = |params: Value| c.web_data_rpc("shadow.listPaged", &params).unwrap();
+        let words = |v: &Value| -> Vec<String> {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|it| it["word"].as_str().unwrap_or("").to_string())
+                .collect()
+        };
+
+        // ① 切片与 total（pin + delete 展平后共四行）。
+        let page1 = call(json!({ "schemaId": "pinyin", "offset": 0, "limit": 3 }));
+        assert_eq!(page1["total"], json!(4), "total 是全集大小，不是当页长度");
+        assert_eq!(words(&page1).len(), 3);
+        let page2 = call(json!({ "schemaId": "pinyin", "offset": 3, "limit": 3 }));
+        assert_eq!(page2["total"], json!(4), "翻页不改变总数");
+        assert_eq!(words(&page2).len(), 1, "末页只剩一条");
+
+        // ② 按模板原文搜（用户照着屏幕上看到的那串搜）。
+        let by_tpl =
+            call(json!({ "schemaId": "pinyin", "prefix": "HH:mm", "offset": 0, "limit": 9 }));
+        assert_eq!(
+            by_tpl["total"],
+            json!(1),
+            "模板原文必须可搜——它才是列表显示的东西"
+        );
+        assert_eq!(words(&by_tpl), vec!["2026-07-30".to_string()]);
+
+        // ③ 按 word 搜仍然命中（两条路都留着）。
+        let by_word =
+            call(json!({ "schemaId": "pinyin", "prefix": "你好", "offset": 0, "limit": 9 }));
+        assert_eq!(by_word["total"], json!(1));
+
+        // ④ 按编码搜。
+        let by_code =
+            call(json!({ "schemaId": "pinyin", "prefix": "wm", "offset": 0, "limit": 9 }));
+        assert_eq!(by_code["total"], json!(1));
+        assert_eq!(by_code["items"][0]["type"], json!("delete"));
+
+        // ⑤ 排序：`text` 是设置端列模型里「词」列的字段名，落到**显示文本**上。
+        //    `zz` 那条的 word 是 `zzz`、显示文本是模板 `阿`(U+963F)——按显示文本升序它
+        //    排在最后，按 word 升序它排在 `你好` 之前。断言取末位即可分辨两种实现。
+        let sorted = call(json!({
+            "schemaId": "pinyin", "offset": 0, "limit": 9,
+            "sortBy": "text", "sortOrder": "asc"
+        }));
+        assert_eq!(
+            words(&sorted).last().map(String::as_str),
+            Some("zzz"),
+            "按显示文本排序：比的是 candId 里的模板，不是 word"
+        );
+    }
+
+    /// 整表撤销。设置端此前靠「逐条 remove_rule」凑出清空，改服务端分页后它手上只剩
+    /// 当前页，那条路会**静默只清一页**——故 clear 必须是 core 侧的一次调用。
+    #[test]
+    fn shadow_clear_removes_every_rule() {
+        let c = coord("shadow_clear");
+        let store = c.user_store().expect("有 store");
+        for i in 0..3 {
+            store
+                .pin_shadow("pinyin", &format!("c{i}"), "词", None, 0)
+                .unwrap();
+        }
+        store.delete_shadow("pinyin", "d0", "词").unwrap();
+
+        let n = c
+            .web_data_rpc("shadow.clear", &json!({ "schemaId": "pinyin" }))
+            .unwrap();
+        assert!(n.as_u64().unwrap_or(0) > 0, "返回撤销条数");
+        let left = c
+            .web_data_rpc("shadow.listPaged", &json!({ "schemaId": "pinyin" }))
+            .unwrap();
+        assert_eq!(left["total"], json!(0), "一条不剩");
+    }
+
+    /// 词频列表的编码显示带音节空格 —— 边界靠**反查**，因为词频表自己不存 boundary。
+    ///
+    /// 三处来源依次问：系统词典 → 用户词表 → 临时词表。这里用后两者（无真实词库时
+    /// 系统词典为空，正好把反查降级链走一遍）。查不到的记录原样保持扁平，不得报错。
+    ///
+    /// 同时锁住 freq.delete：列表给的是带空格的 code，不拆就删不掉。
+    #[test]
+    fn freq_list_shows_spaced_code_via_boundary_lookup() {
+        let c = coord("freq_spaced");
+        let store = c.user_store().expect("有 store");
+        // 用户词提供边界：ni|hao
+        store
+            .add_user_word("pinyin", "nihao", "你好", 500, 0b101)
+            .unwrap();
+        // 临时词提供边界：hao|ya
+        store
+            .learn_temp_word("pinyin", "haoya", "好呀", 500, 0b1001)
+            .unwrap();
+        // 无处可查 → 保持扁平（存量简拼记录/已删词条的遗留记录都是这种）
+        store.record_freq("pinyin", "nihao", "你好").unwrap();
+        store.record_freq("pinyin", "haoya", "好呀").unwrap();
+        store.record_freq("pinyin", "wubian", "无边").unwrap();
+
+        let r = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &serde_json::json!({ "schemaId": "pinyin" }),
+            )
+            .unwrap();
+        let items = r.get("items").and_then(|v| v.as_array()).unwrap().clone();
+        let code_of = |text: &str| -> String {
+            items
+                .iter()
+                .find(|x| x.get("text").and_then(|t| t.as_str()) == Some(text))
+                .and_then(|x| x.get("code").and_then(|c| c.as_str()))
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        assert_eq!(code_of("你好"), "ni hao", "边界应从用户词表反查到");
+        assert_eq!(code_of("好呀"), "hao ya", "边界应从临时词表反查到");
+        assert_eq!(
+            code_of("无边"),
+            "wubian",
+            "三处都查不到 → 保持扁平码，不得报错"
+        );
+
+        // 删除：列表给的是带空格的 code
+        c.web_data_rpc(
+            "freq.delete",
+            &serde_json::json!({ "schemaId": "pinyin", "code": "ni hao", "text": "你好" }),
+        )
+        .unwrap();
+        let r2 = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &serde_json::json!({ "schemaId": "pinyin" }),
+            )
+            .unwrap();
+        let left = r2.get("total").and_then(|v| v.as_u64()).unwrap();
+        assert_eq!(left, 2, "带空格的 code 须先拆再删，否则删不掉");
+    }
+
+    /// 词频列表的编码搜索同样要能命中中段（与用户词库同款，两处是各自独立的实现）。
+    #[test]
+    fn freq_search_matches_code_middle_segment() {
+        let c = coord("freq_search_middle");
+        let store = c.user_store().expect("有 store");
+        store.record_freq("pinyin", "haoya", "好呀").unwrap();
+        store.record_freq("pinyin", "nihao", "你好").unwrap();
+
+        let hits = |q: &str| -> Vec<String> {
+            let r = c
+                .web_data_rpc(
+                    "freq.listPaged",
+                    &serde_json::json!({ "schemaId": "pinyin", "prefix": q }),
+                )
+                .unwrap();
+            r.get("items")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.get("text").and_then(|t| t.as_str()))
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        assert!(
+            hits("hao").contains(&"好呀".to_string()),
+            "前缀命中（原有行为）"
+        );
+        assert!(
+            hits("ya").contains(&"好呀".to_string()),
+            "中段命中：haoya 搜 ya 须能找到"
+        );
+        assert!(
+            hits("hao").contains(&"你好".to_string()),
+            "nihao 的中段 hao 同样要命中"
+        );
+        // 词频 key 是扁平码，但用户可能从用户词库列表复制带空格的串来搜
+        assert!(
+            hits("ni hao").contains(&"你好".to_string()),
+            "带空格的搜索词须先拆再匹配"
+        );
+    }
+
+    /// 编码搜索须能命中**中段**，不能只认前缀。
+    ///
+    /// redb 前缀扫描只覆盖开头，`haoya` 搜 `ya` 一条也出不来——而搜索框并没有告诉用户
+    /// 它只认前缀。词条内容搜索本就在做全量扫描，编码子串搭同一趟车，不增加扫描次数。
+    #[test]
+    fn dict_search_matches_code_middle_segment() {
+        let c = coord("search_middle");
+        let add = |code: &str, text: &str| {
+            c.web_data_rpc(
+                "dict.add",
+                &serde_json::json!({
+                    "schemaId": "pinyin", "code": code, "text": text, "weight": 500
+                }),
+            )
+            .unwrap();
+        };
+        add("hao ya", "好呀");
+        add("ni hao", "你好");
+
+        let hits = |q: &str| -> Vec<String> {
+            let r = c
+                .web_data_rpc(
+                    "dict.listPaged",
+                    &serde_json::json!({ "schemaId": "pinyin", "prefix": q }),
+                )
+                .unwrap();
+            r.get("items")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.get("text").and_then(|t| t.as_str()))
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        assert!(
+            hits("hao").contains(&"好呀".to_string()),
+            "前缀命中（原有行为）"
+        );
+        assert!(
+            hits("ya").contains(&"好呀".to_string()),
+            "中段命中：haoya 搜 ya 须能找到"
+        );
+        assert!(
+            hits("hao").contains(&"你好".to_string()),
+            "nihao 的中段 hao 同样要命中"
+        );
+        // 带空格的搜索词照样走中段匹配（先拆再比）
+        assert!(
+            hits("hao ya").contains(&"好呀".to_string()),
+            "带空格的搜索词须先拆再匹配"
+        );
+    }
+
+    /// 逐行短语文本（`wind:p1`）导入契约：预览落点 → 缺省全部导入 → 重导跳过。
+    ///
+    /// 命令短语不再受任何额外门控——它本就是短语的主要用途，且不会自行执行。
+    #[test]
+    fn phrase_text_import_contract() {
+        let q = char::from_u32(34).unwrap();
+        let nl = char::from_u32(10).unwrap();
+        let c = coord("phrasetext");
+        let text = format!(
+            "wind:p1 我的直通车{nl}kx (＾▽＾){nl}\
+             zd $CC({q}记事本{q}, proc.run({q}notepad.exe{q})){nl}\
+             sh $CC({q}跑{q}, proc.shell({q}echo hi{q})){nl}\
+             编码 缺少合法编码的一行{nl}"
+        );
+
+        let prev = c
+            .web_data_rpc("phrase.previewImportText", &json!({ "content": text }))
+            .unwrap();
+        assert_eq!(
+            prev.get("title").and_then(|v| v.as_str()),
+            Some("我的直通车")
+        );
+        let entries = prev.get("entries").unwrap().as_array().unwrap();
+        assert_eq!(entries.len(), 3, "非法行不进 entries");
+        assert_eq!(entries[0].get("line").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(
+            entries[0].get("status").and_then(|v| v.as_str()),
+            Some("new")
+        );
+
+        // 能力分级已移除：预览不再携带这三个字段。
+        for e in entries {
+            assert!(e.get("capability").is_none(), "不应再有 capability");
+            assert!(e.get("highRisk").is_none(), "不应再有 highRisk");
+            assert!(e.get("effects").is_none(), "不应再有 effects");
+        }
+
+        assert_eq!(
+            prev.get("problems").unwrap().as_array().unwrap().len(),
+            1,
+            "非法编码的行进 problems"
+        );
+        assert_eq!(
+            prev.get("counts")
+                .unwrap()
+                .get("new")
+                .and_then(|v| v.as_u64()),
+            Some(3)
+        );
+
+        // ★ 缺省全导：含 proc.shell 的那条也直接装进去。
+        let out = c
+            .web_data_rpc("phrase.importText", &json!({ "content": text }))
+            .unwrap();
+        assert_eq!(
+            out.get("added").and_then(|v| v.as_u64()),
+            Some(3),
+            "不传 accept 就全部导入，命令短语不再需要额外确认"
+        );
+
+        // 再来一次：已存在的原样跳过。
+        let again = c
+            .web_data_rpc("phrase.importText", &json!({ "content": text }))
+            .unwrap();
+        assert_eq!(again.get("added").and_then(|v| v.as_u64()), Some(0));
+        assert_eq!(
+            again.get("skippedExisting").and_then(|v| v.as_u64()),
+            Some(3)
+        );
+
+        // accept 仍可用于选择性导入。
+        let c2 = coord("phrasetextsel");
+        let sel = c2
+            .web_data_rpc(
+                "phrase.importText",
+                &json!({ "content": text, "accept": [2] }),
+            )
+            .unwrap();
+        assert_eq!(sel.get("added").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(
+            sel.get("skippedUnselected").and_then(|v| v.as_u64()),
+            Some(2)
+        );
+
+        // position 依次追加。
+        let list = c.web_data_rpc("phrase.listUser", &json!({})).unwrap();
+        let mut got: Vec<(&str, i64)> = list
+            .get("items")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| {
+                (
+                    x.get("code").and_then(|v| v.as_str()).unwrap(),
+                    x.get("position").and_then(|v| v.as_i64()).unwrap(),
+                )
+            })
+            .collect();
+        got.sort_by_key(|(_, p)| *p);
+        let codes: Vec<&str> = got.iter().map(|(c, _)| *c).collect();
+        assert_eq!(codes, vec!["kx", "zd", "sh"], "position 按导入顺序递增");
+    }
+
+    /// 语法坏掉的条目一律不装——无论有没有被 accept 选中。
+    #[test]
+    fn phrase_text_rejects_broken_syntax() {
+        let c = coord("phrasetextbad");
+        let text = "wind:p1\nbad $CC(\"未闭合\nok 好\n";
+        let out = c
+            .web_data_rpc(
+                "phrase.importText",
+                &json!({ "content": text, "accept": [2, 3] }),
+            )
+            .unwrap();
+        assert_eq!(out.get("added").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(
+            out.get("skippedInvalid").and_then(|v| v.as_u64()),
+            Some(1),
+            "显式 accept 也不能让语法错误的条目进库"
+        );
+    }
+
+    /// ★ 分发文本 / 设置页手动新增 / wdict 文件导入，三条路径对同一段文本必须落到
+    /// **同一形态**。分发格式没有、也不该有自己的一套反斜杠规则——用户在任一处学到的
+    /// 写法要能照搬，这条断言就是那个承诺。
+    #[test]
+    fn phrase_text_escape_domain_matches_manual_add() {
+        let bs = char::from_u32(92).unwrap();
+        let q = char::from_u32(34).unwrap();
+        let tab = char::from_u32(9).unwrap();
+        let nl = char::from_u32(10).unwrap();
+        let c = coord("phraseesc");
+
+        // 按约定写法：一个字面反斜杠写两个。目录名刻意取 `notes`——单写时反斜杠
+        // 紧跟 n 会变成换行，是最典型的静默损坏。
+        let plain = format!("D:{bs}{bs}notes");
+        let cmd = format!("$CC({q}x{q}, proc.run({q}D:{bs}{bs}notes{bs}{bs}a.exe{q}))");
+
+        c.web_data_rpc("phrase.add", &json!({ "code": "m1", "text": plain }))
+            .unwrap();
+        c.web_data_rpc("phrase.add", &json!({ "code": "m2", "text": cmd }))
+            .unwrap();
+        c.web_data_rpc(
+            "phrase.importText",
+            &json!({ "content": format!("wind:p1{nl}d1 {plain}{nl}d2 {cmd}{nl}") }),
+        )
+        .unwrap();
+        let hdr = format!(
+            "aurora_dict:{nl}  version: 1{nl}  sections:{nl}    phrases:{nl}      columns: [code, text, weight, position, enabled]{nl}{nl}--- !phrases{nl}"
+        );
+        c.web_data_rpc(
+            "phrase.import",
+            &json!({ "content": format!("{hdr}w1{tab}{plain}{tab}1800{tab}9{tab}1{nl}w2{tab}{cmd}{tab}1800{tab}10{tab}1{nl}") }),
+        )
+        .unwrap();
+
+        let list = c.web_data_rpc("phrase.listUser", &json!({})).unwrap();
+        let text_of = |src: &Value, code: &str| -> String {
+            src.get("items")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|it| it.get("code").and_then(|v| v.as_str()) == Some(code))
+                .and_then(|it| it.get("text").and_then(|v| v.as_str()))
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        assert_eq!(
+            text_of(&list, "m1"),
+            text_of(&list, "d1"),
+            "普通短语：手动新增与分发导入须同形"
+        );
+        assert_eq!(
+            text_of(&list, "m1"),
+            text_of(&list, "w1"),
+            "普通短语：手动新增与 wdict 导入须同形"
+        );
+        assert_eq!(
+            text_of(&list, "m2"),
+            text_of(&list, "d2"),
+            "命令短语：手动新增与分发导入须同形"
+        );
+        assert_eq!(
+            text_of(&list, "m2"),
+            text_of(&list, "w2"),
+            "命令短语：手动新增与 wdict 导入须同形"
+        );
+
+        // 双写确实得到**字面反斜杠**：回显是 escape 后的形态，字面反斜杠会再次双写。
+        // 若存进去的是换行（单写的后果），回显只会有一个反斜杠。
+        assert_eq!(
+            text_of(&list, "d1"),
+            plain,
+            "双写往返后仍是双写 ⇒ 存的是字面反斜杠"
+        );
+        assert_eq!(
+            text_of(&list, "d1").matches(bs).count(),
+            2,
+            "期望两个反斜杠，实得 {:?}",
+            text_of(&list, "d1")
+        );
+
+        // 对照：单写一个反斜杠时它紧跟 n 会变成换行，回显与双写**不同**。
+        // 这正是文档要求一律写两个的原因，也保证上面的断言不是恒真。
+        c.web_data_rpc(
+            "phrase.importText",
+            &json!({ "content": format!("wind:p1{nl}s1 D:{bs}notes{nl}") }),
+        )
+        .unwrap();
+        let list2 = c.web_data_rpc("phrase.listUser", &json!({})).unwrap();
+        assert_ne!(
+            text_of(&list2, "s1"),
+            plain,
+            "单写与双写必须落到不同内容，否则上面的断言证明不了什么"
+        );
+    }
+
+    /// 路径里反斜杠写少了 ⇒ 预览里给一句提示，但**不阻止导入**（轻微提示）。
+    #[test]
+    fn phrase_text_hints_single_backslash_path() {
+        let bs = char::from_u32(92).unwrap();
+        let q = char::from_u32(34).unwrap();
+        let nl = char::from_u32(10).unwrap();
+        let c = coord("phrasehint");
+
+        let bad = format!("$CC({q}x{q}, proc.run({q}D:{bs}notes{bs}a.exe{q}))");
+        let good = format!("$CC({q}x{q}, proc.run({q}D:{bs}{bs}notes{bs}{bs}a.exe{q}))");
+        let text = format!("wind:p1{nl}b1 {bad}{nl}g1 {good}{nl}");
+
+        let prev = c
+            .web_data_rpc("phrase.previewImportText", &json!({ "content": text }))
+            .unwrap();
+        let entries = prev.get("entries").unwrap().as_array().unwrap();
+        let hints_of = |i: usize| entries[i].get("hints").unwrap().as_array().unwrap();
+
+        assert_eq!(hints_of(0).len(), 1, "单写路径应有提示");
+        assert_eq!(
+            hints_of(0)[0].get("kind").and_then(|v| v.as_str()),
+            Some("controlCharInPath")
+        );
+        assert!(hints_of(1).is_empty(), "双写路径不该有提示");
+
+        // 轻微提示：不抦导入。
+        let out = c
+            .web_data_rpc(
+                "phrase.importText",
+                &json!({ "content": text, "accept": [2, 3] }),
+            )
+            .unwrap();
+        assert_eq!(
+            out.get("added").and_then(|v| v.as_u64()),
+            Some(2),
+            "带提示的条目照样可以导入"
+        );
+    }
+
+    /// 没有格式标记 ⇒ 整段拒绝。侦测「不猜」，报错优于误装。
+    #[test]
+    fn phrase_text_requires_marker() {
+        let c = coord("phrasetextmark");
+        assert!(
+            c.web_data_rpc("phrase.previewImportText", &json!({ "content": "kx 好\n" }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn dict_export_import_preview_contract() {
+        let c = coord("dictio");
+        c.web_data_rpc(
+            "dict.add",
+            &json!({ "schemaId": "wb", "code": "a", "text": "工", "weight": 100 }),
+        )
+        .unwrap();
+
+        // export → {content} 且是 wdict words 文本
+        let exp = c
+            .web_data_rpc("dict.export", &json!({ "schemaId": "wb" }))
+            .unwrap();
+        let content = exp
+            .get("content")
+            .and_then(|v| v.as_str())
+            .expect("content 字符串");
+        assert!(content.contains("--- !words"));
+
+        // preview 到空 schema:userWords 段全 willAdd
+        let prev = c
+            .web_data_rpc(
+                "dict.previewImport",
+                &json!({ "schemaId": "wb2", "content": content }),
+            )
+            .unwrap();
+        assert_eq!(
+            prev.get("format").and_then(|v| v.as_str()),
+            Some("winddict")
+        );
+        let uw = sec(&prev, "userWords");
+        assert_eq!(uw.get("willAdd").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(uw.get("willUpdate").and_then(|v| v.as_u64()), Some(0));
+        assert_eq!(uw.get("unchanged").and_then(|v| v.as_u64()), Some(0));
+        assert!(uw.get("samples").and_then(|v| v.as_array()).is_some());
+
+        // import(缺省 merge)→ sections[userWords]{added,skipped}
+        let out = c
+            .web_data_rpc(
+                "dict.import",
+                &json!({ "schemaId": "wb2", "content": content }),
+            )
+            .unwrap();
+        let uw = sec(&out, "userWords");
+        assert_eq!(uw.get("added").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(uw.get("skipped").and_then(|v| v.as_u64()), Some(0));
+
+        // 同内容再 import:权重相等 ⇒ 全 unchanged,added=updated=0
+        let out2 = c
+            .web_data_rpc(
+                "dict.import",
+                &json!({ "schemaId": "wb2", "content": content }),
+            )
+            .unwrap();
+        let uw2 = sec(&out2, "userWords");
+        assert_eq!(uw2.get("added").and_then(|v| v.as_u64()), Some(0));
+        assert_eq!(uw2.get("updated").and_then(|v| v.as_u64()), Some(0));
+        // preview 同内容 ⇒ unchanged=1,与落盘一致
+        let prev2 = c
+            .web_data_rpc(
+                "dict.previewImport",
+                &json!({ "schemaId": "wb2", "content": content }),
+            )
+            .unwrap();
+        assert_eq!(
+            sec(&prev2, "userWords")
+                .get("unchanged")
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        // replace:先加一条杂词,replace 导入后只剩导入内容
+        c.web_data_rpc(
+            "dict.add",
+            &json!({ "schemaId": "wb2", "code": "x", "text": "另", "weight": 1 }),
+        )
+        .unwrap();
+        let out3 = c
+            .web_data_rpc(
+                "dict.import",
+                &json!({ "schemaId": "wb2", "content": content, "strategy": "replace" }),
+            )
+            .unwrap();
+        assert_eq!(
+            sec(&out3, "userWords")
+                .get("added")
+                .and_then(|v| v.as_u64()),
+            Some(1),
+            "清空后全部计 added"
+        );
+        let listed = c
+            .web_data_rpc("dict.listPaged", &json!({ "schemaId": "wb2", "limit": 10 }))
+            .unwrap();
+        assert_eq!(
+            listed.get("total").and_then(|v| v.as_u64()),
+            Some(1),
+            "replace 应清掉 x"
+        );
+    }
+
+    #[test]
+    fn dict_import_rime_and_tsv_auto_detect() {
+        let c = coord("dictio_fmt");
+
+        // Rime:默认列 [text, code, weight],拼音码去空格;preview 回报 format + userWords 段
+        let rime = "# Rime dictionary\n---\nname: demo\nversion: \"1.0\"\n...\n你好\tni hao\t100\n世界\tshi jie\t50\n";
+        let prev = c
+            .web_data_rpc(
+                "dict.previewImport",
+                &json!({ "schemaId": "pinyin", "content": rime }),
+            )
+            .unwrap();
+        assert_eq!(prev.get("format").and_then(|v| v.as_str()), Some("rime"));
+        let uw = sec(&prev, "userWords");
+        assert_eq!(uw.get("willAdd").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(uw.get("skipped").and_then(|v| v.as_u64()), Some(0));
+        let out = c
+            .web_data_rpc(
+                "dict.import",
+                &json!({ "schemaId": "pinyin", "content": rime }),
+            )
+            .unwrap();
+        assert_eq!(
+            sec(&out, "userWords").get("added").and_then(|v| v.as_u64()),
+            Some(2)
+        );
+        let listed = c
+            .web_data_rpc(
+                "dict.listPaged",
+                &json!({ "schemaId": "pinyin", "prefix": "nihao", "limit": 10 }),
+            )
+            .unwrap();
+        assert_eq!(
+            listed.get("total").and_then(|v| v.as_u64()),
+            Some(1),
+            "拼音码应去空格入库(ni hao→nihao)"
+        );
+
+        // TSV:code\ttext\t[weight];坏行计入 skipped
+        let tsv = "a\t工\t10\nbadline\nab\t好\n";
+        let prev = c
+            .web_data_rpc(
+                "dict.previewImport",
+                &json!({ "schemaId": "wb", "content": tsv }),
+            )
+            .unwrap();
+        assert_eq!(prev.get("format").and_then(|v| v.as_str()), Some("tsv"));
+        let uw = sec(&prev, "userWords");
+        assert_eq!(uw.get("willAdd").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(uw.get("skipped").and_then(|v| v.as_u64()), Some(1));
+        let out = c
+            .web_data_rpc("dict.import", &json!({ "schemaId": "wb", "content": tsv }))
+            .unwrap();
+        let uw = sec(&out, "userWords");
+        assert_eq!(uw.get("added").and_then(|v| v.as_u64()), Some(2));
+        assert_eq!(uw.get("skipped").and_then(|v| v.as_u64()), Some(1));
+
+        // 不可识别内容 → 错误
+        assert!(
+            c.web_data_rpc(
+                "dict.previewImport",
+                &json!({ "schemaId": "wb", "content": "没有制表符的纯文本\n" }),
+            )
+            .is_err(),
+            "未知格式应报错"
+        );
+    }
+
+    #[test]
+    fn dict_import_rejects_engine_type_mismatch() {
+        let c = coord("dict_engine");
+        // 手工构造「拼音」来源的 wdict；导入到默认解析为码表的方案 → 应拒绝（防编码错乱）。
+        let content = "# x\nwind_dict:\n  version: 1\n  engine_type: pinyin\n  sections:\n    words:\n      columns: [code, text, weight, count]\n\n--- !words\nnihao\t你好\t0\t0\n";
+        let r = c.web_data_rpc(
+            "dict.import",
+            &json!({ "schemaId": "wb", "content": content }),
+        );
+        assert!(r.is_err(), "拼音来源导入码表方案应被拒绝");
+        // previewImport 回报 compatible=false + 来源引擎，供 UI 提前拦。
+        let prev = c
+            .web_data_rpc(
+                "dict.previewImport",
+                &json!({ "schemaId": "wb", "content": content }),
+            )
+            .unwrap();
+        assert_eq!(
+            prev.get("compatible").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            prev.get("sourceEngine").and_then(|v| v.as_str()),
+            Some("pinyin")
+        );
+    }
+
+    #[test]
+    fn shadow_roundtrip_shape() {
+        let c = coord("shadow");
+        // pin + delete 两条规则
+        c.web_data_rpc(
+            "shadow.pin",
+            &json!({ "schemaId": "wb", "code": "aaaa", "word": "恭恭敬敬", "candId": "c1", "position": 0 }),
+        )
+        .unwrap();
+        c.web_data_rpc(
+            "shadow.delete",
+            &json!({ "schemaId": "wb", "code": "bbbb", "word": "某词" }),
+        )
+        .unwrap();
+
+        let list = c
+            .web_data_rpc("shadow.list", &json!({ "schemaId": "wb" }))
+            .unwrap();
+        let arr = list.as_array().expect("shadow.list 应为数组");
+        assert_eq!(arr.len(), 2, "应有 pin/delete 两条");
+        // 每条形状对齐 ShadowRuleItem {code, word, candId, type, position?}
+        for it in arr {
+            assert!(it.get("code").is_some());
+            assert!(it.get("word").is_some());
+            assert!(it.get("candId").is_some());
+            let ty = it["type"].as_str().unwrap();
+            assert!(ty == "pin" || ty == "delete");
+        }
+        let pin = arr.iter().find(|i| i["type"] == "pin").unwrap();
+        assert_eq!(pin["candId"], "c1");
+        assert_eq!(pin["position"], 0);
+
+        // removeRule 后清空
+        c.web_data_rpc(
+            "shadow.removeRule",
+            &json!({ "schemaId": "wb", "code": "aaaa", "word": "恭恭敬敬" }),
+        )
+        .unwrap();
+        c.web_data_rpc(
+            "shadow.removeRule",
+            &json!({ "schemaId": "wb", "code": "bbbb", "word": "某词" }),
+        )
+        .unwrap();
+        let list2 = c
+            .web_data_rpc("shadow.list", &json!({ "schemaId": "wb" }))
+            .unwrap();
+        assert_eq!(list2.as_array().unwrap().len(), 0, "removeRule 后应清空");
+    }
+
+    #[test]
+    fn shadow_add_rule_routes_pin_and_hide() {
+        let c = coord("shadow_add_rule");
+        // pin：带 position
+        c.web_data_rpc(
+            "shadow.addRule",
+            &json!({ "schemaId": "wb", "code": "aaaa", "word": "恭恭敬敬", "type": "pin", "position": 2 }),
+        )
+        .unwrap();
+        let list = c
+            .web_data_rpc("shadow.list", &json!({ "schemaId": "wb" }))
+            .unwrap();
+        let arr = list.as_array().unwrap();
+        // aaaa 应有一条 pin，position=2
+        assert!(arr.iter().any(|e| e["code"] == "aaaa"));
+        // hide：转为 delete
+        c.web_data_rpc(
+            "shadow.addRule",
+            &json!({ "schemaId": "wb", "code": "bbbb", "word": "某词", "type": "hide" }),
+        )
+        .unwrap();
+        let list2 = c
+            .web_data_rpc("shadow.list", &json!({ "schemaId": "wb" }))
+            .unwrap();
+        assert!(
+            list2
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["code"] == "bbbb")
+        );
+    }
+
+    #[test]
+    fn stats_summary_daily_shape() {
+        let c = coord("stats");
+        let today = aurora_store::stats_report::today_str();
+        // 采集器记录今日：中文 2（码长 4，首选）。
+        c.debug_record_commit("你好", 4, 0, aurora_store::stats::CommitSource::Candidate);
+
+        // stats.summary 形状对齐富 StatsSummary（17 字段）。
+        let sum = c.web_data_rpc("stats.summary", &json!({})).unwrap();
+        for k in [
+            "today_chars",
+            "today_chinese",
+            "today_english",
+            "total_chars",
+            "active_days",
+            "daily_avg",
+            "streak_current",
+            "streak_max",
+            "week_chars",
+            "month_chars",
+            "max_day_chars",
+            "avg_code_len",
+            "first_select_rate",
+            "today_speed",
+            "overall_speed",
+            "max_speed",
+        ] {
+            assert!(sum.get(k).is_some(), "summary 缺 {k}");
+        }
+        assert_eq!(sum["today_chars"], 2);
+
+        // flush 落库后 stats.daily 形状对齐 DailyStatItem。
+        c.stat_collector().unwrap().flush();
+        let daily = c
+            .web_data_rpc("stats.daily", &json!({ "from": &today, "to": &today }))
+            .unwrap();
+        let arr = daily.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["d"], json!(today));
+        assert_eq!(arr[0]["tc"], 2);
+        assert_eq!(arr[0]["cc"], 2);
+
+        // pruneBefore(days) 返回 {pruned}。
+        let pr = c
+            .web_data_rpc("stats.pruneBefore", &json!({ "days": 0 }))
+            .unwrap();
+        assert!(pr.get("pruned").and_then(|v| v.as_u64()).is_some());
+
+        // clear 后 summary 归零（含采集器内存）。
+        c.web_data_rpc("stats.clear", &json!({})).unwrap();
+        let sum2 = c.web_data_rpc("stats.summary", &json!({})).unwrap();
+        assert_eq!(sum2["today_chars"], 0);
+        assert_eq!(sum2["total_chars"], 0);
+    }
+
+    #[test]
+    fn freq_list_delete_clear_shape() {
+        let c = coord("freq");
+        let store = c.user_store().unwrap();
+        store.record_freq("py", "de", "的").unwrap();
+        store.record_freq("py", "shi", "是").unwrap();
+
+        // freq.listPaged 形状对齐 PagedResult<FreqItem{code,text,count,lastUsed}>
+        let r = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &json!({ "schemaId": "py", "limit": 50, "offset": 0 }),
+            )
+            .unwrap();
+        assert_eq!(r["total"], 2);
+        let it = &r["items"][0];
+        for k in ["code", "text", "count", "lastUsed"] {
+            assert!(it.get(k).is_some(), "FreqItem 缺 {k}");
+        }
+        // delete
+        c.web_data_rpc(
+            "freq.delete",
+            &json!({ "schemaId": "py", "code": "de", "text": "的" }),
+        )
+        .unwrap();
+        let r2 = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &json!({ "schemaId": "py", "limit": 50, "offset": 0 }),
+            )
+            .unwrap();
+        assert_eq!(r2["total"], 1);
+        // clear 返回删除数（number）
+        let cleared = c
+            .web_data_rpc("freq.clear", &json!({ "schemaId": "py" }))
+            .unwrap();
+        assert_eq!(cleared, json!(1));
+    }
+
+    /// **转义形态只活在设置页边界上**：库里存真实文本，RPC 出口投影成 `\n`、
+    /// 入口还原回真实文本。
+    ///
+    /// 出入口必须**成对**。出口投影了而某个入口漏了还原，那个操作就会拿转义形态
+    /// 去匹配真实文本的 key —— 查不到、不报错、静默失败，表现为「删了没反应」。
+    /// 本测试逐个入口用「列表回什么就拿什么去操作」的方式走一遍，正是为了让漏接
+    /// 在这里失败，而不是等用户发现。
+    #[test]
+    fn phrase_ui_escape_boundary_roundtrips() {
+        let c = coord("phrase_esc");
+        // 设置页提交转义形态：`\n` 表示换行（用户在输入框里看到并编辑的就是它）
+        c.web_data_rpc(
+            "phrase.add",
+            &json!({ "code": "duo", "text": r"甲\n乙", "position": 0, "weight": 1 }),
+        )
+        .unwrap();
+
+        // 存储域：真实文本（含真换行），转义形态不入库
+        let store = c.user_store().unwrap();
+        assert!(
+            store
+                .list_phrases()
+                .unwrap()
+                .iter()
+                .any(|p| p.code == "duo" && p.text == "甲\n乙"),
+            "库里应是真换行；若这里失败说明入口没还原、把字面 \\n 存进去了"
+        );
+
+        // 出口：列表回转义形态，用户可继续编辑
+        let list = c.web_data_rpc("phrase.list", &json!({})).unwrap();
+        assert_eq!(
+            list[0]["text"],
+            json!(r"甲\n乙"),
+            "列表应回转义形态而非真换行——真换行在输入框里没法编辑"
+        );
+
+        // 候选侧：短语走 PhraseLayer（比用户词多一层 rebuild + cmdbar/模板分派），
+        // 拿到的必须是真实文本。用户词与短语两条路径不同，须各自锁住。
+        c.rebuild_phrases();
+        let hits = c.debug_phrase_texts("duo");
+        assert_eq!(hits.len(), 1, "短语候选应命中一条：{hits:?}");
+        assert_eq!(
+            hits[0], "甲\n乙",
+            "短语候选须是真实文本（含真换行），不是转义形态"
+        );
+
+        // 入口 setEnabled：拿列表回的形态去操作，必须命中
+        c.web_data_rpc(
+            "phrase.setEnabled",
+            &json!({ "code": "duo", "text": r"甲\n乙", "enabled": false }),
+        )
+        .unwrap();
+        let list2 = c.web_data_rpc("phrase.list", &json!({})).unwrap();
+        assert_eq!(
+            list2[0]["enabled"],
+            json!(false),
+            "setEnabled 未命中 → 该入口漏了 store_text"
+        );
+
+        // 入口 remove：同理
+        c.web_data_rpc(
+            "phrase.remove",
+            &json!({ "code": "duo", "text": r"甲\n乙" }),
+        )
+        .unwrap();
+        let after = c.web_data_rpc("phrase.list", &json!({})).unwrap();
+        assert!(
+            after.as_array().unwrap().is_empty(),
+            "remove 未命中 → 该入口漏了 store_text"
+        );
+    }
+
+    /// **命令栏语法条目在这条边界上原样穿过**：它的反斜杠归 cmdbar lexer 独占。
+    ///
+    /// 修复前本层与 lexer 各吃一个：用户按文档写 `open("D:\\notes")`，落库剩
+    /// `D:\notes`，lexer 再把 `\n` 解成换行 —— 路径静默损坏，只弹一句「命令执行失败」。
+    /// 判据是「用户在输入框里写的与库里的逐字相同」，出口回显同样不得改写。
+    #[test]
+    fn cmdbar_phrase_backslash_survives_ui_boundary() {
+        let c = coord("phrase_cmd_esc");
+        let src = r#"$CC("[打开临时目录]", open("D:\\notes\\temp"))"#;
+        c.web_data_rpc(
+            "phrase.add",
+            &json!({ "code": "cotmp", "text": src, "position": 0, "weight": 1 }),
+        )
+        .unwrap();
+
+        let store = c.user_store().unwrap();
+        assert!(
+            store
+                .list_phrases()
+                .unwrap()
+                .iter()
+                .any(|p| p.code == "cotmp" && p.text == src),
+            "库里应与用户所写逐字相同；失败即本层又吃掉了一个反斜杠"
+        );
+
+        let list = c.web_data_rpc("phrase.list", &json!({})).unwrap();
+        assert_eq!(list[0]["text"], json!(src), "出口回显不得再加反斜杠");
+
+        // 入口 remove 拿列表回的形态操作，仍须命中（出入口成对）
+        c.web_data_rpc("phrase.remove", &json!({ "code": "cotmp", "text": src }))
+            .unwrap();
+        assert!(
+            c.web_data_rpc("phrase.list", &json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "remove 未命中 → 出入口分流判据不一致"
+        );
+    }
+
+    /// 用户词库侧的同一契约（见 [`phrase_ui_escape_boundary_roundtrips`]）。
+    #[test]
+    fn user_word_ui_escape_boundary_roundtrips() {
+        let c = coord("word_esc");
+        c.web_data_rpc(
+            "dict.add",
+            &json!({ "schemaId": "wb", "code": "a", "text": r"甲\n乙", "weight": 100 }),
+        )
+        .unwrap();
+
+        // 存储域是真实文本
+        let store = c.user_store().unwrap();
+        let recs = store.get_user_words("wb", "a").unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].text, "甲\n乙", "库里应是真换行");
+
+        // 出口投影
+        let list = c
+            .web_data_rpc("dict.listPaged", &json!({ "schemaId": "wb" }))
+            .unwrap();
+        let item = &list["items"][0];
+        assert_eq!(item["text"], json!(r"甲\n乙"), "列表应回转义形态");
+
+        // 入口：拿列表回的形态删除，必须命中
+        c.web_data_rpc(
+            "dict.remove",
+            &json!({ "schemaId": "wb", "code": "a", "text": r"甲\n乙" }),
+        )
+        .unwrap();
+        assert!(
+            store.get_user_words("wb", "a").unwrap().is_empty(),
+            "remove 未命中 → 该入口漏了 store_text"
+        );
+    }
+
+    /// 字面反斜杠必须能表达：用户写 `\\n` 表示"反斜杠加字母 n"，不是换行。
+    /// 没有这条，`C:\note` 这类内容就会被存成 `C:` + 换行 + `ote`。
+    #[test]
+    fn literal_backslash_survives_ui_boundary() {
+        let c = coord("backslash_esc");
+        c.web_data_rpc(
+            "phrase.add",
+            &json!({ "code": "p", "text": r"C:\\note", "position": 0, "weight": 1 }),
+        )
+        .unwrap();
+        let store = c.user_store().unwrap();
+        assert!(
+            store
+                .list_phrases()
+                .unwrap()
+                .iter()
+                .any(|p| p.code == "p" && p.text == r"C:\note"),
+            "`\\\\n` 应还原为字面反斜杠加 n，而非换行"
+        );
+        let list = c.web_data_rpc("phrase.list", &json!({})).unwrap();
+        assert_eq!(list[0]["text"], json!(r"C:\\note"), "出口须重新转义反斜杠");
+    }
+
+    #[test]
+    fn phrase_crud_shape() {
+        let c = coord("phrase");
+        // add → list 形状对齐 PhraseItem{code,text,position,weight,enabled}
+        c.web_data_rpc(
+            "phrase.add",
+            &json!({ "code": "rq", "text": "2026-06-20", "position": 0, "weight": 1 }),
+        )
+        .unwrap();
+        let list = c.web_data_rpc("phrase.list", &json!({})).unwrap();
+        let arr = list.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        for k in ["code", "text", "position", "weight", "enabled"] {
+            assert!(arr[0].get(k).is_some(), "PhraseItem 缺 {k}");
+        }
+        assert_eq!(arr[0]["enabled"], json!(true));
+
+        // setEnabled
+        c.web_data_rpc(
+            "phrase.setEnabled",
+            &json!({ "code": "rq", "text": "2026-06-20", "enabled": false }),
+        )
+        .unwrap();
+        let list2 = c.web_data_rpc("phrase.list", &json!({})).unwrap();
+        assert_eq!(list2[0]["enabled"], json!(false));
+
+        // update 改 code（键迁移）
+        c.web_data_rpc(
+            "phrase.update",
+            &json!({ "code": "rq", "text": "2026-06-20", "newCode": "date", "weight": 5 }),
+        )
+        .unwrap();
+        let list3 = c.web_data_rpc("phrase.list", &json!({})).unwrap();
+        assert_eq!(list3[0]["code"], json!("date"));
+
+        // remove + resetDefault
+        c.web_data_rpc(
+            "phrase.remove",
+            &json!({ "code": "date", "text": "2026-06-20" }),
+        )
+        .unwrap();
+        assert_eq!(
+            c.web_data_rpc("phrase.list", &json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        c.web_data_rpc("phrase.resetDefault", &json!({})).unwrap();
+    }
+
+    /// 回归：phrase.resetDefault 只删用户短语，系统短语必须保留。
+    #[test]
+    fn phrase_reset_default_keeps_system() {
+        use aurora_store::phrases::SystemPhrase;
+
+        let path = std::env::temp_dir().join("wind_webdata_phrase_reset_keeps_system.redb");
+        let _ = std::fs::remove_file(&path);
+        let store = Arc::new(Store::open(&path).unwrap());
+
+        // 先同步一条系统短语（is_system=true）
+        store
+            .sync_system_phrases(&[SystemPhrase {
+                code: "rq".into(),
+                text: "$date".into(),
+                weight: 1000,
+                position: 0,
+                category: String::new(),
+                enabled: true,
+            }])
+            .unwrap();
+
+        // 构造 coordinator（共享同一个 Arc<Store>）
+        let c = Coordinator::new_headless_with_store(Config::default(), None, Arc::clone(&store));
+
+        // 加一条用户短语
+        c.web_data_rpc(
+            "phrase.add",
+            &json!({ "code": "me", "text": "自定义", "position": 0, "weight": 1 }),
+        )
+        .unwrap();
+
+        // 执行用户"清空"操作
+        c.web_data_rpc("phrase.resetDefault", &json!({})).unwrap();
+
+        // 系统短语应保留
+        let sys = c.web_data_rpc("phrase.listSystem", &json!({})).unwrap();
+        let sys_arr = sys.as_array().expect("listSystem 应返回数组");
+        assert_eq!(sys_arr.len(), 1, "系统短语应保留，不应被 resetDefault 删除");
+        assert_eq!(sys_arr[0]["code"], json!("rq"));
+
+        // 用户短语应为 0
+        let user = c.web_data_rpc("phrase.listUser", &json!({})).unwrap();
+        assert_eq!(user["total"], json!(0), "用户短语应被 resetDefault 清空");
+    }
+
+    // ───────── quick.*（快捷输入格式表）─────────
+
+    /// headless coordinator + 独立 redb（redb 是单写者，共用文件会让并发测试互相阻塞）。
+    /// 格式表走 `FormatTable::load(None)` → 内置出厂表。
+    fn quick_coord(tag: &str) -> (Arc<Coordinator>, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!("wind_webdata_quick_{tag}.redb"));
+        let _ = std::fs::remove_file(&path);
+        let store = Arc::new(Store::open(&path).unwrap());
+        (
+            Coordinator::new_headless_with_store(Config::default(), None, store),
+            path,
+        )
+    }
+
+    /// `commonChars.list` 是**分页**类别：返回 `{items,total}`，不是裸数组。
+    /// 形状由 spec 的 `paged: true` 决定走哪个解析分支，两边对不上会解析出空表且不报错。
+    fn common_char_rows_rpc(c: &Coordinator, params: Value) -> (Vec<Value>, usize) {
+        let v = c.web_data_rpc("commonChars.list", &params).unwrap();
+        let items = v
+            .get("items")
+            .and_then(|x| x.as_array())
+            .expect("commonChars.list 应返回 {items,total}")
+            .clone();
+        let total = v.get("total").and_then(|x| x.as_u64()).unwrap() as usize;
+        (items, total)
+    }
+
+    /// `commonChars.*` 五个方法的往返契约。
+    ///
+    /// ⚠️ 本装置没有 data_dir ⇒ 默认字表为空 ⇒ 全表里只剩用户加的字。故这里只测
+    /// `common:true` 方向：设成 `false` 与默认同向，按设计会**删覆盖**而不是写记录
+    /// （见 `Coordinator::apply_common_target`），在这个装置下等于无操作。
+    /// 「全表按字表原序 + 追加」那部分在 `aurora-candidate` 的 `list_all` 用例里测。
+    #[test]
+    fn common_chars_rpc_roundtrip() {
+        let c = coord("commonchars");
+        assert_eq!(common_char_rows_rpc(&c, json!({})).1, 0, "初始应为空表");
+
+        c.web_data_rpc("commonChars.set", &json!({ "char": "槮", "common": true }))
+            .unwrap();
+        let (rows, total) = common_char_rows_rpc(&c, json!({}));
+        assert_eq!((rows.len(), total), (1, 1));
+        assert_eq!(rows[0]["char"], json!("槮"));
+        assert_eq!(rows[0]["common"], json!(true));
+        assert!(
+            rows[0].get("baseCommon").is_some(),
+            "默认判定必须一起给：界面靠它显示「默认 → 现在」的对照"
+        );
+        assert_eq!(
+            rows[0]["adjusted"],
+            json!(true),
+            "改过的行要标出来——设置页靠它决定「恢复默认」灰不灰"
+        );
+
+        let q = c
+            .web_data_rpc("commonChars.query", &json!({ "char": "槮" }))
+            .unwrap();
+        assert_eq!(q["governed"], json!(true));
+        assert_eq!(q["override"], json!(true));
+        assert_eq!(q["effective"], json!(true));
+
+        // 默认字表管不着的字符：`governed` 如实报 false（纯提示），但 set **必须放行**
+        // ——issue #83 起词库管理全范围放开，用户要能把字根、注音、假名这些关掉。
+        let q2 = c
+            .web_data_rpc("commonChars.query", &json!({ "char": "、" }))
+            .unwrap();
+        assert_eq!(q2["governed"], json!(false), "默认字表确实管不着它");
+        assert_eq!(
+            q2["effective"],
+            json!(true),
+            "没覆盖时域外字符照常放行，故当前判定是「常用」"
+        );
+        c.web_data_rpc("commonChars.set", &json!({ "char": "、", "common": false }))
+            .expect("域外字符必须可登记");
+        let q3 = c
+            .web_data_rpc("commonChars.query", &json!({ "char": "、" }))
+            .unwrap();
+        assert_eq!(
+            q3["effective"],
+            json!(false),
+            "设了就得生效——写得进去却不生效，就是一条静默的死记录"
+        );
+        c.web_data_rpc("commonChars.reset", &json!({ "char": "、" }))
+            .unwrap();
+
+        // 多字符一律拒绝，不取首字符：悄悄截取会让用户以为整个词都标记了。
+        assert!(
+            c.web_data_rpc("commonChars.query", &json!({ "char": "我们" }))
+                .is_err()
+        );
+
+        c.web_data_rpc("commonChars.reset", &json!({ "char": "槮" }))
+            .unwrap();
+        assert_eq!(
+            common_char_rows_rpc(&c, json!({})).1,
+            0,
+            "恢复默认后该行回落默认判定；本装置默认表为空，故整行消失"
+        );
+
+        for ch in ["槮", "鬱"] {
+            c.web_data_rpc("commonChars.set", &json!({ "char": ch, "common": true }))
+                .unwrap();
+        }
+        assert_eq!(common_char_rows_rpc(&c, json!({})).1, 2);
+
+        // 搜索：只留出现在查询串里的字。用户既可以只打一个字，也可以粘一整句。
+        let (rows, total) = common_char_rows_rpc(&c, json!({ "prefix": "槮" }));
+        assert_eq!((rows.len(), total), (1, 1), "搜一个字应只剩它");
+        assert_eq!(rows[0]["char"], json!("槮"));
+        assert_eq!(
+            common_char_rows_rpc(&c, json!({ "prefix": "槮鬱" })).1,
+            2,
+            "整句搜索列出句中所有命中的字"
+        );
+        assert_eq!(common_char_rows_rpc(&c, json!({ "prefix": "的" })).1, 0);
+
+        // 分页：total 是**过滤后的总数**，不是当页条数——设置页靠它算总页数。
+        let (page, total) = common_char_rows_rpc(&c, json!({ "offset": 0, "limit": 1 }));
+        assert_eq!((page.len(), total), (1, 2), "当页 1 条、总数仍是 2");
+        let (page2, _) = common_char_rows_rpc(&c, json!({ "offset": 1, "limit": 1 }));
+        assert_ne!(page2[0]["char"], page[0]["char"], "第二页要换一条");
+
+        // 「只看已修改」这一档的**独立作用**在这个装置下测不出来（默认表为空 ⇒ 全表本就
+        // 只剩改过的那些，两个口径等价）。真正的用例在
+        // `aurora-coordinator/tests/common_chars_override.rs`，那里有真实的 8104 字表。
+        // 这里只确认参数被认得、不报错。
+        assert_eq!(
+            common_char_rows_rpc(&c, json!({ "onlyModified": true })).1,
+            2
+        );
+
+        c.web_data_rpc("commonChars.clear", &json!({})).unwrap();
+        assert_eq!(common_char_rows_rpc(&c, json!({})).1, 0, "整表恢复默认");
+        assert_eq!(
+            common_char_rows_rpc(&c, json!({ "onlyModified": true })).1,
+            0
+        );
+    }
+
+    /// 列表每行要带类型（Unicode 块名）与「这一类能不能整类批量」。
+    ///
+    /// 类型列的价值在于光看字形分不清东西：issue #83 的用户为此把整张码表喂给 AI 分类、
+    /// 再手工逐个试，才弄明白哪些会显示哪些不会。
+    #[test]
+    fn list_rows_carry_block_type_and_bulk_flag() {
+        let c = coord("commonchars_block");
+        // 一个汉字、一个注音——两类的 bulk 标志必须相反。
+        //
+        // ⚠️ 两者的方向刻意相反，都是为了让记录**真的落库**（否则不进列表）：本装置无
+        // data_dir ⇒ 默认字表为空 ⇒ 域内的「我」默认判生僻，域外的「ㄅ」默认判常用。
+        // 各自设成与默认相反的那一边，才不会被「同向即删覆盖」吃掉。
+        c.web_data_rpc("commonChars.set", &json!({ "char": "我", "common": true }))
+            .unwrap();
+        c.web_data_rpc("commonChars.set", &json!({ "char": "ㄅ", "common": false }))
+            .unwrap();
+        let (rows, _) = common_char_rows_rpc(&c, json!({}));
+        let find = |ch: &str| {
+            rows.iter()
+                .find(|r| r["char"] == json!(ch))
+                .unwrap_or_else(|| panic!("{ch} 不在列表里"))
+        };
+        let han = find("我");
+        assert_eq!(han["block"], json!("基本汉字"));
+        assert_eq!(han["blockRange"], json!("4E00-9FFF"));
+        assert_eq!(
+            han["blockBulkEditable"],
+            json!(false),
+            "汉字块必须禁止整类操作——放行就是一个一键作废整张默认字表的按钮"
+        );
+        let bopo = find("ㄅ");
+        assert_eq!(bopo["block"], json!("注音符号"));
+        assert_eq!(bopo["blockRange"], json!("3100-312F"));
+        assert_eq!(bopo["blockBulkEditable"], json!(true));
+    }
+
+    /// 整类批量：汉字块拒绝、域外块放行，且预览不写库。
+    ///
+    /// ⚠️ 本装置没有 data_dir ⇒ 扫不到任何词库 ⇒ 命中恒 0。这里锁的是**闸门与形态**，
+    /// 「真的扫得出 43 个注音」要靠带真实词库的装置，不在本层。
+    #[test]
+    fn bulk_by_block_refuses_han_blocks() {
+        let c = coord("commonchars_bulk");
+
+        // ⛔ 汉字块：一次误点就是七千多条覆盖，必须在 core 就拒绝，不能只靠界面灰显。
+        let err = c
+            .web_data_rpc(
+                "commonChars.bulkByBlock",
+                &json!({ "char": "我", "common": false, "apply": true }),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("基本汉字"), "报错要说清是哪一类: {err}");
+        assert!(err.contains("逐字"), "要给出替代做法: {err}");
+
+        // 域外块：放行，返回预览形态。
+        let o = c
+            .web_data_rpc(
+                "commonChars.bulkByBlock",
+                &json!({ "char": "ㄅ", "common": false }),
+            )
+            .unwrap();
+        assert_eq!(o["block"], json!("注音符号"));
+        assert!(
+            o.get("entries").is_some(),
+            "命中条目数必须给——`，` 只有 1 个字符却在 326 条词条里"
+        );
+        assert_eq!(o["written"], json!(0), "apply 缺省为 false，预览不得写库");
+        assert_eq!(
+            common_char_rows_rpc(&c, json!({})).1,
+            0,
+            "预览之后库里必须还是空的"
+        );
+    }
+
+    /// issue #83 的实际用法：一份 TOML 关掉整块表意文字描述符（IDC，U+2FF0–U+2FFF）。
+    ///
+    /// 用户的虎码码表给这 16 个记号整块编了码（`⿰`=rgs、`⿱`=rfi…），它们描述汉字间架
+    /// 结构、不是字，因而**不在默认字表的管辖域内**——放开准入前既滤不掉也加不进表。
+    /// 这条把「16 个字符一次导入并真的生效」端到端钉住：逐个点右键要点 16 次，导入是
+    /// 现实中会走的那条路，而它此前只有 parse 层的覆盖。
+    #[test]
+    fn ideographic_description_chars_can_be_hidden_via_import() {
+        let c = coord("commonchars_idc");
+        // 整块 16 个，与用户贴出的清单逐字对应。
+        let idc = "⿰⿱⿲⿳⿴⿵⿶⿷⿸⿹⿺⿻⿼⿽⿾⿿";
+        assert_eq!(idc.chars().count(), 16);
+
+        let o = c
+            .web_data_rpc(
+                "commonChars.import",
+                &json!({ "content": format!("wind_common_chars = 1\nrare = \"{idc}\"\n") }),
+            )
+            .unwrap();
+        assert_eq!(o["imported"], json!(16), "16 个应全部落库：{o:?}");
+        assert_eq!(
+            o["sameAsDefault"],
+            json!(0),
+            "默认放行 ⇒ 设为生僻是反向 ⇒ 一条都不该被当成「与默认同向」而丢掉"
+        );
+        assert!(
+            o["skipped"].as_array().unwrap().is_empty(),
+            "{:?}",
+            o["skipped"]
+        );
+
+        // 逐个查：登记后当前判定必须真的翻过来，否则就是一批静默的死记录。
+        for ch in idc.chars() {
+            let q = c
+                .web_data_rpc("commonChars.query", &json!({ "char": ch.to_string() }))
+                .unwrap();
+            assert_eq!(q["governed"], json!(false), "{ch} 本就不受默认字表管辖");
+            assert_eq!(q["baseCommon"], json!(true), "{ch} 默认是放行的");
+            assert_eq!(q["effective"], json!(false), "{ch} 设了就得生效");
+        }
+    }
+
+    /// 导出格式：单字符走文本段，多码位走数组段，**数组段为空时整段不出现**。
+    ///
+    /// 用户诉求原话：从不配置多码位的人，不该在文件里看到自己用不上的格式。
+    #[test]
+    fn export_omits_array_sections_when_no_multi_code_point_entries() {
+        let c = coord("commonchars_fmt");
+        // ⚠️ 方向各取「与本装置默认相反」的那一边，记录才留得下：本装置无 data_dir ⇒
+        // 域内的「槮」默认判生僻、域外的「ㄅ」默认判常用（见 `is_base_common`）。
+        c.web_data_rpc("commonChars.set", &json!({ "char": "槮", "common": true }))
+            .unwrap();
+        c.web_data_rpc("commonChars.set", &json!({ "char": "ㄅ", "common": false }))
+            .unwrap();
+        let text = c
+            .web_data_rpc("commonChars.export", &json!({}))
+            .unwrap()
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        assert!(text.contains("common = "), "单字符要走文本段: {text}");
+        assert!(
+            !text.contains("_seq"),
+            "没有多码位条目时不该出现数组段: {text}"
+        );
+
+        // 加一条 emoji 序列后，数组段才出现，且文本段仍在。
+        let ball = "\u{26BD}\u{FE0F}";
+        c.web_data_rpc("commonChars.set", &json!({ "char": ball, "common": false }))
+            .unwrap();
+        let text2 = c
+            .web_data_rpc("commonChars.export", &json!({}))
+            .unwrap()
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        assert!(
+            text2.contains("rare_seq = ["),
+            "多码位条目要走数组段: {text2}"
+        );
+        assert!(text2.contains(ball), "{text2}");
+
+        // 导到另一台机器：四个段都要读得回来。
+        let c2 = coord("commonchars_fmt2");
+        let o = c2
+            .web_data_rpc("commonChars.import", &json!({ "content": text2 }))
+            .unwrap();
+        assert_eq!(o["imported"], json!(3), "两个单字符 + 一条序列: {o:?}");
+        assert!(
+            o["skipped"].as_array().unwrap().is_empty(),
+            "{:?}",
+            o["skipped"]
+        );
+    }
+
+    /// `commonChars.export` / `previewImport` / `import` 的往返契约。
+    ///
+    /// ⚠️ 本装置没有 data_dir ⇒ 默认字表为空 ⇒ **域内（汉字/PUA）的字默认判「生僻」**，
+    /// 而**域外字符默认判「常用」**（没覆盖时读端一律放行，见 `is_base_common`）。
+    /// 这恰好把导入的两条分支都摆到台面上：与默认相反的真的落库；与默认同向的按设计
+    /// **删覆盖而不写记录**（`sameAsDefault`）。后者若被误实现成照单全收，`total` 会多出行来。
+    #[test]
+    fn common_chars_import_export_roundtrip() {
+        let c = coord("commonchars_io");
+        for ch in ["槮", "鬱"] {
+            c.web_data_rpc("commonChars.set", &json!({ "char": ch, "common": true }))
+                .unwrap();
+        }
+
+        let text = c
+            .web_data_rpc("commonChars.export", &json!({}))
+            .unwrap()
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        assert!(
+            text.contains("wind_common_chars = 1"),
+            "导出必须带格式标记，导入端靠它认出选错了文件：{text}"
+        );
+        assert!(text.contains('槮') && text.contains('鬱'), "{text}");
+
+        // 导到第二台「机器」（另一份 store）。
+        let c2 = coord("commonchars_io2");
+        let p = c2
+            .web_data_rpc("commonChars.previewImport", &json!({ "content": text }))
+            .unwrap();
+        assert_eq!(p["common"], json!(2));
+        assert_eq!(p["rare"], json!(0));
+        assert_eq!(
+            common_char_rows_rpc(&c2, json!({})).1,
+            0,
+            "预览不能写库——用户还没点确认"
+        );
+
+        let o = c2
+            .web_data_rpc("commonChars.import", &json!({ "content": text }))
+            .unwrap();
+        assert_eq!(o["imported"], json!(2));
+        assert_eq!(common_char_rows_rpc(&c2, json!({})).1, 2);
+
+        // 手写文件：与本装置默认同向的不写记录；非汉字照收（issue #83 放开后不再跳过）。
+        //
+        // 本装置无 data_dir ⇒ 默认表为空 ⇒ 域内的字默认全判生僻，而**域外字符默认判常用**
+        // （没覆盖时读端一律放行，见 `is_base_common`）。于是同为 rare 段：
+        // 「畢」与默认同向、不留记录，「、」与默认相反、必须留下——否则用户想隐藏顿号
+        // 会得到「导入成功但毫无变化」。
+        let hand = "wind_common_chars = 1\ncommon = \"玥\"\nrare = \"畢、\"\n";
+        let o2 = c2
+            .web_data_rpc("commonChars.import", &json!({ "content": hand }))
+            .unwrap();
+        assert_eq!(o2["imported"], json!(2), "「玥」与「、」都与默认相反");
+        assert_eq!(
+            o2["sameAsDefault"],
+            json!(1),
+            "与默认同向的字不该留记录——照单全收会把它钉死在当前判定上"
+        );
+        assert!(
+            o2["skipped"].as_array().unwrap().is_empty(),
+            "非汉字不再被跳过：{:?}",
+            o2["skipped"]
+        );
+        assert_eq!(common_char_rows_rpc(&c2, json!({})).1, 4);
+
+        // JSONL（备份包 `userdata/common_chars.jsonl` 那一段的原始形态）也认。
+        let c3 = coord("commonchars_io3");
+        let jsonl = "{\"ch\":\"槮\",\"common\":true}\n不是 json\n";
+        let o3 = c3
+            .web_data_rpc("commonChars.import", &json!({ "content": jsonl }))
+            .unwrap();
+        assert_eq!(o3["imported"], json!(1));
+        assert_eq!(o3["skipped"].as_array().unwrap().len(), 1, "坏行如实上报");
+
+        // replace：用文件里的状态覆盖现状，而不是「文件里的 + 我原有的」。
+        let only_yue = "wind_common_chars = 1\ncommon = \"玥\"\n";
+        c2.web_data_rpc(
+            "commonChars.import",
+            &json!({ "content": only_yue, "strategy": "replace" }),
+        )
+        .unwrap();
+        assert_eq!(common_char_rows_rpc(&c2, json!({})).1, 1);
+
+        // 选错文件：缺标记直接拒绝，而不是「已导入 0 条」那种让人以为文件坏了的回话。
+        assert!(
+            c2.web_data_rpc(
+                "commonChars.import",
+                &json!({ "content": "[quick]\nfoo = 1\n" })
+            )
+            .is_err()
+        );
+    }
+
+    /// 列头排序：三列都要认，且**降序不能破坏同值组内的顺序**。
+    ///
+    /// 用纯函数直接验，不经 RPC：webdata 的装置没有 data_dir，默认字表为空，凑不出
+    /// 「同值多行」的样本，而那正是稳定性要考察的东西。
+    #[test]
+    fn common_chars_sorting_is_stable_and_accepts_both_char_keys() {
+        use aurora_coordinator::handle_common_chars::CommonCharRow;
+        let row = |ch: char, base: bool, now: bool| {
+            let blk = aurora_candidate::block_of(ch);
+            CommonCharRow {
+                text: ch.to_string(),
+                common: now,
+                base_common: base,
+                overridden: base != now,
+                block: blk.name,
+                // 本条测的是排序稳定性，与字符类无关。
+                class: None,
+                block_bulk_editable: aurora_candidate::block_allows_bulk_edit(&blk),
+            }
+        };
+        // 入参顺序 = 字表原序，刻意不按码位排。
+        let seed = vec![
+            row('一', true, true),
+            row('乙', true, false),
+            row('二', true, true),
+            row('槮', false, true),
+        ];
+
+        // 不给 sortBy：原序不动。
+        let mut r = seed.clone();
+        sort_common_char_rows(&mut r, "", false);
+        assert_eq!(chars(&r), "一乙二槮", "无排序时须保持字表原序");
+
+        // 「字」那一列发来的是 `text`（复用 WordField::Text），也要认 `char`。
+        for key in ["text", "char"] {
+            let mut r = seed.clone();
+            sort_common_char_rows(&mut r, key, false);
+            let asc = chars(&r);
+            let mut expect: Vec<String> = seed.iter().map(|x| x.text.clone()).collect();
+            expect.sort_unstable();
+            assert_eq!(asc, expect.concat(), "sortBy={key} 应按码位升序");
+        }
+
+        // 按「当前」升序：生僻(false) 在前；同值组内保持字表原序。
+        let mut r = seed.clone();
+        sort_common_char_rows(&mut r, "common", false);
+        assert_eq!(chars(&r), "乙一二槮", "生僻的「乙」提前，其余保持原序");
+
+        // 降序：整体翻面，但**同值组内仍是字表原序**（这正是不能用 reverse() 的原因）。
+        let mut r = seed.clone();
+        sort_common_char_rows(&mut r, "common", true);
+        assert_eq!(
+            chars(&r),
+            "一二槮乙",
+            "常用的那组内部仍按字表原序，不能连同值一起倒过来"
+        );
+
+        // 未知字段一律不动，别把列表搅乱。
+        let mut r = seed.clone();
+        sort_common_char_rows(&mut r, "weight", false);
+        assert_eq!(chars(&r), "一乙二槮");
+    }
+
+    fn chars(rows: &[aurora_coordinator::handle_common_chars::CommonCharRow]) -> String {
+        rows.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    fn quick_rows(c: &Coordinator) -> Vec<Value> {
+        c.web_data_rpc("quick.list", &json!({}))
+            .unwrap()
+            .as_array()
+            .expect("quick.list 应返回数组")
+            .clone()
+    }
+
+    fn quick_row(rows: &[Value], id: &str) -> Value {
+        rows.iter()
+            .find(|r| r["id"] == json!(id))
+            .unwrap_or_else(|| panic!("列表里找不到 {id}"))
+            .clone()
+    }
+
+    /// 某类**启用**条目的 id 序（= 候选顺序）。
+    fn quick_enabled_ids(c: &Coordinator, kind: &str) -> Vec<String> {
+        quick_rows(c)
+            .iter()
+            .filter(|r| r["kind"] == json!(kind) && r["enabled"] == json!(true))
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn quick_list_covers_every_entry_with_samples() {
+        let (c, p) = quick_coord("list");
+        let rows = quick_rows(&c);
+        // 出厂表全部条目都在（含各类别）。
+        //
+        // 条数**对照内置表现取**，不写死数字：headless 无 data 目录 ⇒ 格式表回落
+        // `FormatTable::builtin()`，两边本就是同一份。写死数字的话，每次往出厂表加
+        // 条目这里都会红，而人只会把数字加一——那既没验证「有没有漏」，还平白多一次
+        // 无意义的改动。现在验的是真正该验的：**RPC 转换没吞掉也没重复任何条目**。
+        let builtin_count = aurora_quick_input::FormatTable::builtin().entries().len();
+        assert_eq!(
+            rows.len(),
+            builtin_count,
+            "quick.list 应逐条转换出厂表，实际 {} 条对 {} 条",
+            rows.len(),
+            builtin_count
+        );
+        for kind in ["date", "month_day", "year_month", "number", "calc"] {
+            assert!(
+                rows.iter().any(|r| r["kind"] == json!(kind)),
+                "缺类别 {kind}"
+            );
+        }
+        // 示例是「用示例输入跑真实候选生成」得到的，故出厂条目必须都有示例——
+        // 空示例说明那条渲染不出来，对出厂表而言就是缺陷。
+        let cn = quick_row(&rows, "date.cn");
+        let sample = cn["sample"].as_str().unwrap();
+        assert!(!sample.is_empty(), "date.cn 应有示例");
+        assert!(sample.ends_with('日'), "示例应是完整日期: {sample}");
+        // 金额示例用 1234.5 渲染，必然带「元」。
+        let amt = quick_row(&rows, "number.amount");
+        assert!(
+            amt["sample"].as_str().unwrap().contains('元'),
+            "金额示例: {}",
+            amt["sample"]
+        );
+        // 未调整时的初始状态
+        assert_eq!(cn["enabled"], json!(true));
+        assert_eq!(cn["adjusted"], json!(false));
+        assert_eq!(cn["moveIndex"], json!(0), "date.cn 是 date 组首条");
+        assert_eq!(cn["displayPos"], json!(1));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// ★★ 停用后条目**留在列表里**（否则用户再也开不回来），且 `moveIndex` 为 null
+    /// ——它不在候选里，移动没有意义。这正是设置页要补的那个缺口。
+    #[test]
+    fn quick_disabled_entry_stays_listed_and_unmovable() {
+        let (c, p) = quick_coord("disable");
+        let before = quick_rows(&c).len();
+        c.web_data_rpc(
+            "quick.setEnabled",
+            &json!({ "kind": "date", "id": "date.basic", "enabled": false }),
+        )
+        .unwrap();
+        let rows = quick_rows(&c);
+        assert_eq!(rows.len(), before, "管理列表条数不减");
+        let row = quick_row(&rows, "date.basic");
+        assert_eq!(row["enabled"], json!(false));
+        assert_eq!(row["adjusted"], json!(true));
+        assert_eq!(row["moveIndex"], Value::Null, "停用项不可移动");
+        // 候选那边确实少了一条
+        assert!(!quick_enabled_ids(&c, "date").contains(&"date.basic".to_string()));
+
+        // 双向：再开回来，且恢复原位（记录清空 → 回到基表位置）
+        c.web_data_rpc(
+            "quick.setEnabled",
+            &json!({ "kind": "date", "id": "date.basic", "enabled": true }),
+        )
+        .unwrap();
+        let row = quick_row(&quick_rows(&c), "date.basic");
+        assert_eq!(row["enabled"], json!(true));
+        assert_eq!(row["adjusted"], json!(false), "开回来即无残留规则");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 移动落到候选顺序上，并被 `moveIndex` 如实反映（UI 的上/下移就是 ±1 这个值）。
+    #[test]
+    fn quick_move_changes_candidate_order() {
+        let (c, p) = quick_coord("move");
+        assert_ne!(quick_enabled_ids(&c, "date")[0], "date.lunar");
+        c.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.lunar", "index": 0 }),
+        )
+        .unwrap();
+        assert_eq!(quick_enabled_ids(&c, "date")[0], "date.lunar");
+        assert_eq!(
+            quick_row(&quick_rows(&c), "date.lunar")["moveIndex"],
+            json!(0)
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 单条恢复只清这一条（store 的 `reset_quick_format_entry` 此前无调用点，
+    /// 注释写着「单条恢复要等设置页」——就是这个 RPC）。
+    #[test]
+    fn quick_reset_entry_only_clears_that_entry() {
+        let (c, p) = quick_coord("reset_entry");
+        c.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.lunar", "index": 0 }),
+        )
+        .unwrap();
+        c.web_data_rpc(
+            "quick.setEnabled",
+            &json!({ "kind": "date", "id": "date.basic", "enabled": false }),
+        )
+        .unwrap();
+        c.web_data_rpc(
+            "quick.resetEntry",
+            &json!({ "kind": "date", "id": "date.lunar" }),
+        )
+        .unwrap();
+        let rows = quick_rows(&c);
+        assert_eq!(quick_row(&rows, "date.lunar")["adjusted"], json!(false));
+        assert_eq!(
+            quick_row(&rows, "date.basic")["enabled"],
+            json!(false),
+            "不该连累别的条目"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn quick_reset_kind_clears_whole_kind_only() {
+        let (c, p) = quick_coord("reset_kind");
+        c.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.lunar", "index": 0 }),
+        )
+        .unwrap();
+        c.web_data_rpc(
+            "quick.setEnabled",
+            &json!({ "kind": "number", "id": "number.digits", "enabled": false }),
+        )
+        .unwrap();
+        c.web_data_rpc("quick.resetKind", &json!({ "kind": "date" }))
+            .unwrap();
+        let rows = quick_rows(&c);
+        assert!(
+            rows.iter()
+                .filter(|r| r["kind"] == json!("date"))
+                .all(|r| r["adjusted"] == json!(false)),
+            "date 全类恢复"
+        );
+        assert_eq!(
+            quick_row(&rows, "number.digits")["enabled"],
+            json!(false),
+            "别的类别不动"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// ★★ 端到端往返：导出 → 到一台干净的机器上导入 → 状态必须一致。
+    ///
+    /// 这是导入导出唯一真正要保证的事，也是最容易在"部分字段没写出去"时静默失守的地方。
+    #[test]
+    fn quick_export_import_roundtrip_restores_state() {
+        let (a, pa) = quick_coord("export_src");
+        // 造一组有代表性的改动：移动两条（含 LIFO 关系）+ 停用一条 + 跨类别
+        a.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.iso", "index": 1 }),
+        )
+        .unwrap();
+        a.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.lunar", "index": 0 }),
+        )
+        .unwrap();
+        a.web_data_rpc(
+            "quick.setEnabled",
+            &json!({ "kind": "number", "id": "number.digits", "enabled": false }),
+        )
+        .unwrap();
+        let content = a.web_data_rpc("quick.export", &json!({})).unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let expect_date = quick_enabled_ids(&a, "date");
+
+        let (b, pb) = quick_coord("export_dst");
+        let out = b
+            .web_data_rpc("quick.import", &json!({ "content": content }))
+            .unwrap();
+        assert_eq!(out["moved"], json!(2));
+        assert_eq!(out["disabled"], json!(1));
+        assert_eq!(out["skipped"].as_array().unwrap().len(), 0);
+
+        assert_eq!(
+            quick_enabled_ids(&b, "date"),
+            expect_date,
+            "★ 导入后 date 顺序必须与导出前一致（LIFO 顺序不能在往返中反转）"
+        );
+        assert_eq!(
+            quick_row(&quick_rows(&b), "number.digits")["enabled"],
+            json!(false),
+            "停用状态也要带过来"
+        );
+        let _ = std::fs::remove_file(&pa);
+        let _ = std::fs::remove_file(&pb);
+    }
+
+    /// `strategy = "replace"` 先清空既有调整；缺省（合并）则保留未被文件提到的。
+    #[test]
+    fn quick_import_replace_clears_existing() {
+        let (c, p) = quick_coord("import_replace");
+        c.web_data_rpc(
+            "quick.setEnabled",
+            &json!({ "kind": "calc", "id": "calc.equation", "enabled": false }),
+        )
+        .unwrap();
+        let file = "[[adjust]]\nkind = 'date'\ndisabled = ['date.basic']\n";
+
+        // 合并：两处改动并存
+        c.web_data_rpc("quick.import", &json!({ "content": file }))
+            .unwrap();
+        let rows = quick_rows(&c);
+        assert_eq!(quick_row(&rows, "calc.equation")["enabled"], json!(false));
+        assert_eq!(quick_row(&rows, "date.basic")["enabled"], json!(false));
+
+        // 替换：文件没提到的 calc 改动被清掉
+        c.web_data_rpc(
+            "quick.import",
+            &json!({ "content": file, "strategy": "replace" }),
+        )
+        .unwrap();
+        let rows = quick_rows(&c);
+        assert_eq!(
+            quick_row(&rows, "calc.equation")["enabled"],
+            json!(true),
+            "replace 应先清空"
+        );
+        assert_eq!(quick_row(&rows, "date.basic")["enabled"], json!(false));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 坏条目**如实报告**，不静默丢弃：用户看到「导入成功」却少了规则，
+    /// 无从判断是文件坏了还是程序吃了。
+    #[test]
+    fn quick_preview_import_reports_skipped() {
+        let (c, p) = quick_coord("preview");
+        let file = "\
+[[formats]]
+id = 'my.one'
+kind = 'date'
+text = '$YY.$MM'
+
+[[adjust]]
+kind = 'weather'
+disabled = ['x']
+
+[[adjust]]
+kind = 'date'
+moved = [{ id = 'date.lunar', position = 0 }]
+";
+        let pv = c
+            .web_data_rpc("quick.previewImport", &json!({ "content": file }))
+            .unwrap();
+        assert_eq!(pv["moved"], json!(1));
+        assert_eq!(pv["formats"], json!(1), "自定义条目如实计数");
+        assert_eq!(
+            pv["skipped"].as_array().unwrap().len(),
+            1,
+            "未知类别要报出来"
+        );
+        assert_eq!(pv["kinds"], json!(["date"]));
+        // 预览不得写库
+        assert!(
+            quick_rows(&c).iter().all(|r| r["adjusted"] == json!(false)),
+            "previewImport 必须是只读的"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 未知类别在 RPC 边界就被挡住，且错误信息带上那个类别名。
+    #[test]
+    fn quick_edit_rejects_unknown_kind() {
+        let (c, p) = quick_coord("bad_kind");
+        let e = c
+            .web_data_rpc(
+                "quick.setEnabled",
+                &json!({ "kind": "weather", "id": "x", "enabled": false }),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("weather"), "错误应指出是哪个类别: {e}");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    // ───────── quick.* 自定义条目（P2）─────────
+
+    /// 变量提示覆盖全部五类，且 year_month **不含**农历变量。
+    ///
+    /// 后一条是真实的分工（农历月与公历月不一一对应），提示里放了农历，用户照着给年月写
+    /// `$LMD`，保存时才会被拒——错误发生在他已经写完之后。
+    #[test]
+    fn quick_vars_covers_all_kinds_without_lunar_in_year_month() {
+        let (c, p) = quick_coord("vars");
+        let v = c.web_data_rpc("quick.vars", &json!({})).unwrap();
+        let arr = v.as_array().unwrap();
+        let kinds: Vec<&str> = arr.iter().map(|k| k["kind"].as_str().unwrap()).collect();
+        assert_eq!(
+            kinds,
+            vec!["date", "month_day", "year_month", "number", "calc"],
+            "五类齐全且按 ALL 序"
+        );
+        let names_of = |kind: &str| -> Vec<String> {
+            arr.iter().find(|k| k["kind"] == json!(kind)).unwrap()["vars"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert!(names_of("date").contains(&"LMD".to_string()));
+        assert!(
+            !names_of("year_month").contains(&"LMD".to_string()),
+            "年月不该提供农历变量"
+        );
+        assert!(names_of("calc").contains(&"RESULT".to_string()));
+        // 每条都得有说明，否则界面上是一列空白
+        for k in arr {
+            for var in k["vars"].as_array().unwrap() {
+                assert!(
+                    var["desc"].as_str().is_some_and(|d| !d.is_empty()),
+                    "kind={} 的 {} 缺说明",
+                    k["kind"],
+                    var["name"]
+                );
+            }
+        }
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 新增的条目立刻是一个**完整的**列表行：能列出、有示例、可调序、标着 user。
+    ///
+    /// 示例列尤其要验：它由「只清 moved/disabled、保留 added」的那份调整渲染，若沿用 P1 的
+    /// 空调整，用户条目的示例会恒为空——其它行都好，看着像是模板写错了。
+    #[test]
+    fn quick_add_yields_a_complete_row() {
+        let (c, p) = quick_coord("add");
+        let r = c
+            .web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        assert_eq!(r["id"], json!("date.u1"), "首条用户条目的 id");
+
+        let rows = quick_rows(&c);
+        let row = quick_row(&rows, "date.u1");
+        assert_eq!(row["user"], json!(true), "标记为用户条目");
+        assert_eq!(row["enabled"], json!(true));
+        assert!(row["moveIndex"].is_number(), "启用的条目可调序");
+        assert!(
+            row["sample"].as_str().is_some_and(|s| s.contains('/')),
+            "★ 示例必须渲染出来，实际: {:?}",
+            row["sample"]
+        );
+        // 出厂条目不该被误标
+        assert_eq!(quick_row(&rows, "date.cn")["user"], json!(false));
+
+        // 第二条接着排号，且落在本类末尾
+        let r2 = c
+            .web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$D-$M-$Y" }))
+            .unwrap();
+        assert_eq!(r2["id"], json!("date.u2"));
+        let rows = quick_rows(&c);
+        let date_ids: Vec<&str> = rows
+            .iter()
+            .filter(|r| r["kind"] == json!("date"))
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            &date_ids[date_ids.len() - 2..],
+            &["date.u1", "date.u2"],
+            "用户条目排在出厂条目之后"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 校验在**保存前**拒绝并说明原因（与文件加载「剔除 + warn」相反：那边用户看不到日志）。
+    #[test]
+    fn quick_add_rejects_invalid_template() {
+        let (c, p) = quick_coord("add_bad");
+        // year_month 没有 $D 系列
+        let e = c
+            .web_data_rpc(
+                "quick.add",
+                &json!({ "kind": "year_month", "text": "$Y-$M-$D" }),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("$D") || e.contains('D'),
+            "错误要指出是哪个变量: {e}"
+        );
+
+        let e = c
+            .web_data_rpc("quick.add", &json!({ "kind": "date", "text": "   " }))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("为空"), "纯空白模板要拒绝: {e}");
+
+        assert!(
+            quick_rows(&c).iter().all(|r| r["user"] == json!(false)),
+            "被拒绝的条目不得落库"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 模板逐字相同就拒绝，并**指出撞的是哪一条**——两行长得一模一样时用户看不到 id，
+    /// 只说「重复了」他还得自己一行行找。
+    #[test]
+    fn quick_add_rejects_duplicate_template() {
+        let (c, p) = quick_coord("add_dup");
+        let e = c
+            .web_data_rpc(
+                "quick.add",
+                &json!({ "kind": "date", "text": "$Y年$M月$D日" }),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("date.cn"), "要指出撞的是哪条: {e}");
+
+        c.web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        let e = c
+            .web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("date.u1"), "也要认出撞的是用户条目: {e}");
+
+        // 同一串模板在别的类别里不算撞车（各类各一张表）
+        c.web_data_rpc(
+            "quick.add",
+            &json!({ "kind": "month_day", "text": "$Y/$M/$D" }),
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// ★★ 出厂条目的模板不可改、不可删——这是 P2 的核心设计决策，由 store 的数据结构
+    /// 兜住（模板只存在 `added` 里）。这条测试是那个决策的守门。
+    #[test]
+    fn quick_factory_entries_refuse_edit_and_delete() {
+        let (c, p) = quick_coord("factory_ro");
+        let e = c
+            .web_data_rpc(
+                "quick.setText",
+                &json!({ "kind": "date", "id": "date.cn", "text": "$Y.$M.$D" }),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("不可修改"), "要说清为什么: {e}");
+
+        let e = c
+            .web_data_rpc("quick.delete", &json!({ "kind": "date", "id": "date.cn" }))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("只能停用"), "要指出替代做法: {e}");
+
+        // 模板没被动过
+        assert_eq!(
+            quick_row(&quick_rows(&c), "date.cn")["text"],
+            json!("$Y年$M月$D日")
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn quick_set_text_updates_user_entry_and_its_sample() {
+        let (c, p) = quick_coord("set_text");
+        // 模板不能与出厂条目逐字相同（`$CNL` 就是出厂的 number.cn_lower），否则被查重拦下
+        c.web_data_rpc("quick.add", &json!({ "kind": "number", "text": "约$CNL" }))
+            .unwrap();
+        c.web_data_rpc(
+            "quick.setText",
+            &json!({ "kind": "number", "id": "number.u1", "text": "共$THOU元" }),
+        )
+        .unwrap();
+        let row = quick_row(&quick_rows(&c), "number.u1");
+        assert_eq!(row["text"], json!("共$THOU元"));
+        assert!(
+            row["sample"].as_str().is_some_and(|s| s.starts_with('共')),
+            "示例要跟着变: {:?}",
+            row["sample"]
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 改写时把自己排除掉：只改了个错别字、模板本身没动，不该被判成「与自己重复」。
+    #[test]
+    fn quick_set_text_to_the_same_value_is_allowed() {
+        let (c, p) = quick_coord("set_same");
+        c.web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        c.web_data_rpc(
+            "quick.setText",
+            &json!({ "kind": "date", "id": "date.u1", "text": "$Y/$M/$D" }),
+        )
+        .expect("模板没变也该允许保存");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 删除连带清掉它的调序规则，否则重加一条同 id 的条目会被旧规则挪到意外的位置。
+    #[test]
+    fn quick_delete_also_drops_its_move_rule() {
+        let (c, p) = quick_coord("del");
+        c.web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        c.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.u1", "index": 0 }),
+        )
+        .unwrap();
+        assert_eq!(quick_rows(&c)[0]["id"], json!("date.u1"));
+
+        c.web_data_rpc("quick.delete", &json!({ "kind": "date", "id": "date.u1" }))
+            .unwrap();
+        let rows = quick_rows(&c);
+        assert!(
+            !rows.iter().any(|r| r["id"] == json!("date.u1")),
+            "已从列表消失"
+        );
+        // 重新加一条：不该继承已删条目的位置，而要落回本类末尾。
+        //
+        // 这里刻意**不断言 id 是什么**：删掉唯一一条后 id 会复用 `date.u1`，而那是安全的
+        // ——删除已连带清掉它的全部规则，没有任何东西还引用这个 id。真正要防的「删中间
+        // 一条后撞上仍存在的 id」由 `next_user_id_survives_a_deletion_in_the_middle` 覆盖。
+        // 断言 id 不复用会把一个无害的实现细节钉死。
+        let r = c
+            .web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        let fresh = r["id"].as_str().unwrap().to_string();
+        let rows = quick_rows(&c);
+        assert_ne!(rows[0]["id"], json!(fresh), "★ 不得继承已删条目的首位");
+        let date_ids: Vec<&str> = rows
+            .iter()
+            .filter(|r| r["kind"] == json!("date"))
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(*date_ids.last().unwrap(), fresh, "落回本类末尾");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// ★★ 「恢复默认」清调序与停用，**保留用户条目**。
+    ///
+    /// 端到端守门：store 那层已有同名测试，这里再钉一次 RPC 全链路——右键菜单的
+    /// `resetKind` 与设置页共用这条路径，而它一度是 `t.remove(kind)`（会删穿用户条目）。
+    #[test]
+    fn quick_reset_kind_keeps_user_entries() {
+        let (c, p) = quick_coord("reset_keep");
+        c.web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        c.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.u1", "index": 0 }),
+        )
+        .unwrap();
+        c.web_data_rpc(
+            "quick.setEnabled",
+            &json!({ "kind": "date", "id": "date.cn", "enabled": false }),
+        )
+        .unwrap();
+
+        c.web_data_rpc("quick.resetKind", &json!({ "kind": "date" }))
+            .unwrap();
+
+        let rows = quick_rows(&c);
+        let row = quick_row(&rows, "date.u1");
+        assert_eq!(row["user"], json!(true), "★ 用户条目必须还在");
+        assert_eq!(row["adjusted"], json!(false), "它的调序规则被清掉了");
+        assert_eq!(quick_row(&rows, "date.cn")["enabled"], json!(true));
+        let date_ids: Vec<&str> = rows
+            .iter()
+            .filter(|r| r["kind"] == json!("date"))
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            *date_ids.last().unwrap(),
+            "date.u1",
+            "回到「用户条目在末尾」的初始位置"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// 导出/导入往返带上用户条目本身（不只是调整）。
+    #[test]
+    fn quick_roundtrip_carries_user_entries() {
+        let (a, pa) = quick_coord("rt_user_a");
+        a.web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        a.web_data_rpc(
+            "quick.add",
+            &json!({ "kind": "calc", "text": "结果是$RESULT" }),
+        )
+        .unwrap();
+        a.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.u1", "index": 0 }),
+        )
+        .unwrap();
+        let content = a.web_data_rpc("quick.export", &json!({})).unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let (b, pb) = quick_coord("rt_user_b");
+        let o = b
+            .web_data_rpc("quick.import", &json!({ "content": content }))
+            .unwrap();
+        assert_eq!(o["formats"], json!(2), "两条自定义条目都导入了");
+        assert!(
+            o["skipped"].as_array().unwrap().is_empty(),
+            "不该有跳过项: {:?}",
+            o["skipped"]
+        );
+
+        let rows = quick_rows(&b);
+        assert_eq!(rows[0]["id"], json!("date.u1"), "调序规则也带过来了");
+        assert_eq!(rows[0]["text"], json!("$Y/$M/$D"));
+        assert_eq!(quick_row(&rows, "calc.u1")["text"], json!("结果是$RESULT"));
+        let _ = std::fs::remove_file(&pa);
+        let _ = std::fs::remove_file(&pb);
+    }
+
+    /// ★★ 导入时 id 冲突：换新 id 之后，**引用它的 `moved` 规则必须一起改写**。
+    ///
+    /// 场景是两台机器各有一条 `date.u1`（内容不同）。若只改 `[[formats]]` 侧不改 `moved` 侧，
+    /// 那条移动规则会指向本机原有的 `date.u1`——症状是「导入后顺序不对」，两条条目都在、
+    /// 都没报错。与漏 `.rev()` 同属导入重放的引用完整性。
+    #[test]
+    fn quick_import_remaps_conflicting_id_and_its_move_rule() {
+        // A 机：date.u1 = $Y/$M/$D，并把它移到首位
+        let (a, pa) = quick_coord("remap_a");
+        a.web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        a.web_data_rpc(
+            "quick.move",
+            &json!({ "kind": "date", "id": "date.u1", "index": 0 }),
+        )
+        .unwrap();
+        let content = a.web_data_rpc("quick.export", &json!({})).unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // B 机：已有一条**内容不同**的 date.u1
+        let (b, pb) = quick_coord("remap_b");
+        b.web_data_rpc(
+            "quick.add",
+            &json!({ "kind": "date", "text": "本机原有$Y" }),
+        )
+        .unwrap();
+
+        let o = b
+            .web_data_rpc("quick.import", &json!({ "content": content }))
+            .unwrap();
+        assert_eq!(o["formats"], json!(1));
+
+        let rows = quick_rows(&b);
+        // 本机原有那条内容不变
+        assert_eq!(quick_row(&rows, "date.u1")["text"], json!("本机原有$Y"));
+        // 导入的那条换了 id
+        let fresh = quick_row(&rows, "date.u2");
+        assert_eq!(fresh["text"], json!("$Y/$M/$D"), "导入的条目改用 u2");
+        // ★ 移动规则跟着改写：排首位的是导入的那条，不是本机原有的
+        assert_eq!(
+            rows[0]["id"],
+            json!("date.u2"),
+            "★ moved 必须一起改写，否则规则会指向本机原有的 date.u1"
+        );
+        let _ = std::fs::remove_file(&pa);
+        let _ = std::fs::remove_file(&pb);
+    }
+
+    /// 重复导入同一份文件是幂等的：模板相同的条目按「撞车」跳过并如实报告，
+    /// 而不是每导一次就多出一条一模一样的候选。
+    #[test]
+    fn quick_import_twice_does_not_duplicate_entries() {
+        let (a, pa) = quick_coord("idem_a");
+        a.web_data_rpc("quick.add", &json!({ "kind": "date", "text": "$Y/$M/$D" }))
+            .unwrap();
+        let content = a.web_data_rpc("quick.export", &json!({})).unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (b, pb) = quick_coord("idem_b");
+        b.web_data_rpc("quick.import", &json!({ "content": &content }))
+            .unwrap();
+        let o = b
+            .web_data_rpc("quick.import", &json!({ "content": &content }))
+            .unwrap();
+        assert_eq!(o["formats"], json!(0), "第二次一条都不该写入");
+        assert_eq!(
+            o["skipped"].as_array().unwrap().len(),
+            1,
+            "跳过要如实报告: {:?}",
+            o["skipped"]
+        );
+        assert_eq!(
+            quick_rows(&b)
+                .iter()
+                .filter(|r| r["user"] == json!(true))
+                .count(),
+            1,
+            "只有一条用户条目"
+        );
+        let _ = std::fs::remove_file(&pa);
+        let _ = std::fs::remove_file(&pb);
+    }
+
+    /// `strategy = "replace"` 连用户条目一起清（语义是「用文件覆盖现状」），
+    /// 与面向用户的「恢复默认」刻意相反。
+    #[test]
+    fn quick_import_replace_clears_user_entries_too() {
+        let (a, pa) = quick_coord("repl_user_a");
+        a.web_data_rpc("quick.add", &json!({ "kind": "calc", "text": "得$RESULT" }))
+            .unwrap();
+        let content = a.web_data_rpc("quick.export", &json!({})).unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let (b, pb) = quick_coord("repl_user_b");
+        b.web_data_rpc("quick.add", &json!({ "kind": "date", "text": "本机的$Y" }))
+            .unwrap();
+        b.web_data_rpc(
+            "quick.import",
+            &json!({ "content": content, "strategy": "replace" }),
+        )
+        .unwrap();
+
+        let rows = quick_rows(&b);
+        assert!(
+            !rows.iter().any(|r| r["text"] == json!("本机的$Y")),
+            "replace 应清掉本机原有的用户条目"
+        );
+        assert_eq!(quick_row(&rows, "calc.u1")["text"], json!("得$RESULT"));
+        let _ = std::fs::remove_file(&pa);
+        let _ = std::fs::remove_file(&pb);
+    }
+
+    /// 用一份 system.phrases.toml 起一个带 data_dir 的 headless coordinator。
+    fn coord_with_phrase_toml(tag: &str, toml: &str) -> (Arc<Coordinator>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("wind_phrase_reread_{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("system.phrases.toml"), toml).unwrap();
+        let store = Arc::new(Store::open(dir.join("store.redb")).unwrap());
+        let c = Coordinator::new_headless_with_store(Config::default(), Some(&dir), store);
+        (c, dir)
+    }
+
+    fn system_codes(c: &Coordinator) -> Vec<(String, String)> {
+        c.web_data_rpc("phrase.listSystem", &json!({}))
+            .unwrap()
+            .as_array()
+            .expect("listSystem 应返回数组")
+            .iter()
+            .map(|v| {
+                (
+                    v["code"].as_str().unwrap().to_string(),
+                    v["text"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// phrase.resetSystem 应重读 TOML：手工编辑后无需重启服务即可生效。
+    #[test]
+    fn phrase_reset_system_rereads_toml() {
+        let (c, dir) = coord_with_phrase_toml("ok", "[[phrases]]\ncode = 'rq'\ntext = '$date'\n");
+
+        assert_eq!(system_codes(&c), vec![("rq".into(), "$date".into())]);
+
+        // 手工编辑：改文本 + 增一条
+        std::fs::write(
+            dir.join("system.phrases.toml"),
+            "[[phrases]]\ncode = 'rq'\ntext = '$datetime'\n\n[[phrases]]\ncode = 'xx'\ntext = '新增'\n",
+        )
+        .unwrap();
+
+        c.web_data_rpc("phrase.resetSystem", &json!({})).unwrap();
+
+        let mut got = system_codes(&c);
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("rq".to_string(), "$datetime".to_string()),
+                ("xx".to_string(), "新增".to_string()),
+            ],
+            "重读后应取到编辑后的文本并含新增条目"
+        );
+    }
+
+    /// TOML 语法错误时必须回退到启动缓存，绝不能把库里系统短语清空。
+    #[test]
+    fn phrase_reset_system_falls_back_on_broken_toml() {
+        let (c, dir) =
+            coord_with_phrase_toml("broken", "[[phrases]]\ncode = 'rq'\ntext = '$date'\n");
+
+        // 写坏 TOML（未闭合引号）
+        std::fs::write(
+            dir.join("system.phrases.toml"),
+            "[[phrases]]\ncode = 'rq\ntext = ",
+        )
+        .unwrap();
+
+        c.web_data_rpc("phrase.resetSystem", &json!({})).unwrap();
+
+        assert_eq!(
+            system_codes(&c),
+            vec![("rq".to_string(), "$date".to_string())],
+            "解析失败应沿用启动缓存，不得清空系统短语"
+        );
+    }
+
+    #[test]
+    fn json_diff_sparse() {
+        let base = json!({ "a": 1, "t": { "x": 1, "y": 2 }, "same": "v" });
+        let cfg = json!({ "a": 9, "t": { "x": 1, "y": 20 }, "same": "v" });
+        let d = json_diff(&base, &cfg).unwrap();
+        // 仅含变化项：a + t.y
+        assert_eq!(d, json!({ "a": 9, "t": { "y": 20 } }));
+        // 完全相同 → None
+        assert!(json_diff(&base, &base).is_none());
+    }
+
+    /// ★★ `custom_mappings` 必须整表进 override，不能只写变化的那一行。
+    ///
+    /// 读侧 `merge_toml` 对它是**整体替换**（否则用户删不掉方案作者写的行）。写侧若照常
+    /// 逐键下钻，两条各自合理的规则合起来就是数据丢失：用户改一行 ⇒ override 只有那一行
+    /// ⇒ 整体替换 ⇒ 作者写的其余行全没了。
+    ///
+    /// 断言落在「**没被改的那一行在不在 diff 里**」——只断言「改的那行在」的话，
+    /// 逐键下钻的实现照样通过。
+    #[test]
+    fn json_diff_keeps_custom_mappings_atomic() {
+        let base = json!({
+            "punct": { "mode": "follow", "custom_mappings": { ".": ["。"], ",": ["，"] } }
+        });
+        // 用户只改了 `.` 那一行，`,` 原样不动。
+        let cfg = json!({
+            "punct": { "mode": "follow", "custom_mappings": { ".": ["·"], ",": ["，"] } }
+        });
+        let d = json_diff(&base, &cfg).unwrap();
+        assert_eq!(
+            d.pointer("/punct/custom_mappings"),
+            Some(&json!({ ".": ["·"], ",": ["，"] })),
+            "★ 整张表都要进 override——逐键 diff 只会写 `.` 那一行，读侧整体替换后 `,` 丢失"
+        );
+        // 表没变时不该无谓地写进 override（否则每次打开设置页保存都在冻结一份快照）。
+        assert!(json_diff(&base, &base).is_none(), "未改动时不得产生 diff");
+        // 同层的其余键仍走稀疏 diff——原子只对 `custom_mappings` 一个键成立。
+        let mode_only = json!({
+            "punct": { "mode": "english", "custom_mappings": { ".": ["。"], ",": ["，"] } }
+        });
+        assert_eq!(
+            json_diff(&base, &mode_only).unwrap(),
+            json!({ "punct": { "mode": "english" } }),
+            "只改 mode 时不该把整表也写进 override"
+        );
+    }
+
+    /// 只读旁路字段不得随 saveConfig 落进 override。
+    ///
+    /// 失败形态很隐蔽：override 里多一段 `[effectiveCodetable]`，方案照常能用，但该方案
+    /// 的所有码表行为从此被冻结在用户打开设置页那一刻——之后改全局配置对它不再有效，
+    /// 而用户从没动过那些项。
+    #[test]
+    fn save_config_strips_readonly_sidecar() {
+        let cfg = json!({
+            "schema": { "id": "wubi86" },
+            "engine": { "type": "codetable", "codetable": { "punct_commit": true } },
+            "effectiveCodetable": { "punct_commit": true, "z_key_repeat": false },
+        });
+        let stripped = strip_readonly_fields(&cfg);
+        assert!(
+            stripped.get("effectiveCodetable").is_none(),
+            "旁路字段应被剥掉，实际 {stripped}"
+        );
+        // 其余内容原样保留——剥错了会静默丢配置。
+        assert_eq!(
+            stripped.pointer("/engine/codetable/punct_commit"),
+            Some(&json!(true))
+        );
+        assert_eq!(stripped.pointer("/schema/id"), Some(&json!("wubi86")));
+
+        // 没有旁路字段时原样返回（不因为多一次 clone 就改变结构）。
+        let plain = json!({ "engine": { "type": "codetable" } });
+        assert_eq!(strip_readonly_fields(&plain), plain);
+
+        // 与 diff 串起来看：剥之后，方案文件没写过的旁路键不会被判成「新增」。
+        let base = json!({ "schema": { "id": "wubi86" }, "engine": { "type": "codetable" } });
+        let d = json_diff(&base, &stripped).unwrap_or(json!({}));
+        assert!(
+            d.get("effectiveCodetable").is_none(),
+            "diff 里不该出现旁路字段，实际 {d}"
+        );
+
+        // ★ 逐个覆盖 READONLY_SIDECAR_FIELDS，而不是只测其中一个：新增旁路字段却忘了
+        // 登记，正是这个坑的复发形态，只测 effectiveCodetable 的话照样全绿。
+        for f in READONLY_SIDECAR_FIELDS {
+            let mut one = json!({ "schema": { "id": "wubi86" } });
+            one.as_object_mut()
+                .unwrap()
+                .insert((*f).to_string(), json!("任意值"));
+            let s = strip_readonly_fields(&one);
+            assert!(s.get(*f).is_none(), "旁路字段 {f} 未被剥掉，实际 {s}");
+            assert_eq!(
+                s.pointer("/schema/id"),
+                Some(&json!("wubi86")),
+                "剥 {f} 时误伤了真实配置"
+            );
+        }
+    }
+
+    /// `[overlay]` 段经 getConfig → 改 → saveConfig 往返，并**立即体现在 overlay 注册表里**。
+    ///
+    /// 这条锁的是「设置页把一个普通方案变成 overlay 方案（快符）」的整条通路。它之所以
+    /// 几乎不需要新代码，正是这次下沉的收益：`[overlay]` 住在方案文件里，于是方案配置
+    /// 已有的读（getConfig 三层合并）、写（saveConfig 稀疏 diff 落 override）、生效
+    /// （read_schema 的 merge_toml）三条通路全部现成——原先它住在 config.toml 的
+    /// StructList 数组里，这三样一样都够不着。
+    #[test]
+    fn schema_overlay_section_roundtrips_through_save_config() {
+        let dir = std::env::temp_dir().join("wind_webdata_overlay_rt");
+        let _ = std::fs::remove_dir_all(&dir);
+        let schemas = dir.join("schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        // 出厂是个**普通**码表方案：没有 [overlay] 段。
+        std::fs::write(
+            schemas.join("zz_rt.schema.toml"),
+            "[schema]\nid = \"zz_rt\"\nname = \"往返\"\n\
+             [engine]\ntype = \"codetable\"\n[engine.codetable]\nmax_code_length = 4\n",
+        )
+        .unwrap();
+        let ov_dir = dir.join("overrides");
+        std::fs::create_dir_all(&ov_dir).unwrap();
+
+        let store_path = std::env::temp_dir().join("wind_webdata_overlay_rt.redb");
+        let _ = std::fs::remove_file(&store_path);
+        let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
+        let c = Coordinator::new_headless_with_store_override(
+            aurora_config::Config::default(),
+            Some(&dir),
+            store,
+            Some(ov_dir.clone()),
+        );
+
+        // 起点：不是 overlay 方案。
+        assert!(
+            c.engine_mgr().overlay_index_of("zz_rt").is_none(),
+            "出厂无 [overlay] 段，不该在注册表里"
+        );
+        let mut cfg = c
+            .web_data_rpc("schema.getConfig", &json!({ "id": "zz_rt" }))
+            .unwrap();
+        assert!(
+            cfg.get("overlay").is_none_or(|v| v.is_null()),
+            "未配置时 overlay 应缺省/为 null，实际 {cfg}"
+        );
+
+        // 设置页动作：加上 [overlay] 段并保存。
+        cfg.as_object_mut().unwrap().insert(
+            "overlay".to_string(),
+            json!({ "kind": "special", "show_all_on_enter": true, "candidate_layout": "vertical" }),
+        );
+        c.web_data_rpc("schema.saveConfig", &json!({ "id": "zz_rt", "cfg": cfg }))
+            .unwrap();
+
+        // 落盘的是**稀疏 diff**：只有改动项进 override，方案文件的其余定义仍可透传。
+        let written = std::fs::read_to_string(ov_dir.join("zz_rt.toml")).unwrap();
+        assert!(
+            written.contains("[overlay]"),
+            "override 未写入 [overlay]：{written}"
+        );
+
+        // 生效：注册表整表随 invalidate 重建，该方案成为 overlay 方案。
+        c.engine_mgr().invalidate_schema("zz_rt");
+        let idx = c
+            .engine_mgr()
+            .overlay_index_of("zz_rt")
+            .expect("保存后应进 overlay 注册表");
+        let e = c.engine_mgr().overlay_modes()[idx as usize].clone();
+        assert!(e.spec.show_all_on_enter);
+        assert_eq!(e.spec.candidate_layout, aurora_config::LayoutIntent::Vertical);
+        assert_eq!(e.name, "往返", "override 未提及的字段仍来自方案文件");
+
+        let _ = std::fs::remove_file(&store_path);
+    }
+
+    /// 设置页区分「跟随方案」与「用户选的来源」要看方案文件自己的 files——合并值答不了。
+    #[test]
+    fn get_config_exposes_aux_code_base_files_and_strips_it_on_save() {
+        let dir =
+            std::env::temp_dir().join(format!("wind_webdata_aux_base_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let schemas = dir.join("schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        std::fs::write(
+            schemas.join("zz_py.schema.toml"),
+            "[schema]\nid = \"zz_py\"\nname = \"拼\"\n[engine]\ntype = \"pinyin\"\n\
+             [engine.aux_code]\nfiles = [\"aux_code/stroke.txt\"]\n",
+        )
+        .unwrap();
+        let ov = dir.join("overrides");
+        std::fs::create_dir_all(&ov).unwrap();
+        std::fs::write(
+            ov.join("zz_py.toml"),
+            "[engine.aux_code]\nfiles = [\"schema:wubi86\"]\n",
+        )
+        .unwrap();
+        let store = std::sync::Arc::new(aurora_store::Store::open(dir.join("s.redb")).unwrap());
+        let c = Coordinator::new_headless_with_store_override(
+            aurora_config::Config::default(),
+            Some(&dir),
+            store,
+            Some(ov.clone()),
+        );
+        let v = c
+            .web_data_rpc("schema.getConfig", &json!({ "id": "zz_py" }))
+            .unwrap();
+        assert_eq!(
+            v["auxCodeBaseFiles"],
+            json!(["aux_code/stroke.txt"]),
+            "方案文件自己的 files"
+        );
+        assert_eq!(
+            v["engine"]["aux_code"]["files"],
+            json!(["schema:wubi86"]),
+            "合并值是 override 的"
+        );
+        // 原样回传不能把旁路字段写进 override。
+        c.web_data_rpc("schema.saveConfig", &json!({ "id": "zz_py", "cfg": v }))
+            .unwrap();
+        let saved = std::fs::read_to_string(ov.join("zz_py.toml")).unwrap();
+        assert!(
+            !saved.contains("auxCodeBaseFiles"),
+            "旁路字段必须剥掉：{saved}"
+        );
+        assert!(saved.contains("schema:wubi86"), "用户的选择保留：{saved}");
+    }
+
+    /// 三态控件的读侧契约：`getConfig` 必须让设置页分得清「作者写的」与「用户改的」。
+    ///
+    /// 场景：某方案在自己的文件里声明了 `short_code_yield_level`（作者基线），用户又在
+    /// 设置页把它改成别的值（override 层）。三份数据各答一个问题：
+    ///
+    /// ⚠️ 用自造的 `zz_ct` 而不是 wubi86 是**刻意的**：内置方案从 0.119 起一项都不声明
+    /// （理由见 `data/schemas/wubi86.schema.toml`），拿它当夹具会让这条随出厂配置的调整
+    /// 而失效。这个形态如今只出现在用户自己装的第三方码表上，夹具必须自己造出来。
+    ///
+    /// | 字段 | 回答的问题 | 本例取值 |
+    /// | --- | --- | --- |
+    /// | `engine.codetable`（合并值） | 现在按什么跑 | 2 |
+    /// | `followedCodetable` | 取消覆盖后变成什么 | 3（作者值） |
+    /// | `codetableOverride` | 这一项是不是用户改的 | 有 ⇒ 是 |
+    ///
+    /// ⚠️ 缺了 `followedCodetable` 就只能拿合并值当回落值，于是「取消覆盖」在界面上
+    /// 什么都不变（仍显示 2），用户以为没生效；缺了 `codetableOverride` 则分不清作者值
+    /// 与用户值，方案自带的那一项会被显示成「用户已改」。
+    #[test]
+    fn schema_get_config_separates_author_baseline_from_user_override() {
+        let dir = std::env::temp_dir().join("wind_webdata_ct_tristate");
+        let _ = std::fs::remove_dir_all(&dir);
+        let schemas = dir.join("schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        // 方案作者基线：出简让全 3；顶码那一项作者没写 ⇒ 该跟随全局。
+        std::fs::write(
+            schemas.join("zz_ct.schema.toml"),
+            "[schema]
+id = \"zz_ct\"
+name = \"三态\"
+             [engine]
+type = \"codetable\"
+             [engine.codetable]
+max_code_length = 4
+short_code_yield_level = 3
+",
+        )
+        .unwrap();
+        // 用户覆盖层：把它改成 2。
+        let ov_dir = dir.join("overrides");
+        std::fs::create_dir_all(&ov_dir).unwrap();
+        std::fs::write(
+            ov_dir.join("zz_ct.toml"),
+            "[engine.codetable]
+short_code_yield_level = 2
+",
+        )
+        .unwrap();
+
+        let mut cfg = aurora_config::Config::default();
+        // 全局基线给顶码一个与结构体零值不同的取值，好让「跟随全局」这一路可被断言。
+        cfg.schema.codetable.top_code_commit = true;
+        let c = Coordinator::new_headless_with_override(cfg, Some(&dir), Some(ov_dir.clone()));
+        let got = c
+            .web_data_rpc("schema.getConfig", &json!({ "id": "zz_ct" }))
+            .unwrap();
+
+        assert_eq!(
+            got.pointer("/engine/codetable/short_code_yield_level"),
+            Some(&json!(2)),
+            "合并值应是用户改后的那个，实际 {got}"
+        );
+        assert_eq!(
+            got.pointer("/effectiveCodetable/short_code_yield_level"),
+            Some(&json!(2)),
+            "当前生效值同上"
+        );
+        assert_eq!(
+            got.pointer("/followedCodetable/short_code_yield_level"),
+            Some(&json!(3)),
+            "回落值必须是**作者基线**，不含 override 层"
+        );
+        assert_eq!(
+            got.pointer("/codetableOverride/short_code_yield_level"),
+            Some(&json!(2)),
+            "override 层原文要原样给出（判某项是不是用户改的）"
+        );
+
+        // 作者没写、用户也没改的那一项：回落值来自全局，且不在 override 层里。
+        assert_eq!(
+            got.pointer("/followedCodetable/top_code_commit"),
+            Some(&json!(true)),
+            "作者没写时回落值取全局基线"
+        );
+        assert!(
+            got.pointer("/codetableOverride/top_code_commit").is_none(),
+            "没改过的项不该出现在 override 层，实际 {}",
+            got.pointer("/codetableOverride").unwrap()
+        );
+
+        // 反向对照：没有 override 文件时，回落值与生效值一致（否则上面的差异可能来自
+        // 别的原因，而不是「剥掉了 override 层」）。
+        std::fs::remove_file(ov_dir.join("zz_ct.toml")).unwrap();
+        c.engine_mgr().invalidate_schema("zz_ct");
+        let got2 = c
+            .web_data_rpc("schema.getConfig", &json!({ "id": "zz_ct" }))
+            .unwrap();
+        assert_eq!(
+            got2.pointer("/effectiveCodetable/short_code_yield_level"),
+            Some(&json!(3)),
+            "删掉 override 后生效值回到作者值"
+        );
+        assert_eq!(
+            got2.pointer("/followedCodetable/short_code_yield_level"),
+            Some(&json!(3))
+        );
+        assert_eq!(
+            got2.pointer("/codetableOverride"),
+            Some(&json!({})),
+            "无 override 文件时给空对象而不是缺字段——UI 少一次 null 分支"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 写侧：回传 `null` 就是「取消覆盖」——该键从 override 里消失，该项回到方案作者的值。
+    ///
+    /// 这条链**不需要 core 添任何东西**：`json_to_toml` 跳过 null，而 `saveConfig` 是拿
+    /// **方案文件基线**（不含 override）做 diff，两条既有性质合起来正好是三态要的语义。
+    /// 正因为它是「两个无关性质凑出来的」，改任一侧都会静默破坏它，故必须端到端钉住。
+    ///
+    /// 同时验稀疏性：同一次保存里另一项照常写入，不因为有人被取消而受牵连。
+    #[test]
+    fn save_config_null_cancels_one_override_and_keeps_the_others() {
+        let dir = std::env::temp_dir().join("wind_webdata_ct_cancel");
+        let _ = std::fs::remove_dir_all(&dir);
+        let schemas = dir.join("schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        std::fs::write(
+            schemas.join("zz_cx.schema.toml"),
+            "[schema]\nid = \"zz_cx\"\nname = \"取消\"\n\
+             [engine]\ntype = \"codetable\"\n\
+             [engine.codetable]\nmax_code_length = 4\nshort_code_yield_level = 3\n",
+        )
+        .unwrap();
+        let ov_dir = dir.join("overrides");
+        std::fs::create_dir_all(&ov_dir).unwrap();
+        std::fs::write(
+            ov_dir.join("zz_cx.toml"),
+            "[engine.codetable]\nshort_code_yield_level = 2\npunct_commit = false\n",
+        )
+        .unwrap();
+
+        let c = Coordinator::new_headless_with_override(
+            aurora_config::Config::default(),
+            Some(&dir),
+            Some(ov_dir.clone()),
+        );
+        let mut cfg = c
+            .web_data_rpc("schema.getConfig", &json!({ "id": "zz_cx" }))
+            .unwrap();
+
+        // 设置页动作：取消「出简让全」的覆盖（写 null），另一项照旧勾着（写实值）。
+        let ct = cfg
+            .pointer_mut("/engine/codetable")
+            .and_then(|v| v.as_object_mut())
+            .expect("码表段应在");
+        ct.insert("short_code_yield_level".to_string(), Value::Null);
+        ct.insert("punct_commit".to_string(), json!(false));
+        c.web_data_rpc("schema.saveConfig", &json!({ "id": "zz_cx", "cfg": cfg }))
+            .unwrap();
+
+        let written = std::fs::read_to_string(ov_dir.join("zz_cx.toml")).unwrap();
+        assert!(
+            !written.contains("short_code_yield_level"),
+            "取消覆盖的键必须从 override 里消失，实际:\n{written}"
+        );
+        assert!(
+            written.contains("punct_commit"),
+            "同一次保存里仍勾着的项不该被牵连，实际:\n{written}"
+        );
+
+        // 生效面：该项回到**方案作者**的 3（不是全局的默认值），另一项仍是用户的 false。
+        c.engine_mgr().invalidate_schema("zz_cx");
+        let got = c
+            .web_data_rpc("schema.getConfig", &json!({ "id": "zz_cx" }))
+            .unwrap();
+        assert_eq!(
+            got.pointer("/effectiveCodetable/short_code_yield_level"),
+            Some(&json!(3)),
+            "取消覆盖后应回到方案作者写的值"
+        );
+        assert!(
+            got.pointer("/codetableOverride/short_code_yield_level")
+                .is_none(),
+            "override 层不该再有它（否则设置页下次打开仍显示为已勾选）"
+        );
+        assert_eq!(
+            got.pointer("/codetableOverride/punct_commit"),
+            Some(&json!(false)),
+            "另一项的覆盖要原样留着"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn schema_get_config_graceful_without_data_dir() {
+        // data_dir=None（coord helper）→ 无方案文件 → getConfig 返回 {}，saveConfig 报错（无基础）。
+        let c = coord("schema");
+        let r = c
+            .web_data_rpc("schema.getConfig", &json!({ "id": "pinyin" }))
+            .unwrap();
+        assert!(r.is_object() && r.as_object().unwrap().is_empty());
+        assert!(
+            c.web_data_rpc("schema.saveConfig", &json!({ "id": "pinyin", "cfg": {} }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn stats_summary_rich_fields() {
+        use aurora_store::stats::CommitSource;
+        let c = coord("stats_summary_rich");
+        // 今日：中文 2(码长4,首选) + 英文 2(临英,次选)
+        c.debug_record_commit("你好", 4, 0, CommitSource::Candidate);
+        c.debug_record_commit("ab", 0, 1, CommitSource::TempEnglish);
+        let r = c.web_data_rpc("stats.summary", &json!({})).unwrap();
+        assert_eq!(r["today_chinese"], 2);
+        assert_eq!(r["today_english"], 2);
+        assert_eq!(r["today_chars"], 4);
+        assert_eq!(r["total_chars"], 4);
+        assert_eq!(r["active_days"], 1);
+        assert!((r["avg_code_len"].as_f64().unwrap() - 4.0).abs() < 1e-9);
+        assert!(
+            (r["first_select_rate"].as_f64().unwrap() - 0.5).abs() < 1e-9,
+            "首选率=首选1/总选2=0.5"
+        );
+    }
+
+    #[test]
+    fn stats_daily_rich_shape() {
+        use aurora_store::stats::CommitSource;
+        let c = coord("stats_daily_rich");
+        c.debug_record_commit("你好", 4, 0, CommitSource::Candidate);
+        c.stat_collector().unwrap().flush(); // 落库才能被 daily 区间读到
+        let today = aurora_store::stats_report::today_str();
+        let r = c
+            .web_data_rpc("stats.daily", &json!({ "from": today, "to": today }))
+            .unwrap();
+        let arr = r.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let d = &arr[0];
+        assert_eq!(d["d"], today);
+        assert_eq!(d["tc"], 2);
+        assert_eq!(d["cc"], 2);
+        assert_eq!(d["cls"], 4);
+        assert_eq!(d["h"].as_array().unwrap().len(), 24);
+        assert_eq!(d["cpd"][0], 1);
+    }
+
+    /// Task 2：拼音类方案（pinyin_simp / double_pinyin）写入共享 "pinyin" 存储，
+    /// 跨方案 id 互读能取到同一份用户词。
+    #[test]
+    fn pinyin_and_shuangpin_share_userdict() {
+        use std::io::Write;
+        // 写两个拼音类方案 schema.toml，让 data_schema_id 折叠到 "pinyin"
+        let base_dir = std::env::temp_dir().join("wind_coord_share_userdict_test");
+        let schemas = base_dir.join("schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        for name in ["pinyin_simp", "double_pinyin"] {
+            let mut f = std::fs::File::create(schemas.join(format!("{name}.schema.toml"))).unwrap();
+            write!(f, "[engine]\ntype = \"pinyin\"\n").unwrap();
+        }
+
+        let db_path = std::env::temp_dir().join("wind_coord_share_userdict.redb");
+        let _ = std::fs::remove_file(&db_path);
+        let store = Arc::new(Store::open(&db_path).unwrap());
+        let c = Coordinator::new_headless_with_store(
+            Config::default(),
+            Some(base_dir.as_path()),
+            Arc::clone(&store),
+        );
+
+        // 用拼音方案加词
+        c.web_data_rpc(
+            "dict.add",
+            &json!({ "schemaId": "pinyin_simp", "code": "nihao", "text": "你好", "weight": 5 }),
+        )
+        .unwrap();
+
+        // 用双拼方案读，应读到同一条（共享 "pinyin" 存储键）
+        let list = c
+            .web_data_rpc(
+                "dict.listPaged",
+                &json!({ "schemaId": "double_pinyin", "offset": 0, "limit": 100 }),
+            )
+            .unwrap();
+        let items = list["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|it| it["text"] == "你好"),
+            "双拼应读到拼音下加的词（data_schema_id 共享）"
+        );
+    }
+
+    /// `dict.stats` 的**三个计数**（userWords / tempWords / shadowRules）都必须走
+    /// `data_schema_id` 折叠，与 `dict.listPaged` / `dict.search` / `shadow.list` 同源。
+    ///
+    /// 两次踩的是同一个坑。shadow 那次：统计拿 `double_pinyin` 去查，而写端 `candidate_op`
+    /// 折叠到 `"pinyin"`，于是双拼的规则计数恒显示 0。user_words / temp_words 那次更隐蔽
+    /// ——它们直传原始 id 一直留到 2026-09-23，理由写在注释里：「刻意保持原始 id，走
+    /// `write_data_schema_id` 的按来源分桶」。**那条理由不成立**：`manager.rs` 的
+    /// `write_data_schema_id` 对非混输方案直接返回 `data_schema_id(自身)`，不按来源分桶，
+    /// 分桶只发生在混输。实测 `dict.add(pinyin_simp)` 后 `listPaged(double_pinyin).total = 1`
+    /// 而 stats 两行都是 0——连全拼自己都是 0，只有方案 id 恰好等于 `"pinyin"` 时才碰巧对上。
+    ///
+    /// 本测试守两个方向，**缺一不可**：
+    /// - **正向**：拼音族折叠 ⇒ 全拼与双拼报同一个数（它们共享同一份词，是设计）。
+    /// - **反向**：码表方案 `wubi_like` 报自己的数，**不等于**拼音族那个数。没有这一条，
+    ///   把 `data_schema_id(id)` 误写成常量 `"pinyin"` 也能让正向断言全绿。
+    #[test]
+    fn dict_stats_counts_all_follow_data_schema_folding() {
+        use std::io::Write;
+        let base_dir = std::env::temp_dir().join("wind_coord_stats_fold_all");
+        let schemas = base_dir.join("schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        for name in ["pinyin_simp", "double_pinyin"] {
+            let mut f = std::fs::File::create(schemas.join(format!("{name}.schema.toml"))).unwrap();
+            write!(f, "[engine]\ntype = \"pinyin\"\n").unwrap();
+        }
+        // 反向对照方案：非拼音族 ⇒ `data_schema_id` 返回自身 id，不参与折叠。
+        {
+            let mut f = std::fs::File::create(schemas.join("wubi_like.schema.toml")).unwrap();
+            write!(f, "[engine]\ntype = \"codetable\"\n").unwrap();
+        }
+
+        let db_path = std::env::temp_dir().join("wind_coord_stats_fold_all.redb");
+        let _ = std::fs::remove_file(&db_path);
+        let store = Arc::new(Store::open(&db_path).unwrap());
+        // `dict.stats` 遍历的是**已启用方案**（`config.schema.available`），不是目录扫描结果
+        // ——只写 schema.toml 不够，方案都得在这份清单里才会出现在统计中。
+        let mut cfg = Config::default();
+        cfg.schema.available = vec![
+            "pinyin_simp".into(),
+            "double_pinyin".into(),
+            "wubi_like".into(),
+        ];
+        cfg.schema.active = "pinyin_simp".into();
+        let c =
+            Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
+
+        // 全拼下写一条用户词 + 置顶一条（写端都折叠 → 落在 "pinyin"）。
+        c.web_data_rpc(
+            "dict.add",
+            &json!({ "schemaId": "pinyin_simp", "code": "nihao", "text": "你好", "weight": 5 }),
+        )
+        .unwrap();
+        c.web_data_rpc(
+            "shadow.pin",
+            &json!({ "schemaId": "pinyin_simp", "code": "hao", "word": "好", "position": 0 }),
+        )
+        .unwrap();
+        // 码表方案下写两条，数量**刻意与拼音族不同**——相等的话反向断言就退化成恒真。
+        for (code, text) in [("aaaa", "工"), ("bbbb", "王")] {
+            c.web_data_rpc(
+                "dict.add",
+                &json!({ "schemaId": "wubi_like", "code": code, "text": text, "weight": 5 }),
+            )
+            .unwrap();
+        }
+
+        // 临时词没有设置页写入口，由引擎写端落库——那里走 `write_data_schema_id`，拼音族
+        // 已经折叠成 "pinyin"，所以这里直接写折叠后的桶。条数与用户词**刻意错开**
+        // （拼音族 2 条、码表 3 条），免得 tempWords 的断言碰巧与 userWords 同值而放过串线。
+        for (code, text) in [("haoya", "好呀"), ("nihao", "你好")] {
+            store.learn_temp_word("pinyin", code, text, 500, 0).unwrap();
+        }
+        for (code, text) in [("cccc", "又"), ("dddd", "大"), ("eeee", "月")] {
+            store
+                .learn_temp_word("wubi_like", code, text, 500, 0)
+                .unwrap();
+        }
+
+        let stats = c.web_data_rpc("dict.stats", &json!({})).unwrap();
+        let rows = stats.as_array().expect("stats 是数组");
+        let row_of = |id: &str| -> Value {
+            rows.iter()
+                .find(|r| r["schemaId"] == id)
+                .cloned()
+                .unwrap_or(Value::Null)
+        };
+
+        // tempWords：只把 `count_temp_words(&data_schema)` 退回 `count_temp_words(id)` 时，
+        // 只有这三条会红——userWords 与 shadowRules 的断言对它全绿。
+        assert_eq!(
+            row_of("pinyin_simp")["tempWords"],
+            2,
+            "全拼须报出拼音桶里的临时词"
+        );
+        assert_eq!(
+            row_of("double_pinyin")["tempWords"],
+            2,
+            "双拼与全拼共享临时词，须报同一个数"
+        );
+        assert_eq!(
+            row_of("wubi_like")["tempWords"],
+            3,
+            "码表方案报自己桶里的临时词"
+        );
+
+        // 正向：拼音族两行报同一个数。
+        assert_eq!(
+            row_of("pinyin_simp")["userWords"],
+            1,
+            "全拼须报出自己加的那条词"
+        );
+        assert_eq!(
+            row_of("double_pinyin")["userWords"],
+            1,
+            "双拼与全拼共享同一份用户词（data_schema_id 折叠到 \"pinyin\"），须报同一个数"
+        );
+        assert_eq!(row_of("pinyin_simp")["shadowRules"], 1, "全拼报 1 条规则");
+        assert_eq!(
+            row_of("double_pinyin")["shadowRules"],
+            1,
+            "双拼须报出折叠后的规则数（与全拼共享同一条）"
+        );
+
+        // 反向：码表方案不参与折叠，报自己的 2 条。
+        assert_eq!(
+            row_of("wubi_like")["userWords"],
+            2,
+            "码表方案须报自己桶里的条数，不受拼音族折叠影响"
+        );
+    }
+
+    // 默认导出段的测试随 `default_dict_sections` 搬到了 `aurora_coordinator::dict_transfer_api`
+    // （pinyin_default_export_sections_include_shadow）。
+
+    /// ★★ 论坛 t281：在设置里关掉扩展词库，保存后它仍在出词。
+    ///
+    /// 设置端一次保存先 `setDictEnabled(x, false)`，再 `saveConfig(打开对话框时的快照)`。
+    /// 快照里的 `dictionaries` 只要与方案文件基线不同（之前翻过任一扩展库开关就是如此），
+    /// `json_diff` 就会把整份**旧**数组写进 override，冲掉刚落盘的 `enabled = false`。
+    /// 词库开关的唯一写入口是 `setDictEnabled`，`saveConfig` 不得经由快照改它。
+    #[test]
+    fn save_config_snapshot_does_not_clobber_dict_toggle() {
+        let dir =
+            std::env::temp_dir().join(format!("wind_webdata_dict_toggle_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let schemas = dir.join("schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        std::fs::write(
+            schemas.join("zz_en.schema.toml"),
+            "[schema]\nid = \"zz_en\"\nname = \"英\"\n[engine]\ntype = \"english\"\n\
+             [[dictionaries]]\nid = \"main\"\npath = \"en/main.dict.yaml\"\ndefault = true\n\
+             [[dictionaries]]\nid = \"en_it\"\npath = \"en/it.dict.yaml\"\ndefault_enabled = true\n\
+             [[dictionaries]]\nid = \"en_x\"\npath = \"en/x.dict.yaml\"\ndefault_enabled = true\n",
+        )
+        .unwrap();
+        let ov = dir.join("overrides");
+        std::fs::create_dir_all(&ov).unwrap();
+        let store = std::sync::Arc::new(aurora_store::Store::open(dir.join("s.redb")).unwrap());
+        let c = Coordinator::new_headless_with_store_override(
+            aurora_config::Config::default(),
+            Some(&dir),
+            store,
+            Some(ov.clone()),
+        );
+        let toggle = |dict: &str, on: bool| {
+            c.web_data_rpc(
+                "schema.setDictEnabled",
+                &json!({ "id": "zz_en", "dictId": dict, "enabled": on }),
+            )
+            .unwrap();
+        };
+        // 早先翻过另一个扩展库 ⇒ 合并值的 dictionaries 已与方案文件基线不同。
+        toggle("en_x", false);
+        let snapshot = c
+            .web_data_rpc("schema.getConfig", &json!({ "id": "zz_en" }))
+            .unwrap();
+
+        // 同一次保存：先关 en_it，再回传打开对话框时的旧快照（顺带改一个普通字段）。
+        toggle("en_it", false);
+        let mut cfg = snapshot.clone();
+        cfg["schema"]["name"] = json!("英文改名");
+        c.web_data_rpc("schema.saveConfig", &json!({ "id": "zz_en", "cfg": cfg }))
+            .unwrap();
+
+        let merged = c.engine_mgr().schema_merged("zz_en").expect("方案在");
+        let enabled_of = |id: &str| {
+            merged
+                .dictionaries
+                .iter()
+                .find(|d| d.id == id)
+                .and_then(|d| d.enabled)
+        };
+        let saved = std::fs::read_to_string(ov.join("zz_en.toml")).unwrap();
+        assert_eq!(
+            enabled_of("en_it"),
+            Some(false),
+            "刚关掉的 en_it 被快照冲掉了：{saved}"
+        );
+        assert_eq!(
+            enabled_of("en_x"),
+            Some(false),
+            "早先关掉的 en_x 仍关：{saved}"
+        );
+        assert_eq!(merged.schema.name, "英文改名", "普通字段照常保存");
+        assert!(
+            !saved.contains("path"),
+            "override 的 dictionaries 只许 {{id, enabled}} 稀疏项，不得冻结整份定义：{saved}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Task 3：schema.list 每个拼音方案应携带 scheme 字段（full/shuangpin），非拼音方案为空串。
+    #[test]
+    fn schema_list_exposes_scheme() {
+        use std::io::Write;
+        let base_dir = std::env::temp_dir().join("wind_coord_schema_list_scheme_test");
+        let schemas = base_dir.join("schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        // 创建全拼方案
+        {
+            let mut f = std::fs::File::create(schemas.join("pinyin_full.schema.toml")).unwrap();
+            write!(
+                f,
+                "[engine]\ntype = \"pinyin\"\n[engine.pinyin]\nscheme = \"full\"\n"
+            )
+            .unwrap();
+        }
+        // 创建双拼方案
+        {
+            let mut f =
+                std::fs::File::create(schemas.join("double_pinyin_sp.schema.toml")).unwrap();
+            write!(
+                f,
+                "[engine]\ntype = \"pinyin\"\n[engine.pinyin]\nscheme = \"shuangpin\"\n"
+            )
+            .unwrap();
+        }
+        let db_path = std::env::temp_dir().join("wind_webdata_schema_list_scheme.redb");
+        let _ = std::fs::remove_file(&db_path);
+        let store = Arc::new(Store::open(&db_path).unwrap());
+        let c = Coordinator::new_headless_with_store(
+            Config::default(),
+            Some(base_dir.as_path()),
+            Arc::clone(&store),
+        );
+
+        let list = c.web_data_rpc("schema.list", &json!({})).unwrap();
+        let arr = list.as_array().unwrap();
+
+        // 必须有方案
+        assert!(!arr.is_empty(), "schema.list 应返回非空数组");
+        // 每项都应有 scheme 键
+        for item in arr.iter() {
+            assert!(
+                item.get("scheme").is_some(),
+                "每个方案项应有 scheme 字段，缺失于: {item}"
+            );
+        }
+        // 全拼方案 scheme="full"
+        let full = arr.iter().find(|s| s["id"] == "pinyin_full");
+        assert!(full.is_some(), "应有 pinyin_full 方案");
+        assert_eq!(full.unwrap()["scheme"], "full", "全拼方案 scheme 应为 full");
+        // 双拼方案 scheme="shuangpin"
+        let sp = arr.iter().find(|s| s["id"] == "double_pinyin_sp");
+        assert!(sp.is_some(), "应有 double_pinyin_sp 方案");
+        assert_eq!(
+            sp.unwrap()["scheme"],
+            "shuangpin",
+            "双拼方案 scheme 应为 shuangpin"
+        );
+    }
+
+    /// 英文方案是可切换方案：出现在 schema.list 里，且 engineType 自成一档。
+    ///
+    /// `is_pinyin()` 对 `type = "english"` 走的是「主词库 dict_type 是不是 rime_pinyin」
+    /// 那条兜底分支，英文词库是 `type = "english"`，于是会一路落到 `"codetable"`——
+    /// 设置页的类型徽章就会把英文标成「码表」。故 `resolve_engine_type` 必须显式分流。
+    #[test]
+    fn english_schema_listed_with_its_own_engine_type() {
+        use std::io::Write;
+        let base_dir = std::env::temp_dir().join("wind_coord_schema_list_english_test");
+        let schemas = base_dir.join("schemas");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        std::fs::create_dir_all(&schemas).unwrap();
+        {
+            let mut f = std::fs::File::create(schemas.join("en_test.schema.toml")).unwrap();
+            write!(
+                f,
+                "[schema]\nid = \"en_test\"\n[engine]\ntype = \"english\"\n"
+            )
+            .unwrap();
+        }
+        // 反向对照：显式 hidden 的方案必须仍被挡在列表外。少了这条，上面的断言在
+        // 「hidden 过滤整个失效」时也会通过——那才是去掉 english 的 hidden 时最该防的回归。
+        {
+            let mut f = std::fs::File::create(schemas.join("en_hidden.schema.toml")).unwrap();
+            write!(
+                f,
+                "[schema]\nid = \"en_hidden\"\nhidden = true\n[engine]\ntype = \"english\"\n"
+            )
+            .unwrap();
+        }
+        let db_path = std::env::temp_dir().join("wind_webdata_schema_list_english.redb");
+        let _ = std::fs::remove_file(&db_path);
+        let store = Arc::new(Store::open(&db_path).unwrap());
+        let c = Coordinator::new_headless_with_store(
+            Config::default(),
+            Some(base_dir.as_path()),
+            Arc::clone(&store),
+        );
+
+        let list = c.web_data_rpc("schema.list", &json!({})).unwrap();
+        let arr = list.as_array().unwrap();
+
+        let en = arr.iter().find(|s| s["id"] == "en_test");
+        assert!(en.is_some(), "英文方案应出现在 schema.list 中：{arr:?}");
+        assert_eq!(
+            en.unwrap()["engineType"],
+            "english",
+            "英文方案的 engineType 应为 english，落成 codetable 会让类型徽章显示为「码表」"
+        );
+        assert!(
+            !arr.iter().any(|s| s["id"] == "en_hidden"),
+            "hidden = true 的方案默认不得出现在列表中：{arr:?}"
+        );
+
+        // includeHidden = true：隐藏方案出现，且带 hidden 标志供设置页区分该行能配什么。
+        let list2 = c
+            .web_data_rpc("schema.list", &json!({ "includeHidden": true }))
+            .unwrap();
+        let arr2 = list2.as_array().unwrap();
+        let hid = arr2
+            .iter()
+            .find(|s| s["id"] == "en_hidden")
+            .expect("includeHidden 时隐藏方案应出现");
+        assert_eq!(hid["hidden"], true, "隐藏方案应带 hidden = true");
+        let vis = arr2.iter().find(|s| s["id"] == "en_test").unwrap();
+        assert_eq!(vis["hidden"], false, "非隐藏方案的 hidden 应为 false");
+    }
+
+    /// 设置页「辅助码来源」的可选项：码表方案（不含请求方自己、不含非码表方案）+ aux_code/*.txt。
+    #[test]
+    fn schema_aux_code_sources_lists_codetable_schemas_and_tables() {
+        let dir = std::env::temp_dir().join(format!("wind_webdata_aux_src_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let schemas = dir.join("schemas");
+        std::fs::create_dir_all(schemas.join("aux_code")).unwrap();
+        std::fs::write(
+            schemas.join("pinyin.schema.toml"),
+            "[schema]\nid = \"pinyin\"\nname = \"拼\"\n[engine]\ntype = \"pinyin\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            schemas.join("zz_wb.schema.toml"),
+            "[schema]\nid = \"zz_wb\"\nname = \"测五\"\nhidden = true\n[engine]\ntype = \"codetable\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            schemas.join("aux_code/zz_named.txt"),
+            "# name: 小鹤\n李=mz\n",
+        )
+        .unwrap();
+        std::fs::write(schemas.join("aux_code/zz_plain.txt"), "李=mz\n").unwrap();
+        let store_path = dir.join("s.redb");
+        let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
+        let c = Coordinator::new_headless_with_store_override(
+            aurora_config::Config::default(),
+            Some(&dir),
+            store,
+            None,
+        );
+        let v = c
+            .web_data_rpc("schema.auxCodeSources", &json!({ "id": "pinyin" }))
+            .unwrap();
+        let schemas_v = v["schemas"].as_array().unwrap();
+        assert!(
+            schemas_v
+                .iter()
+                .any(|s| s["id"] == "zz_wb" && s["name"] == "测五"),
+            "隐藏的码表方案也列出"
+        );
+        assert!(
+            !schemas_v.iter().any(|s| s["id"] == "pinyin"),
+            "请求方自己 / 非码表不列"
+        );
+        let files = v["files"].as_array().unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|f| f["path"] == "aux_code/zz_named.txt" && f["label"] == "小鹤")
+        );
+        assert!(
+            files
+                .iter()
+                .any(|f| f["path"] == "aux_code/zz_plain.txt" && f["label"] == "zz_plain"),
+            "无头时退回文件名"
+        );
+    }
+
+    #[test]
+    fn dict_list_paged_sort() {
+        let c = coord("dict_sort");
+        for (code, text, weight) in [("ab", "B词", 10i32), ("aa", "A词", 30), ("ac", "C词", 5)] {
+            c.web_data_rpc(
+                "dict.add",
+                &json!({ "schemaId": "wb", "code": code, "text": text, "weight": weight }),
+            )
+            .unwrap();
+        }
+        // weight asc：5 → 10 → 30
+        let r = c
+            .web_data_rpc(
+                "dict.listPaged",
+                &json!({ "schemaId": "wb", "offset": 0, "limit": 10,
+                          "sortBy": "weight", "sortOrder": "asc" }),
+            )
+            .unwrap();
+        let items = r["items"].as_array().unwrap();
+        assert_eq!(items[0]["weight"], 5, "asc 首项应为最小权重");
+        assert_eq!(items[2]["weight"], 30, "asc 末项应为最大权重");
+        // weight desc：30 → 10 → 5
+        let r2 = c
+            .web_data_rpc(
+                "dict.listPaged",
+                &json!({ "schemaId": "wb", "offset": 0, "limit": 10,
+                          "sortBy": "weight", "sortOrder": "desc" }),
+            )
+            .unwrap();
+        assert_eq!(r2["items"][0]["weight"], 30, "desc 首项应为最大权重");
+        // 跨页切片：asc offset=1 limit=1 取排序后第 2 条（weight=10）
+        let r3 = c
+            .web_data_rpc(
+                "dict.listPaged",
+                &json!({ "schemaId": "wb", "offset": 1, "limit": 1,
+                          "sortBy": "weight", "sortOrder": "asc" }),
+            )
+            .unwrap();
+        assert_eq!(r3["total"], 3, "跨页切片 total 不变");
+        assert_eq!(r3["items"][0]["weight"], 10, "offset=1 asc 应取 weight=10");
+        // 不传 sortBy 行为不变（total 正确）
+        let r4 = c
+            .web_data_rpc(
+                "dict.listPaged",
+                &json!({ "schemaId": "wb", "offset": 0, "limit": 10 }),
+            )
+            .unwrap();
+        assert_eq!(r4["total"], 3, "不传 sortBy 应保持原有行为");
+    }
+
+    /// ★ `freq.listPaged` 的三条路必须彼此自洽（与 `dict.listPaged` 同款判据）。
+    ///
+    /// 这个入口和 `dict.listPaged` 是同一个模式、同一次改造：不搜不排序走 store 的流式
+    /// 分页，要排序走全量，搜索走一遍扫描分两组。拆开之后最容易坏的同样是**三条彼此不
+    /// 一致**，而不是某一条本身。
+    #[test]
+    fn freq_list_paged_stays_consistent_across_its_three_paths() {
+        let c = coord("freq_paths");
+        let store = c.user_store().unwrap();
+        for (code, text) in [
+            ("nihao", "你好"),
+            ("nimen", "你们"),
+            ("haoya", "好呀"),
+            ("women", "我们"),
+        ] {
+            store.record_freq("py", code, text).unwrap();
+        }
+        let call = |p: Value| c.web_data_rpc("freq.listPaged", &p).unwrap();
+        let texts = |v: &Value| -> Vec<String> {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|it| it["text"].as_str().unwrap_or("").to_string())
+                .collect()
+        };
+
+        // ① 流式路：分页拼接 == 一次取全部。
+        let all = call(json!({ "schemaId": "py", "offset": 0, "limit": 100 }));
+        assert_eq!(all["total"], json!(4));
+        let whole = texts(&all);
+        let mut stitched = Vec::new();
+        for off in [0, 2] {
+            let page = call(json!({ "schemaId": "py", "offset": off, "limit": 2 }));
+            assert_eq!(page["total"], json!(4), "翻页不得改变总数");
+            stitched.extend(texts(&page));
+        }
+        assert_eq!(stitched, whole, "分页拼接必须逐条等于一次取全部");
+
+        // ② 排序路：集合与 ① 相同。
+        let sorted = call(json!({
+            "schemaId": "py", "offset": 0, "limit": 100, "sortBy": "text", "sortDesc": false
+        }));
+        assert_eq!(sorted["total"], json!(4), "排序不得改变总数");
+        let (mut a, mut b) = (texts(&sorted), whole.clone());
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "排序路与流式路必须是同一批条目");
+
+        // ③ 搜索路：前缀命中在前、不重复；编码中段与词条内容也要能捞到。
+        let hit = call(json!({ "schemaId": "py", "prefix": "ni", "offset": 0, "limit": 100 }));
+        let got = texts(&hit);
+        assert_eq!(
+            hit["total"].as_u64().unwrap() as usize,
+            got.len(),
+            "total 必须等于实际条数"
+        );
+        let mut dedup = got.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(dedup.len(), got.len(), "同一条不得同时进两组");
+        assert_eq!(
+            &got[..2],
+            &["你好".to_string(), "你们".to_string()],
+            "编码前缀命中必须在前，实际 {got:?}"
+        );
+        // 只能由编码中段命中的那条。
+        let mid = texts(&call(
+            json!({ "schemaId": "py", "prefix": "ya", "offset": 0, "limit": 100 }),
+        ));
+        assert!(
+            mid.contains(&"好呀".to_string()),
+            "编码中段命中丢了：{mid:?}"
+        );
+        // 只能由词条内容命中的那条。
+        let by_text = texts(&call(
+            json!({ "schemaId": "py", "prefix": "我", "offset": 0, "limit": 100 }),
+        ));
+        assert_eq!(by_text, vec!["我们".to_string()], "按词条内容搜不到");
+    }
+
+    #[test]
+    fn freq_list_paged_sort() {
+        let c = coord("freq_sort");
+        let store = c.user_store().unwrap();
+        // de=1次, ta=2次, shi=3次
+        store.record_freq("py", "de", "的").unwrap();
+        store.record_freq("py", "ta", "他").unwrap();
+        store.record_freq("py", "ta", "他").unwrap();
+        store.record_freq("py", "shi", "是").unwrap();
+        store.record_freq("py", "shi", "是").unwrap();
+        store.record_freq("py", "shi", "是").unwrap();
+        // count asc：1 → 2 → 3
+        let r = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &json!({ "schemaId": "py", "offset": 0, "limit": 10,
+                          "sortBy": "count", "sortOrder": "asc" }),
+            )
+            .unwrap();
+        let items = r["items"].as_array().unwrap();
+        assert_eq!(items[0]["count"], 1, "asc 首项应为 count=1");
+        assert_eq!(items[2]["count"], 3, "asc 末项应为 count=3");
+        // count desc：3 → 2 → 1
+        let r2 = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &json!({ "schemaId": "py", "offset": 0, "limit": 10,
+                          "sortBy": "count", "sortOrder": "desc" }),
+            )
+            .unwrap();
+        assert_eq!(r2["items"][0]["count"], 3, "desc 首项应为 count=3");
+        // 跨页切片：asc offset=1 limit=1 取第 2 条（count=2）
+        let r3 = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &json!({ "schemaId": "py", "offset": 1, "limit": 1,
+                          "sortBy": "count", "sortOrder": "asc" }),
+            )
+            .unwrap();
+        assert_eq!(r3["total"], 3, "跨页切片 total 不变");
+        assert_eq!(r3["items"][0]["count"], 2, "offset=1 asc 应取 count=2");
+        // 不传 sortBy 行为不变
+        let r4 = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &json!({ "schemaId": "py", "offset": 0, "limit": 10 }),
+            )
+            .unwrap();
+        assert_eq!(r4["total"], 3, "不传 sortBy 应保持原有行为");
+    }
+
+    #[test]
+    fn dict_list_paged_text_query() {
+        let c = coord("dict_text_query");
+        for (code, text, weight) in [
+            ("wghg", "程序", 3i32),
+            ("ggkg", "王中", 5),
+            ("aaaa", "工", 0),
+        ] {
+            c.web_data_rpc(
+                "dict.add",
+                &json!({ "schemaId": "wb", "code": code, "text": text, "weight": weight }),
+            )
+            .unwrap();
+        }
+        // 按词条内容搜索：编码 "wghg" 不以 "程" 开头，命中应来自 text 包含匹配。
+        let r = c
+            .web_data_rpc(
+                "dict.listPaged",
+                &json!({ "schemaId": "wb", "prefix": "程", "offset": 0, "limit": 10 }),
+            )
+            .unwrap();
+        assert_eq!(r["total"], 1, "词条内容搜索应命中 1 条");
+        assert_eq!(r["items"][0]["text"], "程序", "应按 text 内容命中");
+        // 按编码前缀搜索仍生效。
+        let r2 = c
+            .web_data_rpc(
+                "dict.listPaged",
+                &json!({ "schemaId": "wb", "prefix": "wg", "offset": 0, "limit": 10 }),
+            )
+            .unwrap();
+        assert_eq!(r2["total"], 1, "编码前缀搜索应命中 1 条");
+        assert_eq!(r2["items"][0]["code"], "wghg", "应按 code 前缀命中");
+    }
+
+    #[test]
+    fn freq_list_paged_text_query() {
+        let c = coord("freq_text_query");
+        let store = c.user_store().unwrap();
+        store.record_freq("py", "nihao", "你好").unwrap();
+        store.record_freq("py", "women", "我们").unwrap();
+        // 按词条内容搜索：编码 "nihao" 不以 "你" 开头，命中应来自 text 包含匹配。
+        let r = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &json!({ "schemaId": "py", "prefix": "你", "offset": 0, "limit": 10 }),
+            )
+            .unwrap();
+        assert_eq!(r["total"], 1, "词条内容搜索应命中 1 条");
+        assert_eq!(r["items"][0]["text"], "你好", "应按 text 内容命中");
+        // 按编码前缀搜索仍生效。
+        let r2 = c
+            .web_data_rpc(
+                "freq.listPaged",
+                &json!({ "schemaId": "py", "prefix": "women", "offset": 0, "limit": 10 }),
+            )
+            .unwrap();
+        assert_eq!(r2["total"], 1, "编码前缀搜索应命中 1 条");
+        assert_eq!(r2["items"][0]["text"], "我们", "应按 code 前缀命中对应词条");
+    }
+
+    #[test]
+    fn phrase_list_user_sort() {
+        let c = coord("phrase_sort");
+        for (code, text, weight) in [("b", "乙", 20i32), ("a", "甲", 50), ("c", "丙", 5)] {
+            c.web_data_rpc(
+                "phrase.add",
+                &json!({ "code": code, "text": text, "position": 0, "weight": weight }),
+            )
+            .unwrap();
+        }
+        // weight asc：5 → 20 → 50
+        let r = c
+            .web_data_rpc(
+                "phrase.listUser",
+                &json!({ "offset": 0, "limit": 10,
+                          "sortBy": "weight", "sortOrder": "asc" }),
+            )
+            .unwrap();
+        let items = r["items"].as_array().unwrap();
+        assert_eq!(items[0]["weight"], 5, "asc 首项应为 weight=5");
+        assert_eq!(items[2]["weight"], 50, "asc 末项应为 weight=50");
+        // weight desc：50 → 20 → 5
+        let r2 = c
+            .web_data_rpc(
+                "phrase.listUser",
+                &json!({ "offset": 0, "limit": 10,
+                          "sortBy": "weight", "sortOrder": "desc" }),
+            )
+            .unwrap();
+        assert_eq!(r2["items"][0]["weight"], 50, "desc 首项应为 weight=50");
+        // 跨页切片：asc offset=1 limit=1 取第 2 条（weight=20）
+        let r3 = c
+            .web_data_rpc(
+                "phrase.listUser",
+                &json!({ "offset": 1, "limit": 1,
+                          "sortBy": "weight", "sortOrder": "asc" }),
+            )
+            .unwrap();
+        assert_eq!(r3["total"], 3, "跨页切片 total 不变");
+        assert_eq!(r3["items"][0]["weight"], 20, "offset=1 asc 应取 weight=20");
+        // 不传 sortBy 行为不变
+        let r4 = c
+            .web_data_rpc("phrase.listUser", &json!({ "offset": 0, "limit": 10 }))
+            .unwrap();
+        assert_eq!(r4["total"], 3, "不传 sortBy 应保持原有行为");
+    }
+
+    #[test]
+    fn scheme_package_rpc_contract() {
+        let c = coord("schemepkg");
+        // exportPackage:不存在的方案 id → 错误
+        assert!(
+            c.web_data_rpc(
+                "scheme.exportPackage",
+                &json!({ "id": "zz_no_such_schema", "path": std::env::temp_dir().join("zz_no.zip").to_string_lossy() }),
+            )
+            .is_err(),
+            "不存在的方案应报错"
+        );
+        // previewImport:不存在的包路径 → 错误
+        assert!(
+            c.web_data_rpc(
+                "scheme.previewImport",
+                &json!({ "path": std::env::temp_dir().join("zz_no_such_pkg.zip").to_string_lossy() }),
+            )
+            .is_err()
+        );
+        // previewImport:真实构造的包 → 只读预览成功,形状正确
+        let t = std::env::temp_dir().join("wind_schemepkg_test");
+        let _ = std::fs::remove_dir_all(&t);
+        let (user, system) = (t.join("u"), t.join("s"));
+        std::fs::create_dir_all(user.join("my")).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+        std::fs::write(
+            user.join("my.schema.toml"),
+            "[schema]\nid=\"my\"\n[[dictionaries]]\npath=\"my/d.yaml\"\n",
+        )
+        .unwrap();
+        std::fs::write(user.join("my/d.yaml"), "d").unwrap();
+        let pkg = t.join("my.zip");
+        aurora_transfer::scheme::export_package(
+            "my",
+            &user,
+            std::slice::from_ref(&system),
+            None,
+            &pkg,
+            "1.0.0",
+            "windows",
+            "t",
+        )
+        .unwrap();
+        let prev = c
+            .web_data_rpc(
+                "scheme.previewImport",
+                &json!({ "path": pkg.to_string_lossy() }),
+            )
+            .unwrap();
+        assert_eq!(
+            prev.get("package")
+                .and_then(|p| p.get("schema"))
+                .and_then(|s| s.get("id"))
+                .and_then(|v| v.as_str()),
+            Some("my"),
+            "v2 预览返回 package 元信息"
+        );
+        assert!(prev.get("willAdd").and_then(|v| v.as_array()).is_some());
+        assert!(prev.get("conflicts").and_then(|v| v.as_array()).is_some());
+        let _ = std::fs::remove_dir_all(&t);
+        // importPackage:不存在的包路径 → 错误
+        assert!(
+            c.web_data_rpc(
+                "scheme.importPackage",
+                &json!({ "path": std::env::temp_dir().join("zz_no_such_pkg.zip").to_string_lossy() }),
+            )
+            .is_err()
+        );
+    }
+
+    /// 主题包三个 RPC 的边界契约:导出→预览的闭环,以及各自的拒绝路径。
+    ///
+    /// **只测不写用户目录的那两条。** `theme.importPackage` 落盘到真实的用户主题目录
+    /// (`user_config_dir()/themes`),在测试进程里跑它会改开发机上真在用的配置——
+    /// scheme 那边的契约测试同样只测到「不存在的包报错」为止,取舍一致。导入本身的
+    /// 落盘/回滚语义由 `aurora-transfer::theme` 的单测覆盖,那里目标目录是临时的。
+    ///
+    /// 导出取 data 层的主题:`coord()` 的 data 目录进得了主题搜索链,于是整条
+    /// 「按 slug 找目录 → 打包 → 读回」都在临时目录里闭合。
+    ///
+    /// ⚠️ 本用例**读**整条搜索链,而链首是真实的用户主题目录(`user_config_dir()/themes`,
+    /// 优先级高于测试的 data 层)。夹具 slug 因此必须取一个开发机上撞不上的名字——取
+    /// `mo` 那种通用名的话,谁的机器上恰好装了同名主题,断言就拿到别人的主题元信息,
+    /// 现象是「这台机器上恒红且报错指不到原因」。
+    #[test]
+    fn theme_package_rpc_contract() {
+        // 目录名带 pid:多 worktree / 多会话并行跑测试时固定名会互删夹具
+        // (同 `tests/custom_layer_hide_theme_import.rs` 的纪律)。
+        let tag = format!("themepkg{}", std::process::id());
+        let c = coord(&tag);
+        let data = std::env::temp_dir().join(format!("wind_webdata_data_{tag}"));
+        let out_dir =
+            std::env::temp_dir().join(format!("wind_themepkg_out-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out_dir);
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let slug = "wind_test_themepkg_mo";
+
+        // exportPackage:穿越形态的 slug → **在碰盘之前**按 slug 拒掉。
+        //
+        // 断的是错误文案而不是 `is_err()`:这几个 slug 拼出来的路径本来就不存在,只断
+        // `is_err()` 的话,把守卫整段删掉也照样绿(全部落到「主题不存在」),那这条用例
+        // 就一个字节都没测到它声称要测的东西。
+        for bad in ["../evil", "a/b", r"a\b", ""] {
+            let e = c
+                .web_data_rpc(
+                    "theme.exportPackage",
+                    &json!({ "slug": bad, "path": out_dir.join("x.wtheme").to_string_lossy() }),
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains("非法主题 slug"),
+                "应在碰盘前按 slug 拒掉 {bad:?}，实际报的是: {e}"
+            );
+        }
+        // 反过来:合法但不存在的 slug 走的是**另一条**路(找不到),两条合起来才证明
+        // 守卫与「找不到」没有混成一条。
+        let e = c
+            .web_data_rpc(
+                "theme.exportPackage",
+                &json!({ "slug": "zz_no_such_theme", "path": out_dir.join("x.wtheme").to_string_lossy() }),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("主题不存在") && !e.contains("非法主题 slug"),
+            "不存在的主题应报「主题不存在」，实际: {e}"
+        );
+
+        // 在 data 层造一个主题:theme.toml + 两个资源 + 预览图 + 一个无关文件。
+        let src = data.join("themes").join(slug);
+        std::fs::create_dir_all(src.join("assets/sub")).unwrap();
+        std::fs::write(
+            src.join("theme.toml"),
+            "[meta]\nname = \"水墨\"\nauthor = \"某人\"\nversion = \"1.2\"\n\n[window]\nbackground = { image = { ref = \"assets/bg.png\" } }\n",
+        )
+        .unwrap();
+        std::fs::write(src.join("assets/bg.png"), b"bg").unwrap();
+        std::fs::write(src.join("assets/sub/x.png"), b"x").unwrap();
+        std::fs::write(src.join("preview.png"), b"fake-png").unwrap();
+        std::fs::write(src.join("Thumbs.db"), b"junk").unwrap();
+
+        let pkg = out_dir.join("mo.wtheme");
+        let r = c
+            .web_data_rpc(
+                "theme.exportPackage",
+                &json!({ "slug": slug, "path": pkg.to_string_lossy() }),
+            )
+            .unwrap();
+        assert_eq!(r["ok"], json!(true));
+        assert_eq!(r["display_name"], json!("水墨"), "展示名取自主题 meta");
+        // 无关文件不计入,预览图不算资源(它由 has_preview 单独表达)。
+        assert_eq!(
+            r["asset_count"],
+            json!(2),
+            "只有 assets/** 下的两个文件算资源"
+        );
+        assert_eq!(
+            r["has_preview"],
+            json!(true),
+            "主题目录里的 preview.png 要带进包——这一步是 RPC 层独有的,crate 层的 export_package 不读它"
+        );
+        assert!(pkg.is_file(), "包要真的落在给定路径上");
+
+        // previewPackage:刚导出的包读得回来,且与导出回执逐字对得上(导出与导入两套
+        // 条目判据走岔时,这里当场炸)。
+        let prev = c
+            .web_data_rpc(
+                "theme.previewPackage",
+                &json!({ "path": pkg.to_string_lossy() }),
+            )
+            .unwrap();
+        assert_eq!(prev["display_name"], r["display_name"]);
+        assert_eq!(prev["asset_count"], r["asset_count"]);
+        assert_eq!(prev["has_preview"], r["has_preview"]);
+        assert_eq!(prev["author"], json!("某人"));
+        assert_eq!(prev["version"], json!("1.2"));
+
+        // 没有 preview.png 的主题:导出照样成,has_preview 如实为 false。
+        std::fs::remove_file(src.join("preview.png")).unwrap();
+        let bare = out_dir.join("mo-bare.wtheme");
+        let r2 = c
+            .web_data_rpc(
+                "theme.exportPackage",
+                &json!({ "slug": slug, "path": bare.to_string_lossy() }),
+            )
+            .unwrap();
+        assert_eq!(r2["has_preview"], json!(false));
+
+        // 导出失败不留残骸,更不毁掉落点上原有的包:拿一个必然过不了自检的主题
+        // (条目数越过包格式上限)去打到一个已有好包的路径上。
+        let many = data.join("themes").join("wind_test_themepkg_many");
+        std::fs::create_dir_all(many.join("assets")).unwrap();
+        std::fs::write(many.join("theme.toml"), "[meta]\nname = \"太多\"\n").unwrap();
+        for i in 0..=aurora_transfer::theme::MAX_THEME_ENTRIES {
+            std::fs::write(many.join("assets").join(format!("{i}.png")), b"x").unwrap();
+        }
+        let good_before = std::fs::read(&bare).unwrap();
+        let e = c
+            .web_data_rpc(
+                "theme.exportPackage",
+                &json!({ "slug": "wind_test_themepkg_many", "path": bare.to_string_lossy() }),
+            )
+            .unwrap_err();
+        // `{:#}` 与 RPC 出口同口径:`dispatch` 就是按这个格式把错误发给设置端与 CLI 的
+        // （出口本身不许退回 `to_string()`,那条由 `dispatch` 自己的用例钉着）。
+        let e = format!("{e:#}");
+        // 断文案:否则哪天这个夹具因为别的原因(比如主题本身没通过 validate)提前失败,
+        // 下面那两条「旧包还在」就会在一个根本没走到打包的路径上假绿。
+        assert!(
+            e.contains("条目过多"),
+            "应因条目数越过上限而失败，实际: {e}"
+        );
+        assert!(
+            e.contains("导出主题"),
+            "错误链要带上「导出主题」这层主语，实际: {e}"
+        );
+        assert_eq!(
+            std::fs::read(&bare).unwrap(),
+            good_before,
+            "失败的导出必须原封不动地留下落点上那份旧包"
+        );
+        assert!(
+            !bare.with_extension("wtheme.tmp").exists(),
+            "失败后不留 .tmp 残骸"
+        );
+
+        // previewPackage / importPackage:不存在的包路径 → 错误
+        let missing = out_dir.join("zz_no_such.wtheme");
+        for m in ["theme.previewPackage", "theme.importPackage"] {
+            assert!(
+                c.web_data_rpc(m, &json!({ "path": missing.to_string_lossy() }))
+                    .is_err(),
+                "{m} 对不存在的包应报错"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    /// 分发包的说明元信息:包级 title/description 提到响应顶层,片段自带的说明进
+    /// `configPatch.info`。两者在本测试里**取不同的值**——取错了源也照绿是这类
+    /// "两个来源同名字段"最容易漏的假绿。
+    #[test]
+    fn scheme_preview_import_separates_package_and_patch_info() {
+        let c = coord("schemepkginfo");
+        let t = std::env::temp_dir().join("wind_schemepkginfo_test");
+        let _ = std::fs::remove_dir_all(&t);
+        std::fs::create_dir_all(&t).unwrap();
+        let pkg = t.join("info.wpkg");
+        {
+            let f = std::fs::File::create(&pkg).unwrap();
+            let mut w = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, body) in [
+                (
+                    "package.toml",
+                    "[package]\nformat_version = 2\ntitle = \"包级标题\"\ndescription = \"包级说明\"\n",
+                ),
+                (
+                    "zz_info_probe.schema.toml",
+                    "[schema]\nid=\"zz_info_probe\"\n",
+                ),
+                (
+                    "config_patch.toml",
+                    "[package]\ntitle = \"片段级标题\"\ndescription = \"片段级说明\"\n\
+                     [ui.candidate]\nper_page = 9\n",
+                ),
+            ] {
+                use std::io::Write;
+                w.start_file(name, opts).unwrap();
+                w.write_all(body.as_bytes()).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        let prev = c
+            .web_data_rpc(
+                "scheme.previewImport",
+                &json!({ "path": pkg.to_string_lossy() }),
+            )
+            .unwrap();
+        assert_eq!(prev["title"], json!("包级标题"), "包级说明提到顶层");
+        assert_eq!(prev["description"], json!("包级说明"));
+        let cp = prev.get("configPatch").expect("含 config_patch 应附 diff");
+        assert_eq!(
+            cp["info"]["title"],
+            json!("片段级标题"),
+            "片段自带的说明进 configPatch.info,不与包级混淆"
+        );
+        assert_eq!(cp["info"]["description"], json!("片段级说明"));
+        // 保留段不产出配置条目:entries 只有真配置键那一条。
+        let entries = cp["entries"].as_array().expect("entries 应为数组");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0]["key"], json!("ui.candidate.per_page"));
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    /// 信封路径的两形:写了说明 → 顶层带出(只写 title 时 description 不出现);
+    /// 没写 → 顶层与 configPatch 都没有说明字段。
+    #[test]
+    fn scheme_preview_import_text_info_present_and_absent() {
+        let c = coord("schemetextinfo");
+        let with_info = "[package]\nformat_version = 2\nkind = \"schema_text\"\n\
+                         title = \"快符方案\"\n\
+                         [[files]]\npath = \"zz_kf_info.schema.toml\"\ncontent = \"[schema]\\nid = 'kf'\\n\"\n";
+        let prev = c
+            .web_data_rpc("scheme.previewImportText", &json!({ "text": with_info }))
+            .unwrap();
+        assert_eq!(prev["title"], json!("快符方案"));
+        assert!(
+            prev.get("description").is_none(),
+            "没写的字段不输出: {prev}"
+        );
+
+        let without_info = "[package]\nformat_version = 2\nkind = \"schema_text\"\n\
+                            [[files]]\npath = \"zz_kf_info.schema.toml\"\ncontent = \"[schema]\\nid = 'kf'\\n\"\n\
+                            [[files]]\npath = \"config_patch.toml\"\ncontent = \"ui.candidate.per_page = 9\\n\"\n";
+        let prev = c
+            .web_data_rpc("scheme.previewImportText", &json!({ "text": without_info }))
+            .unwrap();
+        assert!(prev.get("title").is_none(), "无说明不输出 title: {prev}");
+        assert!(prev.get("description").is_none());
+        let cp = prev.get("configPatch").expect("含 config_patch 应附 diff");
+        assert!(cp.get("info").is_none(), "片段没写说明就没有 info: {cp}");
+    }
+
+    /// 文本信封 RPC 契约(只测只读与错误路径:importText 会真写用户 schemas 目录,
+    /// 落盘语义已在 aurora-transfer::envelope 层覆盖——与 importPackage 同一取舍)。
+    #[test]
+    fn scheme_text_envelope_rpc_contract() {
+        let c = coord("schemetext");
+        let envelope = "[package]\nformat_version = 2\nkind = \"schema_text\"\n\
+                        [schema]\nid = \"kf\"\nversion = \"1.00.0\"\n\
+                        [[files]]\npath = \"zz_kf_probe.schema.toml\"\ncontent = \"[schema]\\nid = 'kf'\\n\"\n\
+                        [[files]]\npath = \"config_patch.toml\"\ncontent = \"ui.candidate.per_page = 9\\n\"\n";
+        let prev = c
+            .web_data_rpc("scheme.previewImportText", &json!({ "text": envelope }))
+            .unwrap();
+        // 形状与 path 版一致
+        assert_eq!(
+            prev.get("package")
+                .and_then(|p| p.get("schema"))
+                .and_then(|s| s.get("id"))
+                .and_then(|v| v.as_str()),
+            Some("kf")
+        );
+        assert!(prev.get("willAdd").and_then(|v| v.as_array()).is_some());
+        assert!(prev.get("conflicts").and_then(|v| v.as_array()).is_some());
+        // 配置片段随预览附带逐键 diff(不落盘、不应用)
+        let cp = prev.get("configPatch").expect("含 config_patch 应附 diff");
+        assert_eq!(cp["ok"], json!(true));
+        let entries = cp["entries"].as_array().expect("entries 应为数组");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["key"], json!("ui.candidate.per_page"));
+        assert_eq!(entries[0]["next"], json!(9));
+        assert!(
+            prev.get("willAdd")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().all(|v| v != "config_patch.toml"))
+                .unwrap_or(false),
+            "config_patch 不进文件清单"
+        );
+
+        // 非信封文本 → 错误带 not_schema_text: 前缀(设置端据此回落片段管线),两个方法一致。
+        for method in ["scheme.previewImportText", "scheme.importText"] {
+            let err = c
+                .web_data_rpc(method, &json!({ "text": "ui.candidate.per_page = 9\n" }))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(aurora_transfer::envelope::NOT_SCHEMA_TEXT),
+                "{method} 对非信封文本须带回落前缀: {err}"
+            );
+        }
+        // 缺 text 参数 → 错误
+        assert!(
+            c.web_data_rpc("scheme.previewImportText", &json!({}))
+                .is_err()
+        );
+    }
+
+    /// P4a Review Focus 4：Replace 还原统计后，收集器下一次写盘不覆盖还原值。
+    #[test]
+    fn restore_stats_resets_collector() {
+        use aurora_store::stat_collector::StatEvent;
+        let c = coord("restore_stats");
+        let store = c.user_store().cloned().unwrap();
+        let col = c.stat_collector().expect("采集器");
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        store
+            .put_daily_stat(
+                &today,
+                &aurora_store::stats::DailyStats {
+                    chinese: 5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        col.resume();
+        let out =
+            std::env::temp_dir().join(format!("wind_restore_stats_{}.zip", std::process::id()));
+        let _ = std::fs::remove_file(&out);
+        c.web_data_rpc(
+            "backup.create",
+            &json!({ "path": out.to_string_lossy(), "includeStats": true }),
+        )
+        .unwrap();
+        col.record(StatEvent {
+            timestamp: chrono::Local::now(),
+            chinese: 100,
+            english: 0,
+            punct: 0,
+            other: 0,
+            code_len: 2,
+            candidate_pos: 0,
+            keystrokes: 2,
+            schema_id: "wb".into(),
+            source: Default::default(),
+        });
+        c.web_data_rpc(
+            "backup.restore",
+            &json!({ "path": out.to_string_lossy(), "sections": ["stats"], "strategy": "replace" }),
+        )
+        .unwrap();
+        col.flush();
+        assert_eq!(
+            store.get_daily_stat(&today).unwrap().chinese,
+            5,
+            "收集器不得覆盖还原值"
+        );
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn backup_rpc_contract() {
+        let c = coord("backuprpc");
+        // 种一条数据,create 到临时路径(coord 的 store 是临时 redb;文件域目录真实但只读不写:
+        // create 只读取 config/schemas/themes,不写入它们)
+        c.web_data_rpc(
+            "dict.add",
+            &json!({ "schemaId": "wb", "code": "a", "text": "工", "weight": 100 }),
+        )
+        .unwrap();
+        let out = std::env::temp_dir().join("wind_backup_rpc_test.zip");
+        let _ = std::fs::remove_file(&out);
+        let r = c
+            .web_data_rpc(
+                "backup.create",
+                &json!({ "path": out.to_string_lossy(), "includeStats": false }),
+            )
+            .unwrap();
+        assert!(r.get("manifest").is_some());
+        // inspect
+        let ins = c
+            .web_data_rpc("backup.inspect", &json!({ "path": out.to_string_lossy() }))
+            .unwrap();
+        assert_eq!(
+            ins.get("manifest")
+                .and_then(|m| m.get("kind"))
+                .and_then(|v| v.as_str()),
+            Some("backup")
+        );
+        // inspect 不存在的包 → 错误
+        assert!(
+            c.web_data_rpc(
+                "backup.inspect",
+                &json!({ "path": std::env::temp_dir().join("zz_no.zip").to_string_lossy() }),
+            )
+            .is_err()
+        );
+        // restore 仅数据域 sections(dict):写临时 store,不碰真实用户文件
+        c.web_data_rpc("dict.clear", &json!({ "schemaId": "wb" }))
+            .unwrap();
+        let rr = c
+            .web_data_rpc(
+                "backup.restore",
+                &json!({ "path": out.to_string_lossy(), "sections": ["dict"] }),
+            )
+            .unwrap();
+        assert!(
+            rr.get("restored")
+                .and_then(|v| v.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+        );
+        let listed = c
+            .web_data_rpc("dict.listPaged", &json!({ "schemaId": "wb", "limit": 10 }))
+            .unwrap();
+        assert_eq!(listed.get("total").and_then(|v| v.as_u64()), Some(1));
+        let _ = std::fs::remove_file(&out);
+    }
+
+    /// 按键总览的**降级标记**：`keys.key_actions` 段回落出厂值时，那张表的全局层
+    /// **不列出**，并经 `keysOverviewDegraded` 说明缺了什么。
+    ///
+    /// 不这么做的后果不是「少了点信息」，而是**把出厂默认当成用户的真实绑定展示**：
+    /// 用户对着一张看起来完全正常的表，怎么也对不上实际按键行为，唯一的线索埋在日志里。
+    ///
+    /// ★ 三条判据互相兜底，故都写进同一个用例：
+    /// ① 坏表的全局层消失；② 好表的全局层**一条不少**（一起清会把完好的那张也变空白）；
+    /// ③ 方案层照常列出（它来自方案文件，不受 `Config` 降级影响）。
+    /// 只测 ① 的话，「两张表全清」这种过头的实现照样绿。
+    /// ★ 方案层 `[key_actions]` 的组合键没有消费通路：列出但标 `ineffective: true`，且
+    /// **不遮盖**同名全局条目（全局那条照常列出、`ineffective: false`）。
+    ///
+    /// 对照：方案层的单键 / 修饰键条目照旧遮盖全局（`semicolon`）；会话表不受影响。
+    #[test]
+    fn keys_overview_marks_schema_combo_keys_ineffective_without_shadowing_global() {
+        let schema_cfg = json!({
+            "key_actions": {
+                "ctrl+alt+shift+j": "command:open(\"https://example.com\")",
+                "ctrl+shift+r": "toggle_mode",
+                "semicolon": "special:emoji",
+            },
+            "session_actions": { "comma": "page_prev" },
+        });
+        let mut cfg = aurora_config::Config::default();
+        cfg.keys
+            .key_actions
+            .insert("ctrl+alt+shift+j".into(), "toggle_punct".into());
+        cfg.keys
+            .key_actions
+            .insert("semicolon".into(), "mix:quick_mix".into());
+
+        let (rows, _) = keys_overview_of(&cfg, &schema_cfg);
+        let pick = |key: &str| -> Vec<&Value> {
+            rows.iter()
+                .filter(|r| r["table"] == json!("lead") && r["key"] == json!(key))
+                .collect()
+        };
+
+        // 同名组合键：全局那条照常列出且生效，方案那条列出但不生效。
+        let j = pick("ctrl+alt+shift+j");
+        assert_eq!(j.len(), 2, "全局与方案两条都应列出：{j:?}");
+        assert!(
+            j.iter().any(|r| r["from"] == json!("global")
+                && r["action"] == json!("toggle_punct")
+                && r["ineffective"] == json!(false)),
+            "全局那条不得被遮盖：{j:?}"
+        );
+        assert!(
+            j.iter()
+                .any(|r| r["from"] == json!("schema") && r["ineffective"] == json!(true)),
+            "方案那条应标不生效：{j:?}"
+        );
+
+        // 只有方案层有的组合键：同样标不生效。
+        let r = pick("ctrl+shift+r");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["ineffective"], json!(true));
+
+        // 对照：方案层单键照旧遮盖全局，且生效。
+        let semi = pick("semicolon");
+        assert_eq!(semi.len(), 1, "单键方案条目照旧遮盖全局：{semi:?}");
+        assert_eq!(semi[0]["from"], json!("schema"));
+        assert_eq!(semi[0]["ineffective"], json!(false));
+
+        // 字段恒在：每一条都带 `ineffective`（布尔）。
+        assert!(
+            rows.iter().all(|r| r["ineffective"].is_boolean()),
+            "ineffective 须恒在：{rows:?}"
+        );
+        // 会话表不受影响。
+        assert!(
+            rows.iter()
+                .filter(|r| r["table"] == json!("session"))
+                .all(|r| r["ineffective"] == json!(false))
+        );
+    }
+
+    #[test]
+    fn keys_overview_marks_degraded_table_and_spares_the_healthy_one() {
+        let schema_cfg = json!({
+            "key_actions": { "semicolon": "special:emoji" },
+            "session_actions": { "comma": "page_prev" },
+        });
+
+        let mut cfg = aurora_config::Config::default();
+        cfg.keys
+            .key_actions
+            .insert("F7".into(), "special:number".into());
+        cfg.keys
+            .session_actions
+            .insert("apostrophe".into(), "none".into());
+
+        // 前置：无降级时两层都在，且**全局层确实非空**——否则下面「消失了」的断言
+        // 会因为它本来就是空的而恒绿。
+        let (clean, marker) = keys_overview_of(&cfg, &schema_cfg);
+        assert_eq!(marker, Value::Null, "无降级时标记须为显式 null");
+        let global_of = |rows: &[Value], table: &str| -> Vec<String> {
+            rows.iter()
+                .filter(|r| r["table"] == json!(table) && r["from"] == json!("global"))
+                .map(|r| r["key"].as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+        assert!(
+            global_of(&clean, "lead").contains(&"F7".to_string()),
+            "前置：无降级时全局层的 F7 须在表里\n{clean:?}"
+        );
+        assert!(
+            global_of(&clean, "session").contains(&"apostrophe".to_string()),
+            "前置：无降级时全局层的 apostrophe 须在表里\n{clean:?}"
+        );
+
+        // 只有 `keys.key_actions` 降级（同段的 `session_actions` 完好）。
+        cfg.degradation = aurora_config::config::ConfigDegradation {
+            sections: vec!["keys.key_actions".into()],
+            total_fallback: false,
+            unparsable: Vec::new(),
+        };
+        let (rows, marker) = keys_overview_of(&cfg, &schema_cfg);
+
+        assert!(
+            global_of(&rows, "lead").is_empty(),
+            "★ 不可信的全局层必须不列，而不是把出厂表当用户绑定展示\n{rows:?}"
+        );
+        assert!(
+            global_of(&rows, "session").contains(&"apostrophe".to_string()),
+            "★ 完好的那张表不该被牵连\n{rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r["table"] == json!("lead") && r["from"] == json!("schema")),
+            "方案层来自方案文件，不受 Config 降级影响，须照常列出\n{rows:?}"
+        );
+
+        assert_eq!(
+            marker,
+            json!({
+                "tables": ["lead"],
+                "sections": ["keys.key_actions"],
+                "totalFallback": false,
+            }),
+            "★ 调用方须看得出「哪张表不完整、因为哪些段降级」；点分路径原样传出"
+        );
+
+        // 整份回落：两张表的全局层都不可信。
+        cfg.degradation = aurora_config::config::ConfigDegradation {
+            sections: Vec::new(),
+            total_fallback: true,
+            unparsable: Vec::new(),
+        };
+        let (rows, marker) = keys_overview_of(&cfg, &schema_cfg);
+        assert!(
+            global_of(&rows, "lead").is_empty() && global_of(&rows, "session").is_empty(),
+            "整份回落时两张表的全局层都不该列\n{rows:?}"
+        );
+        assert_eq!(marker["tables"], json!(["lead", "session"]), "{marker}");
+        assert_eq!(marker["totalFallback"], json!(true), "{marker}");
+    }
+
+    /// ★★ session 表的判据必须覆盖**折算来源**，不只是同名的 `keys.session_actions`。
+    ///
+    /// 这条是审查退回的那个洞：`effective_session_actions()` 把 `page_keys` /
+    /// `select_char_keys` / `highlight_keys` / `select_key_groups` 四个组名列表折算成
+    /// 具体绑定，而段级降级**能**把它们单独定位（`narrow_bad_section` 对坏段的每个直接
+    /// 子键都做探针，不分子表还是标量/数组）。于是 `[keys] page_keys = "brackets"`
+    /// 这类手误 ⇒ `sections = ["keys.page_keys"]` ⇒ 只问 `keys.session_actions` 的旧判据
+    /// 返回 false ⇒ 总览照常列出折算自**出厂**组名的翻页键、标记还是 `null`。
+    ///
+    /// 逐个来源分别断言，不是只测 `page_keys`：四条共用一个 `any`，只测一条的话另外
+    /// 三条从列表里删掉用例照样绿。
+    #[test]
+    fn session_table_judgement_covers_every_folded_source() {
+        let schema_cfg = json!({ "session_actions": { "comma": "page_prev" } });
+        let mut cfg = aurora_config::Config::default();
+        cfg.keys
+            .key_actions
+            .insert("F7".into(), "special:number".into());
+
+        let global_of = |rows: &[Value], table: &str| -> Vec<String> {
+            rows.iter()
+                .filter(|r| r["table"] == json!(table) && r["from"] == json!("global"))
+                .map(|r| r["key"].as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+
+        // 前置：出厂 `page_keys` 等折算出的全局绑定确实非空，否则「消失了」恒真。
+        let (clean, _) = keys_overview_of(&cfg, &schema_cfg);
+        assert!(
+            !global_of(&clean, "session").is_empty(),
+            "前置：折算来的全局 session 绑定须非空\n{clean:?}"
+        );
+
+        for src in [
+            "keys.session_actions",
+            "keys.page_keys",
+            "keys.select_char_keys",
+            "keys.highlight_keys",
+            "keys.select_key_groups",
+        ] {
+            cfg.degradation = aurora_config::config::ConfigDegradation {
+                sections: vec![src.into()],
+                total_fallback: false,
+                unparsable: Vec::new(),
+            };
+            let (rows, marker) = keys_overview_of(&cfg, &schema_cfg);
+            assert!(
+                global_of(&rows, "session").is_empty(),
+                "★ {src} 降级时 session 表的全局层必须不列——它是这张表的折算来源\n{rows:?}"
+            );
+            assert_eq!(marker["tables"], json!(["session"]), "{src}: {marker}");
+            assert_eq!(marker["sections"], json!([src]), "{src}: {marker}");
+            // lead 表与这些来源无关，一条都不该被牵连。
+            assert!(
+                global_of(&rows, "lead").contains(&"F7".to_string()),
+                "★ {src} 与 lead 表无关，不该牵连它\n{rows:?}"
+            );
+        }
+    }
+
+    /// `keysOverviewDegraded.sections` 只列**真正导致这些表不可信**的降级段。
+    ///
+    /// 传全量的话，`ui.font` 坏了也会出现在按键总览的「缺失原因」里，设置端照字面渲染
+    /// 就成了「字体那格坏了所以按键表不全」——一条自信的错误解释比不解释更糟。
+    #[test]
+    fn degraded_marker_lists_only_the_sections_that_caused_it() {
+        let schema_cfg = json!({});
+        let mut cfg = aurora_config::Config::default();
+        cfg.keys
+            .key_actions
+            .insert("F7".into(), "special:number".into());
+        cfg.degradation = aurora_config::config::ConfigDegradation {
+            // 一条相关（导致 lead 表不可信）、两条无关。
+            sections: vec!["keys.key_actions".into(), "ui.font".into(), "schema".into()],
+            total_fallback: false,
+            unparsable: Vec::new(),
+        };
+
+        let (_, marker) = keys_overview_of(&cfg, &schema_cfg);
+        assert_eq!(marker["tables"], json!(["lead"]), "{marker}");
+        assert_eq!(
+            marker["sections"],
+            json!(["keys.key_actions"]),
+            "★ 与按键表无关的降级段不得混进「缺失原因」\n{marker}"
+        );
+    }
+
+    /// 标记字段必须登记进 [`READONLY_SIDECAR_FIELDS`]，否则它会随 saveConfig 落进
+    /// override——方案文件里从此带着一段**某次启动的**降级快照，谁也不读、也没人会
+    /// 想到去删。（剥离行为本身由 `strip_readonly_fields` 那条用例逐字段覆盖。）
+    #[test]
+    fn keys_overview_degraded_is_registered_as_sidecar() {
+        assert!(
+            READONLY_SIDECAR_FIELDS.contains(&"keysOverviewDegraded"),
+            "旁路字段漏登记：{READONLY_SIDECAR_FIELDS:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod phrase_shadowing_tests {
+    //! 「用户短语遮蔽系统条目」的可逆性：主键只有 `(code, text)` 一把，遮蔽行归属用户，
+    //! 于是**任何删掉该行的操作都会连带删掉那条系统短语**。每条这样的路径都必须补回缺失的
+    //! 系统条目，漏一条就是「系统短语莫名少了一条」——正是本特性早期版本的原始 bug。
+    use super::*;
+    use std::sync::Arc;
+    use aurora_config::config::Config;
+    use aurora_coordinator::Coordinator;
+    use aurora_store::Store;
+
+    const SYS_CODE: &str = "date";
+    const SYS_TEXT: &str = "$Y年$M月$D日";
+
+    /// 带真实 `system.phrases.toml` 的无头协调器（`data_dir=None` 时补齐逻辑会整体早退，
+    /// 那样测出来的「通过」是假的——它根本没跑到被测代码）。
+    fn coord_with_sys_phrase(tag: &str) -> (Arc<Coordinator>, std::path::PathBuf) {
+        coord_with_sys_toml(tag, "")
+    }
+
+    /// `extra`：追加在 TOML 末尾的更多 `[[phrases]]` 条目。
+    fn coord_with_sys_toml(tag: &str, extra: &str) -> (Arc<Coordinator>, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!("wind_phrase_shadow_{tag}"));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("system.phrases.toml"),
+            format!(
+                "[[phrases]]\ncode = '{SYS_CODE}'\ntext = '{SYS_TEXT}'\nweight = 1000\nposition = 1\n{extra}"
+            ),
+        )
+        .unwrap();
+        let db = base.join("s.redb");
+        let store = Arc::new(Store::open(&db).unwrap());
+        let c = Coordinator::new_headless_with_store(Config::default(), Some(&base), store);
+        (c, base)
+    }
+
+    fn system_phrase_count(c: &Coordinator) -> usize {
+        c.user_store().unwrap().list_system_phrases().unwrap().len()
+    }
+
+    fn user_phrase_count(c: &Coordinator) -> usize {
+        c.user_store()
+            .unwrap()
+            .list_user_phrases_paged(None, 0, 99)
+            .unwrap()
+            .1
+    }
+
+    /// 前置校验：启动即完成系统短语入库，否则下面每个用例都在空库上跑、结论无意义。
+    #[test]
+    fn sanity_system_phrase_seeded_on_startup() {
+        let (c, base) = coord_with_sys_phrase("seed");
+        assert_eq!(system_phrase_count(&c), 1, "启动应把 TOML 系统短语同步入库");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// P3 审查 I2：`dict.reload` 载入手改的短语文件后，输入期短语层随之重建。
+    #[test]
+    fn dict_reload_rebuilds_phrase_layer() {
+        let (c, base) = coord_with_sys_phrase("reload_phrases");
+        let store = c.user_store().cloned().unwrap();
+        store.add_phrase("yx", "me@x.com", 0, 1800).unwrap();
+        c.web_data_rpc("phrase.list", &json!({})).ok();
+        let f = store.phrases_path();
+        std::fs::write(
+            &f,
+            std::fs::read_to_string(&f).unwrap() + "dzdz\t地址\t1800\n",
+        )
+        .unwrap();
+        let r = c.web_data_rpc("dict.reload", &json!({})).unwrap();
+        assert!(
+            r["reloaded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "phrases"),
+            "{r}"
+        );
+        assert!(c.debug_phrase_texts("dzdz").contains(&"地址".to_string()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// P3 审查 I1：数据目录里没有 system.phrases.toml 时短语迁移照样做（没有 TOML 就没有系统行），
+    /// 用户短语不能因此看不见。
+    #[test]
+    fn phrase_migration_runs_without_system_toml() {
+        let base = std::env::temp_dir().join("wind_phrase_no_toml");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let store = Arc::new(Store::open(base.join("s.redb")).unwrap());
+        store
+            .legacy_put_phrase("yx", "me@x.com", 1800, 0, true, false, false, "")
+            .unwrap();
+        let c = Coordinator::new_headless_with_store(Config::default(), Some(&base), store.clone());
+        assert!(store.migrated_p3());
+        assert!(store.list_phrases().unwrap().iter().any(|p| p.code == "yx"));
+        assert!(c.debug_phrase_texts("yx").contains(&"me@x.com".to_string()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 删除遮蔽行 → 系统条目露出来（用户预期：删掉我加的那条，就该回到系统默认）。
+    #[test]
+    fn removing_shadowing_phrase_restores_system_entry() {
+        let (c, base) = coord_with_sys_phrase("remove");
+        let p = json!({ "code": SYS_CODE, "text": SYS_TEXT, "weight": 5000, "position": 9 });
+        c.web_data_rpc("phrase.add", &p).unwrap();
+        assert_eq!(user_phrase_count(&c), 1, "遮蔽行归用户");
+        assert_eq!(system_phrase_count(&c), 0, "系统条目被遮蔽");
+
+        c.web_data_rpc(
+            "phrase.remove",
+            &json!({ "code": SYS_CODE, "text": SYS_TEXT }),
+        )
+        .unwrap();
+        assert_eq!(user_phrase_count(&c), 0);
+        assert_eq!(
+            system_phrase_count(&c),
+            1,
+            "删掉遮蔽行后系统条目必须回来，而不是两条一起消失"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 「清空用户短语」同理，且**不得**顺带重置用户对系统短语的编辑。
+    #[test]
+    fn clearing_user_phrases_restores_system_entry_without_resetting_edits() {
+        let (c, base) = coord_with_sys_toml(
+            "clear",
+            "[[phrases]]\ncode = 'other'\ntext = '别的'\nweight = 1\nposition = 0\n",
+        );
+        let store = c.user_store().cloned().unwrap();
+        // 另一条系统短语由用户改过权重（在系统短语列表里调过）
+        store
+            .update_phrase("other", "别的", None, None, Some(7), Some(4321))
+            .unwrap();
+
+        c.web_data_rpc(
+            "phrase.add",
+            &json!({ "code": SYS_CODE, "text": SYS_TEXT, "weight": 5000, "position": 9 }),
+        )
+        .unwrap();
+        c.web_data_rpc("phrase.resetDefault", &json!({})).unwrap();
+
+        assert_eq!(user_phrase_count(&c), 0, "用户短语已清空");
+        assert!(
+            store
+                .list_system_phrases()
+                .unwrap()
+                .iter()
+                .any(|p| p.code == SYS_CODE),
+            "被遮蔽的系统条目须补回"
+        );
+        let other = store
+            .list_system_phrases()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.code == "other")
+            .expect("另一条系统短语仍在");
+        assert_eq!(
+            (other.weight, other.position),
+            (4321, 7),
+            "清空用户短语不得重置用户对系统短语的编辑（补齐必须只补缺失，不能走 sync）"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 改遮蔽行的编码 → 旧键被 remove，系统条目同样要补回。
+    #[test]
+    fn rekeying_shadowing_phrase_restores_system_entry() {
+        let (c, base) = coord_with_sys_phrase("rekey");
+        c.web_data_rpc(
+            "phrase.add",
+            &json!({ "code": SYS_CODE, "text": SYS_TEXT, "weight": 5000, "position": 0 }),
+        )
+        .unwrap();
+        assert_eq!(system_phrase_count(&c), 0);
+
+        c.web_data_rpc(
+            "phrase.update",
+            &json!({ "code": SYS_CODE, "text": SYS_TEXT, "newCode": "rq2" }),
+        )
+        .unwrap();
+        assert_eq!(
+            system_phrase_count(&c),
+            1,
+            "改键腾出原 (code,text) 后系统条目须补回"
+        );
+        assert_eq!(user_phrase_count(&c), 1, "改键后的用户短语仍在");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// 从 `.dict.yaml` 的 YAML 头读 `name:`，读不到返回空串（调用方回落文件名）。
+///
+/// 只读到头部结束（独占一行的 `...`）：正文可能有几百 MB，而这里只是给设置页的下拉
+/// 取个显示名。
+fn dict_yaml_name(path: &std::path::Path) -> String {
+    use std::io::BufRead;
+    let Ok(f) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    for line in std::io::BufReader::new(f).lines().take(200) {
+        let Ok(line) = line else { return String::new() };
+        if line.trim_end() == "..." {
+            break;
+        }
+        // 顶格的 `name:` 才是词库名（缩进的同名键属于别的映射）。
+        if line.starts_with("name:")
+            && let Some(v) = line["name:".len()..].split('#').next()
+        {
+            return v.trim().trim_matches('"').trim_matches('\'').to_string();
+        }
+    }
+    String::new()
+}
+
+#[cfg(test)]
+mod schema_key_gate_wiring_tests {
+    //! 改动方案文件 / 方案 override 的每个 RPC 落盘后都必须重建吃键集（GH#144 及同根）。
+    //!
+    //! 吃键集（DLL 据以决定哪些标点键交给 core）只在 `ConfigBundle` 构建时算一次，其中的
+    //! 跨方案并集读的正是方案文件与 override。这几个 RPC 都不经 `config.setItems`，漏接
+    //! `refresh_schema_derived_config` 的表现是「改了要重启才生效」，零日志。
+    //!
+    //! 为什么是**源码守卫**而不是端到端：导入 / 删除 / 还原写的是真实用户目录
+    //! （`Config::user_config_dir()`，由安装器的 datadir.conf 决定，测试进程改不了），跑起来
+    //! 会改开发机上正在用的配置——本文件的 scheme / theme 契约测试同样只测到「包不存在即报错」
+    //! 为止。重建本身的正确性由 aurora-coordinator 的 `schema_punct_custom_mixed.rs` 端到端覆盖
+    //! （saveConfig / invalidate 两条路），这里只钉「每个入口都接上了」。
+
+    /// 取 `fn <name>(` 起到其首个 4 格缩进的闭合 `}` 为止的函数体（trait 默认方法都在 4 格
+    /// 缩进上闭合），不会越界带上下一个函数的文档注释。只扫文件中**第一个** `#[cfg(test)]`
+    /// 之前的部分——被守护的函数若挪到那之后，这里会报「找不到」而不是假绿。
+    fn fn_body(name: &str) -> &'static str {
+        let src = include_str!("lib.rs");
+        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let head = format!("fn {name}(");
+        let start = prod.find(&head).unwrap_or_else(|| {
+            panic!("找不到 {head}——改名了，或挪到了第一个 #[cfg(test)] 之后？同步更新本守卫")
+        });
+        let rest = &prod[start + head.len()..];
+        let end = rest
+            .find("\n    }\n")
+            .unwrap_or_else(|| panic!("{head} 找不到函数体的闭合行"));
+        &rest[..end]
+    }
+
+    #[test]
+    fn schema_mutating_rpcs_refresh_key_gate() {
+        for name in [
+            "web_schema_save_config",
+            "web_schema_reset_config",
+            "web_schema_delete",
+            "web_scheme_import_package",
+            "web_scheme_import_text",
+            "web_backup_restore",
+        ] {
+            assert!(
+                fn_body(name).contains("refresh_schema_derived_config()"),
+                "{name} 改了方案文件 / override，却没重建吃键集（GH#144 同根）"
+            );
+        }
+    }
+
+    /// CLI `schema set/reset` 写完 override 后调的 `schema.invalidate` 在分派表里就地实现。
+    #[test]
+    fn schema_invalidate_arm_refreshes_key_gate() {
+        let src = include_str!("lib.rs");
+        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let start = prod
+            .find("\"schema.invalidate\" =>")
+            .expect("分派表里找不到 schema.invalidate");
+        let arm_len = prod[start..]
+            .find("\n            }")
+            .expect("schema.invalidate 臂不再是块形式？同步更新本守卫");
+        let arm = &prod[start..start + arm_len];
+        assert!(arm.contains("refresh_schema_derived_config()"));
+    }
+}
+
+#[cfg(test)]
+mod followed_behavior_tests {
+    use super::*;
+
+    #[test]
+    fn followed_behavior_reads_global_values() {
+        let mut cfg = aurora_config::Config::default();
+        cfg.ui.candidate.layout = "vertical".into();
+        cfg.ui.font.family = "霞鹜文楷".into();
+        cfg.schema.pinyin.aux_code.enabled = true;
+        cfg.schema.pinyin.aux_code.max_phrase_len = 3;
+        cfg.schema.pinyin.aux_code.direct = true;
+        let v = followed_behavior_of(&cfg, Some("主题字体".into()));
+        assert_eq!(
+            v,
+            json!({
+                "layout": "vertical",
+                "fontFamily": "霞鹜文楷",
+                "auxEnabled": true,
+                "auxMaxPhraseLen": 3,
+                "auxDirect": true,
+            })
+        );
+    }
+
+    /// 全局字体空 = 跟随主题 ⇒ 给主题的字体；主题也没给 ⇒ 空串（不是「默认」之类的占位词）。
+    #[test]
+    fn followed_behavior_font_falls_back_to_theme_then_empty() {
+        let mut cfg = aurora_config::Config::default();
+        cfg.ui.font.family = String::new();
+        let v = followed_behavior_of(&cfg, Some("主题字体".into()));
+        assert_eq!(v["fontFamily"], "主题字体");
+        let v = followed_behavior_of(&cfg, None);
+        assert_eq!(v["fontFamily"], "");
+    }
+
+    /// 全局 layout 只认横竖两档：空串/未知值按运行时同一裁决落到横排。
+    #[test]
+    fn followed_behavior_layout_is_horizontal_or_vertical() {
+        let mut cfg = aurora_config::Config::default();
+        cfg.ui.candidate.layout = String::new();
+        assert_eq!(followed_behavior_of(&cfg, None)["layout"], "horizontal");
+    }
+
+    #[test]
+    fn followed_behavior_is_a_readonly_sidecar() {
+        assert!(
+            READONLY_SIDECAR_FIELDS.contains(&"followedBehavior"),
+            "旁路字段漏登记：{READONLY_SIDECAR_FIELDS:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod memory_stats_tests {
+    //! `system.memoryStats`（只读诊断）的回包形态。设置端「高级 → 性能 → 内存占用」卡片与
+    //! 「复制诊断信息」按它取数：字段恒在（缺数给 `null` / 空数组），客户端可无条件渲染。
+    use super::*;
+    use std::sync::Arc;
+    use aurora_config::Config;
+    use aurora_coordinator::Coordinator;
+    use aurora_store::Store;
+
+    /// 一个自造码表方案 `zm1` 的数据目录 + store（不依赖 build_dev，不会静默跳过）。
+    /// `tag` 让并行的用例各用各的夹具目录——redb 是独占锁，两条用例同时开同一个 `s.redb`
+    /// 必有一条失败。
+    fn coord(tag: &str) -> Arc<Coordinator> {
+        let base = std::env::temp_dir().join(format!("wind_memstats-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let schemas = base.join("schemas");
+        std::fs::create_dir_all(schemas.join("zm1")).unwrap();
+        std::fs::write(
+            schemas.join("zm1.schema.toml"),
+            "[schema]\nid = \"zm1\"\nname = \"zm1\"\n[engine]\ntype = \"codetable\"\n\
+             [engine.codetable]\nmax_code_length = 4\n\
+             [[dictionaries]]\nid = \"main\"\npath = \"zm1/zm1.dict.yaml\"\ndefault = true\n",
+        )
+        .unwrap();
+        std::fs::write(
+            schemas.join("zm1/zm1.dict.yaml"),
+            "---\nname: zm1\nversion: \"1\"\n...\n甲\ta\n",
+        )
+        .unwrap();
+        let store = Arc::new(Store::open(base.join("s.redb")).unwrap());
+        let mut cfg = Config::default();
+        cfg.schema.active = "zm1".into();
+        cfg.schema.available = vec!["zm1".into()];
+        Coordinator::new_headless_with_store(cfg, Some(&base), store)
+    }
+
+    /// storageStatus 报 meta.toml 里的实际格式版本，并带上写失败原因（没有时为 null）。
+    #[test]
+    fn storage_status_reports_actual_format_version_and_write_error() {
+        let c = coord("storage_status_actual");
+        let v = c.web_data_rpc("system.storageStatus", &json!({})).unwrap();
+        assert_eq!(
+            v["format_version"],
+            aurora_config::user_meta::KNOWN_FORMAT_VERSION
+        );
+        assert!(v["write_error"].is_null());
+        let dir = c
+            .user_store()
+            .unwrap()
+            .path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::write(
+            dir.join("meta.toml"),
+            "format_version = 3\ndir_id = \"x\"\n",
+        )
+        .unwrap();
+        let v = c.web_data_rpc("system.storageStatus", &json!({})).unwrap();
+        assert_eq!(v["format_version"], 3, "报文件里的实际值");
+        assert_eq!(
+            v["known_format_version"],
+            aurora_config::user_meta::KNOWN_FORMAT_VERSION
+        );
+    }
+
+    /// §2.5：数据文件的问题（坏行 / 隔离 / 已重建 / 未迁移）经 storageStatus 交给设置页。
+    #[test]
+    fn storage_status_lists_data_file_issues() {
+        let c = coord("storage_status_issues");
+        let root = c.user_store().unwrap().user_text_dir().to_path_buf();
+        let f = root.join("pinyin").join("freq.table.yaml");
+        let g = root.join("stats").join("2026-10.toml");
+        aurora_store::issues::report(&f, aurora_store::issues::IssueKind::BadLines(3));
+        aurora_store::issues::report(
+            &g,
+            aurora_store::issues::IssueKind::Rebuilt {
+                kept_as: "2026-10.toml.corrupt-x".into(),
+            },
+        );
+        let v = c.web_data_rpc("system.storageStatus", &json!({})).unwrap();
+        let issues = v["issues"].as_array().unwrap();
+        assert_eq!(issues.len(), 2, "{v}");
+        assert_eq!(issues[0]["path"], "pinyin/freq.table.yaml");
+        assert_eq!(issues[0]["kind"], "bad_lines");
+        assert_eq!(issues[0]["lines"], 3);
+        assert_eq!(issues[1]["path"], "stats/2026-10.toml");
+        assert_eq!(issues[1]["kind"], "rebuilt");
+        assert_eq!(issues[1]["kept_as"], "2026-10.toml.corrupt-x");
+        aurora_store::issues::clear(&f);
+        aurora_store::issues::clear(&g);
+    }
+
+    /// 用户数据设计 §7.1：`system.storageStatus` 报只读标志、原因与格式版本。正常构造的
+    /// 协调器不是只读；只读路径（meta.toml 版本更高）由 aurora-coordinator 的
+    /// `tests/storage_readonly.rs` 验（trait 在那边不可调，这里验的是 RPC 的形状）。
+    #[test]
+    fn storage_status_reports_readonly_flag_and_versions() {
+        let c = coord("storage_status_reports_r");
+        let v = c.web_data_rpc("system.storageStatus", &json!({})).unwrap();
+        assert_eq!(v["readonly"], false);
+        assert!(v["reason"].is_null());
+        assert_eq!(
+            v["format_version"],
+            aurora_config::user_meta::KNOWN_FORMAT_VERSION
+        );
+        assert_eq!(
+            v["known_format_version"],
+            aurora_config::user_meta::KNOWN_FORMAT_VERSION
+        );
+    }
+
+    #[test]
+    fn memory_stats_reports_process_schemas_and_structures() {
+        let c = coord("memory_stats_reports_pro");
+        let v = c.web_data_rpc("system.memoryStats", &json!({})).unwrap();
+
+        let p = &v["process"];
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            assert_eq!(p["kind"], "rss_anon");
+            assert!(p["bytes"].as_u64().unwrap() > 0);
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(p["kind"], "private");
+            assert!(p["bytes"].as_u64().unwrap() > 0);
+        }
+        assert!(p.get("bytes").is_some() && p.get("kind").is_some());
+
+        let schemas = v["schemas"].as_array().expect("schemas 是数组");
+        assert_eq!(schemas.len(), 1, "只有当前方案已加载：{v}");
+        assert_eq!(schemas[0]["id"], "zm1");
+        assert_eq!(schemas[0]["type"], "CodeTable");
+        assert!(schemas[0]["parts"].is_array());
+
+        assert!(v["reverseIndex"].is_array());
+        assert!(v["userText"].is_array());
+        assert!(v.get("userAssoc").is_some());
+        assert!(v.get("singleChar").is_some());
+        for k in ["chaiziBytes", "pinyinBytes", "commentBytes"] {
+            assert!(v["reverseLookup"][k].is_u64(), "reverseLookup.{k}：{v}");
+        }
+        assert!(
+            v["redb"].is_null(),
+            "全新用户目录不打开旧库，不该报它的缓存上限：{v}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod system_stats_tests {
+    //! `dict.systemStats` 的回包形态：码表方案出各库分行 / 码长 / 重码，混输按成员并排。
+    use super::*;
+    use std::sync::Arc;
+    use aurora_config::Config;
+    use aurora_coordinator::Coordinator;
+    use aurora_store::Store;
+
+    /// 码表 `zm1`（主库 + 停用扩展）+ 混输 `mx`（主码表 zm1，无拼音成员）。
+    fn coord(tag: &str) -> Arc<Coordinator> {
+        let base = std::env::temp_dir().join(format!("wind_sysstats-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let schemas = base.join("schemas");
+        std::fs::create_dir_all(schemas.join("zm1")).unwrap();
+        std::fs::write(
+            schemas.join("zm1.schema.toml"),
+            "[schema]\nid = \"zm1\"\nname = \"码一\"\n[engine]\ntype = \"codetable\"\n\
+             [engine.codetable]\nmax_code_length = 4\n\
+             [[dictionaries]]\nid = \"main\"\npath = \"zm1/zm1.dict.yaml\"\ndefault = true\n\
+             [[dictionaries]]\nid = \"ext\"\npath = \"zm1/ext.dict.yaml\"\ndefault_enabled = false\n",
+        )
+        .unwrap();
+        std::fs::write(
+            schemas.join("zm1/zm1.dict.yaml"),
+            "---\nname: zm1\nversion: \"1\"\n...\n甲\ta\t9\n乙\ta\t5\n甲乙\taaaa\t1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            schemas.join("mx.schema.toml"),
+            "[schema]\nid = \"mx\"\nname = \"混\"\n[engine]\ntype = \"mixed\"\n\
+             [engine.mixed]\nprimary_schema = \"zm1\"\n",
+        )
+        .unwrap();
+        let store = Arc::new(Store::open(base.join("s.redb")).unwrap());
+        let mut cfg = Config::default();
+        cfg.schema.active = "zm1".into();
+        cfg.schema.available = vec!["zm1".into(), "mx".into()];
+        Coordinator::new_headless_with_store(cfg, Some(&base), store)
+    }
+
+    #[test]
+    fn codetable_shape_and_cache_flag() {
+        let c = coord("ct");
+        let v = c
+            .web_data_rpc("dict.systemStats", &json!({"schemaId": "zm1"}))
+            .unwrap();
+        assert_eq!(v["engineType"], "codetable");
+        assert_eq!(v["schemaName"], "码一");
+        assert_eq!(v["cached"], false);
+        assert_eq!(v["layers"][0]["kind"], "main");
+        assert_eq!(v["layers"][0]["entries"], 3);
+        assert_eq!(v["layers"][1]["enabled"], false);
+        assert!(v["layers"][1].get("entries").is_none(), "停用库只列不计");
+        assert_eq!(v["total"]["byLen"]["2"], 1);
+        assert_eq!(v["dup"]["groups"], 1);
+        assert_eq!(v["dup"]["top"][0]["texts"], json!(["甲", "乙"]));
+        assert_eq!(v["codeLen"]["char"]["1"], 2);
+        assert_eq!(v["user"], json!({"userWords": 0, "tempWords": 0}));
+        let v = c
+            .web_data_rpc("dict.systemStats", &json!({"schemaId": "zm1"}))
+            .unwrap();
+        assert_eq!(v["cached"], true);
+        let v = c
+            .web_data_rpc(
+                "dict.systemStats",
+                &json!({"schemaId": "zm1", "refresh": true}),
+            )
+            .unwrap();
+        assert_eq!(v["cached"], false);
+    }
+
+    #[test]
+    fn mixed_lists_members_and_unknown_schema_errors() {
+        let c = coord("mx");
+        let v = c
+            .web_data_rpc("dict.systemStats", &json!({"schemaId": "mx"}))
+            .unwrap();
+        assert_eq!(v["engineType"], "mixed");
+        let members = v["members"].as_array().unwrap();
+        assert_eq!(members.len(), 1, "没配拼音成员就只有主码表");
+        assert_eq!(members[0]["schemaId"], "zm1");
+        assert!(
+            c.web_data_rpc("dict.systemStats", &json!({"schemaId": "nope"}))
+                .is_err()
+        );
+        assert!(c.web_data_rpc("dict.systemStats", &json!({})).is_err());
+    }
+}

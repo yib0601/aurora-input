@@ -1,0 +1,83 @@
+{
+  "_comment": "线格式真值表：同一组帧的期望字节。真源是 aurora-ipc 的编解码器，本文件由 tests/wire_vectors.rs 在 AURORA_WIRE_BLESS=1 时重录，三个前端（TSF/Linux/macOS）消费同一份。改线格式 = 有意变更，重录后必须在提交里说明为什么变。",
+  "protocol_version": 4097,
+  "cases": [
+    {
+      "name": "key_event_all_fields_distinct",
+      "why": "上行最高频帧。C++ 直接 memcpy 结构体上送、Rust 逐字段解码，布局靠人肉对齐；toggles 是位域，漂了不报错只静默失效（智能符号在英文半角下删错字）。每个字段取不同的非零值，防止「顺移一位仍然自洽」这类错位。",
+      "cmd": 257,
+      "producer": "client",
+      "hex": "0110010112000000410000001e00000005000000000334122d4e"
+    },
+    {
+      "name": "commit_text_plain",
+      "why": "上屏主路径。12 字节头 = flags + textLen + compLen，后跟变长 UTF-8。任一段错位都表现为出字错乱或截断，且两端都不报错。",
+      "cmd": 257,
+      "producer": "service",
+      "hex": "011001010e0000000400000002000000000000006869"
+    },
+    {
+      "name": "commit_text_with_new_composition",
+      "why": "带后续组合文本的提交：flags bit1 与 compLen 必须同时正确，否则旧 preedit 残留宿主里。",
+      "cmd": 257,
+      "producer": "service",
+      "hex": "0110010111000000070000000200000003000000686968616f"
+    },
+    {
+      "name": "commit_text_replacing_held",
+      "why": "智能符号 press2 专用：flags bit3 置位表示**替换**先前 hold 的组合而非追加。置位丢了会让符号重复上屏（中文逗号变两个）。",
+      "cmd": 257,
+      "producer": "service",
+      "hex": "011001010d0000000c00000001000000000000002c"
+    },
+    {
+      "name": "update_composition_ascii",
+      "why": "预编辑主路径：caretPos(u32) + 余下直到帧末全是 UTF-8，**没有**长度前缀。给它加长度前缀是最容易犯的「对称性错误」。",
+      "cmd": 258,
+      "producer": "service",
+      "hex": "0110020106000000020000006e69"
+    },
+    {
+      "name": "commit_text_with_cursor",
+      "why": "上屏后把光标左移：textLen + cursorOffset + 文本。偏移单位是 UTF-16 码元不是字节，与 C++/Swift 的换算约定漂了就跳错位置。",
+      "cmd": 262,
+      "producer": "service",
+      "hex": "011006010b0000000300000002000000686921"
+    },
+    {
+      "name": "move_cursor_count",
+      "why": "ima.pair 多字符右段要越过不止一格。0 视同 1 的兼容语义靠两端一致——旧 DLL 把它当 direction 恒 1，读的正是这 4 字节。",
+      "cmd": 263,
+      "producer": "service",
+      "hex": "011007010400000003000000"
+    },
+    {
+      "name": "candidate_rects_two",
+      "why": "候选命中矩形：count 后每条 20 字节（5×i32）。这是 macOS/Linux 鼠标点选的唯一依据，字段顺序错了就点不中或多选一个。",
+      "cmd": 1283,
+      "producer": "service",
+      "hex": "011003052c0000000200000000000000000000000a0000001400000018000000010000000a0000002e0000001400000018000000"
+    },
+    {
+      "name": "mode_push_all_flags",
+      "why": "焦点进入时同步模式位：只有 4 字节 flags。三位语义各不相同，漏标点位会让中文标点态误用英文集合（`, . '` 直接透传成半角）。",
+      "cmd": 525,
+      "producer": "service",
+      "hex": "01100d020400000007000000"
+    },
+    {
+      "name": "mode_status_with_label",
+      "why": "菜单栏指示器：flags + effectiveMode + labelLen + label(UTF-8)。label 有长度前缀（与 updateComposition 不同），这处不对称正是对账要钉的。",
+      "cmd": 1284,
+      "producer": "service",
+      "hex": "0110040512000000050000000100000006000000e4ba94e7ac94"
+    },
+    {
+      "name": "ext_envelope",
+      "why": "扩展信封：kindLen + kind + bodyLen + body，两处长度任一错位都会把 kind 读成乱码。body 是不透明的（JSON 或二进制块），本层不解析。",
+      "cmd": 3585,
+      "producer": "service",
+      "hex": "0110010e10000000060000006e6f74696679020000006869"
+    }
+  ]
+}

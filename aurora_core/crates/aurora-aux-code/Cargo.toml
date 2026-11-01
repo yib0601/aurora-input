@@ -1,0 +1,12 @@
+[package]
+name = "aurora-aux-code"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-candidate = { path = "../aurora-candidate" }
+tracing = { workspace = true }
+aurora-utils = { path = "../aurora-utils" }
+
+[lints]
+workspace = true

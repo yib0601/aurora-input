@@ -1,0 +1,37 @@
+# 独立的小工程，**不是 workspace 成员**——它只在 Windows 目标下有构建意义，
+# 加进 workspace 会让每次 `cargo build --workspace` 都试图编一个 Linux 下无用的 bin。
+[package]
+name = "tsf-dll-smoke"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dlltest"
+path = "dll_smoke.rs"
+
+[[bin]]
+name = "ipcclient"
+path = "ipc_roundtrip.rs"
+
+[[bin]]
+name = "ipctest"
+path = "ipc_mock_server.rs"
+
+[dependencies]
+aurora-ipc = { path = "../../../aurora-ipc" }
+
+[dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_TextServices",
+    "Win32_System_Registry",
+]
+[workspace]

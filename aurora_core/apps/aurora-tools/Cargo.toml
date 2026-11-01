@@ -1,0 +1,47 @@
+[package]
+name = "aurora-tools"
+version.workspace = true
+edition.workspace = true
+
+# 本机构建时工具（Linux 上运行，生成数据后部署到 Windows）
+# 不依赖 windows crate，可直接 `cargo run --bin <name>` 执行
+
+[[bin]]
+name = "gen_opencc"
+path = "src/bin/gen_opencc.rs"
+
+[[bin]]
+name = "gen_unigram"
+path = "src/bin/gen_unigram.rs"
+
+[[bin]]
+name = "gen_pinyin"
+path = "src/bin/gen_pinyin.rs"
+
+[[bin]]
+name = "gen_dict"
+path = "src/bin/gen_dict/main.rs"
+
+[[bin]]
+name = "gen_emoji_names"
+path = "src/bin/gen_emoji_names.rs"
+
+[[bin]]
+name = "gen_aux_code"
+path = "src/bin/gen_aux_code.rs"
+
+# 协议命令码生成器：从 aurora-ipc/src/protocol.rs 生成 C++ / Swift 两侧常量。
+# 不引入 clap — 只有 --check / --root 两个参数，手写解析比多一个依赖划算。
+[[bin]]
+name = "gen_protocol"
+path = "src/bin/gen_protocol.rs"
+
+[dependencies]
+# gen_block_charsets 直接读区块表生成 charsets/blocks.yaml——两份数据因此同源。
+aurora-candidate = { path = "../../crates/aurora-candidate" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

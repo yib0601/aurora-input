@@ -1,0 +1,2710 @@
+# WindInput 开发菜单 (Windows 原生构建 / MSVC)
+#
+# 用法:
+#   .\scripts\dev.ps1            # 交互式菜单 (对齐 dev.sh)
+#   .\scripts\dev.ps1 <命令>     # 非交互直调, 如 .\scripts\dev.ps1 release
+#   (dev.bat 已转发 %*, 故 dev.bat release / dev.bat m2 等价)
+#
+# 本机 (Windows) 原生构建:
+#   - Rust(aurora_input): cargo build --release (host = x86_64-pc-windows-msvc)
+#   - Rust(../wind-portable): 独立仓库, 不存在则跳过便携启动器
+#   - Rust(aurora_core/apps/setting): 本仓内嵌的设置程序
+#   - C++ TSF: CMake + "Visual Studio 17 2022" 生成器 (x64 + Win32, 自动定位 MSVC)
+#   - 词库数据: 下载 rime-frost/pinyin-data/OpenCC + 生成 unigram/pinyin_map + 编 octrie
+#   - 全构建产物落【产品根】build/(release) 或 build_dev/(dev); 内容 == 安装内容
+#
+# 命令 (菜单与命令行直调同一套; 前缀 d=dev, p=push/部署, m=单模块):
+#   1            Release 全构建: aurora_input + tsf(x64/x86) + setting + portable + 词库数据 → build/
+#   d1           Dev 全构建 → build_dev/
+#   m1 / dm1     仅 tsf (x64+x86)            release / dev
+#   m2 / dm2     仅 aurora_input (核心 exe)     release / dev
+#   m3 / dm3     仅 aurora_setting (aurora_core/apps/setting)     release / dev
+#   m4 / dm4     仅 aurora_portable (绿色版, ../wind-portable)   release / dev (不存在则跳过)
+#   p1 / pd1     系统安装全部 (release / dev): 复制 + 注册 TSF + 开机自启 + 启动服务
+#   u1/u / ud1/ud  系统卸载全部 (release / dev): 反注册 + 移出输入法列表 + 移除自启 + 删目录
+#   pm1..pm4     系统安装单模块 (tsf / 核心 / setting / portable, release)
+#   pdm1..pdm4   系统安装单模块 (dev)
+#   pb1 / pbd1   便携部署全部 (release / dev): 纯复制 + 写便携标记 + 启动 aurora_portable
+#   pbm1..pbm4   便携部署单模块 (release)      pbdm1..pbdm4  便携部署单模块 (dev)
+#   ub1/ub / ubd1/ubd  便携卸载 (release / dev): 停进程 + 删程序文件 (userdata\ 保留)
+#   8  / d8      生成安装包 (release / dev): 全构建 + wind-installer 打包 → dist\*-Setup.exe
+#   8s / d8s     生成安装包 (跳过重建, 直接打包现有 build[_dev]/)
+#   9  / d9      生成便携包 (release / dev): 全构建 + 打 zip → dist\*-Portable-<版本>.zip
+#                (免安装; 不依赖 wind-installer; 内含便携标记, 不含 userdata\)
+#   9s / d9s     生成便携包 (跳过重建, 直接打包现有 build[_dev]/)
+#   stage        打包发布中转产物: build/ + 安装器三件套 → dist\*-Stage-<版本>.zip
+#                【在 CI 上跑】。CI 建不了签名会话 (docs\design\code-signing.md 第 3 节),
+#                但签名夹在打包中间, 本机只补签成品外壳会漏掉包内 5 个 PE, 故中转的是
+#                打包【之前】的散件。
+#   unstage <zip>  还原中转产物到 build/ 与安装器 target/, 供本机 sign 8s / sign 9s。
+#                【在本机跑】。会硬校验版本号与 docs\VERSION 一致, 并整体替换 build/。
+#                典型: release.ps1 sign-draft 会自动完成「拉取 → 还原 → 签名 → 回传」。
+#   sign         代码签名【开关】, 位置无关, 与构建/打包命令连用:
+#                  dev.ps1 sign 1  ≡  dev.ps1 1 sign     全构建并签名 (5 个 PE)
+#                  dev.ps1 sign 8  ≡  dev.ps1 8 sign     出安装包并签名 (5 个 PE + 安装包)
+#                ⚠️【默认不签】: 签名次数按月计费且有限, 不写 sign 就一次也不消耗。
+#                   连着跑 sign 8 再 sign 9s 时, 便携包里的 PE 已签过会自动跳过,
+#                   不会重复扣次数。
+#                【编译在远程、签名在本机】是支持的 —— 转发出去的命令不含 sign, 编译机
+#                   只编译; 产物回传后在本机补签:
+#                     dev.ps1 sign 1 8s     远程全构建 → 本机签 PE → 本机打包 + 签外壳
+#                   只有打包类 (8/9) 在签名时强制本机: 远程打包会把未签名的 PE 封进
+#                   压缩块, 且 dist\ 本就不回传。
+#   sign-status  代码签名体检 (证书在不在 / 会话开没开 / 几时到期)
+#   verify-sign  验签 dist\ 下的产物 (发版门禁; 未配置签名时【也会失败】, 这是刻意的)
+#                签名会话有时限(2 小时), 过期时只警告不中断 —— 故发版前跑一次 verify-sign。
+#                模板 scripts\sign.local.ps1.example; 原理与取舍见 docs\design\code-signing.md。
+#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  hooks(=激活 git hooks)  clean
+#   gd=gen-data  r=repl
+#   av           配置 Defender 编译排除项 (自动 UAC 提权; 详见 scripts\defender-exclusions.ps1)
+#   avc          仅预览排除项改动 (免管理员)      avr  移除本脚本添加的排除项
+#   wtinit       新 worktree 首次全量构建 (sccache 过首关 + 切回 incremental; 实测省 30%)
+#
+# 部署目标 (在 scripts\deploy.local.ps1 覆盖, PowerShell 赋值格式):
+#   ── 系统安装 (注册 COM/写自启; 默认在 Program Files 下, 部署自动 UAC 提权)
+#   AURORA_DIR_RELEASE          = C:\Program Files\WindInput      # p1 / pm* 目标
+#   AURORA_DIR_DEV              = C:\Program Files\WindInputDev   # pd1 / pdm* 目标
+#   ── 便携部署 (纯复制, 免注册免自启; 无需管理员)
+#   AURORA_DIR_PORTABLE_RELEASE = D:\WindInputPortable            # pb1 / pbm* 目标
+#   AURORA_DIR_PORTABLE_DEV     = D:\WindInputPortableDev         # pbd1 / pbdm* 目标
+#   注: 便携目录【不可】落在 Program Files\ 或 Windows\ 下 —— aurora_portable 的
+#       is_protected_dir (layout.rs) 会拒绝在系统保护目录启动便携模式。
+#   注: 便携用户数据在 <便携目录>\userdata\, 重新部署与卸载均保留该目录。
+#
+# 数据目录说明:
+#   data/                源文件(入库): 配置、五笔词库、主题等手工维护文件
+#   .cache/              外部下载/生成(gitignore): rime-frost、opencc、unigram 等
+#   build/ build_dev/  全构建产物(gitignore); 内容即部署到目标目录的内容
+
+param(
+    # 支持连续命令: .\dev.ps1 d1 pd1 (前者失败则后者不执行)
+    # repl 命令后接数据路径: .\dev.ps1 r build_dev/data
+    [Parameter(Position = 0, ValueFromRemainingArguments)] [string[]]$Commands = @()
+)
+
+$ErrorActionPreference = "Stop"
+
+# ---------- 路径 ----------
+# 目录层级: <产品仓>\scripts\dev.ps1
+#   ScriptDir   = <产品仓>\scripts
+#   ProductRoot = <产品仓>            (含 docs\VERSION、data\、.cache\ 等)
+#   ProjectRoot = <产品仓>\aurora_core (Cargo workspace 根)
+$ScriptDir     = $PSScriptRoot
+$ProductRoot   = Split-Path $ScriptDir -Parent
+$ProjectRoot   = "$ProductRoot\aurora_core"
+$TsfDir        = "$ProductRoot\aurora_tsf"     # C++ TSF 核心层 (CMake/MSVC)
+# ---------- 相邻仓库定位 (worktree 安全) ----------
+# 相邻仓库 (wind-portable / wind-installer / aurora-ui-rust) 与产品仓平级放在 workspace 根下。
+# ⚠️ 设置程序已并入本仓 workspace (aurora_core\apps\setting), 不再是相邻仓库。
+# 主工作区里 `$ProductRoot\..` 就是那一层, 但在 **linked worktree** 里不是 —— worktree 可以
+# 建在任意深度, 于是 `..\wind-portable` 指向一个不存在的路径。
+#
+# ⚠️ 后果是**静默降级**而非报错: Build-Setting 只 Warn 一句"仓库不存在, 跳过"就返回 $true,
+#    构建照样报成功, 你会以为设置程序也构建了。d1/pbd1 全构建链里那一句极易被刷过去。
+#
+# ★ 判据不能写成"路径里有没有 .claude\worktrees" —— 那只是 Claude Code 的 EnterWorktree
+#   工具的默认位置, 手工 `git worktree add <任意路径>` 完全不受此约束 (本仓的
+#   一些伴生仓就直接放在 workspace 根下平级)。
+# ★ 也不能从 git 元数据反推: 本仓是 repo 工具布局, git-common-dir 是
+#   `.repo\projects\WindInput.git`, 与 workspace 根差三层; 而 `git worktree list` 的首行
+#   是那个裸仓库路径, 主工作区压根不在列表里。
+#
+# 故改为**逐级向上探测**: 从产品仓开始往上找, 第一个含有已知相邻仓库的层即 workspace 根。
+# 主工作区里第一次迭代就命中 (= 旧行为, 零回归); worktree 里多走几级同样能找到。
+# 探测不到 (worktree 建在 workspace 树之外) 则回落旧行为, 由 deploy.local.ps1 显式指定。
+function Resolve-SiblingRoot ([string]$start) {
+    $probes = @("wind-portable", "wind-installer")
+    $dir = $start
+    for ($i = 0; $i -lt 8; $i++) {
+        $parent = Split-Path $dir -Parent
+        if (-not $parent -or $parent -eq $dir) { break }
+        foreach ($p in $probes) {
+            if (Test-Path (Join-Path $parent $p)) { return $parent }
+        }
+        $dir = $parent
+    }
+    return $null
+}
+$SiblingRoot   = Resolve-SiblingRoot $ProductRoot
+if (-not $SiblingRoot) { $SiblingRoot = [System.IO.Path]::GetFullPath("$ProductRoot\..") }
+$SettingDir    = "$ProductRoot\aurora_core\apps\setting"   # 设置程序 (本仓 workspace 成员)
+$PortableDir   = Join-Path $SiblingRoot "wind-portable"  # 绿色版启动器 (独立仓库)
+$Version       = (Get-Content "$ProductRoot\docs\VERSION" -Raw).Trim()
+$BuildDir      = "$ProductRoot\build"
+$BuildDevDir = "$ProductRoot\build_dev"
+$CacheDir      = "$ProductRoot\.cache"        # 外部下载/生成 (不入库)
+$DistDir       = "$ProductRoot\dist"          # 安装包输出目录 (gitignore)
+
+# ---------- 部署目标 (Go 便携式: 复制到指定本地目录) ----------
+$AURORA_DIR_RELEASE = "C:\Program Files\WindInput"
+$AURORA_DIR_DEV     = "C:\Program Files\WindInputDev"
+# 便携部署目标 (绿色版: 纯复制 + 便携标记, 不注册 COM/不写自启, 无需管理员)。
+# 默认放 D:\ 而非 Program Files —— aurora_portable 探测到自身位于系统保护目录会直接拒绝
+# 启动便携模式 (wind-portable\src\layout.rs is_protected_dir), 故此处不能沿用安装目录。
+$AURORA_DIR_PORTABLE_RELEASE = "D:\WindInputPortable"
+$AURORA_DIR_PORTABLE_DEV     = "D:\WindInputPortableDev"
+# 便携标记文件名与用户数据目录名: 真源是 aurora-config\src\variant.rs 的 PORTABLE_MARKER_NAME
+# / PORTABLE_DATA_DIR 常量。标记名已与 config\app.toml 的 portable_marker (安装器侧字段)
+# 统一 —— 此前两侧各叫各的, 安装包便携模式装出的目录主程序不认, 数据落回 %APPDATA%。
+# 改这两个常量时须同步此处、app.toml、wind-portable 与 IPCClient.cpp。
+$PortableMarkerName = "portable_mode"
+# 旧标记名: 仅用于部署时识别存量便携目录 (读取兼容), 不再写入。
+$PortableMarkerLegacy = "wind_portable_mode"
+$PortableDataDir    = "userdata"
+# wind-installer: 通用安装器生成器 (兄弟项目, app.toml 驱动); 8/d8 打包命令调用其 pack.ps1。
+# 与 SettingDir/PortableDir 同源 (见上面的 Resolve-SiblingRoot), 否则 worktree 里打包会
+# 找不到 pack.ps1。
+$InstallerDir  = Join-Path $SiblingRoot "wind-installer"
+# 在线升级元数据里的下载地址前缀 (不含结尾斜杠); 打包后生成的 latest*.json 据此拼 exeUrl。
+$CdnBase       = "https://dl.windinput.com"
+# 可在 scripts\deploy.local.ps1 覆盖上述变量 (PowerShell 赋值语法; 该文件 gitignore)。
+$deployCfg = "$ScriptDir\deploy.local.ps1"
+if (Test-Path $deployCfg) { . $deployCfg }
+
+# ---------- 远程构建 (可选; 不配置则本行之后一切照旧) ----------
+# 存在 scripts\build.local.ps1 且其中设了 $AURORA_REMOTE_HOST 时, Dispatch 会把构建/检查类
+# 命令转发到远程 Windows 编译机执行, 产物回传本机 build[_dev]\ —— 部署链一行不变。
+# 模板与编译机搭建清单见 scripts\build.local.ps1.example。
+# 编译机必须是 Windows 原生 MSVC: clang 交叉编译的 TSF DLL 在加固宿主 COM 激活失败 (6dbc8595)。
+$buildCfg = "$ScriptDir\build.local.ps1"
+if (Test-Path $buildCfg) { . $buildCfg }
+
+# ---------- 静态链接 MSVC CRT(+crt-static) ----------
+# 所有 Rust 产物(aurora_input / aurora_setting / aurora_portable, 及子进程 pack.ps1 的
+# installer stub)自包含, 目标机无需装 VC++ 运行库 —— VCRUNTIME140.dll 非系统内置,
+# 缺它则原生 cargo build 默认动态 CRT, 干净机器上 exe 报「找不到 VCRUNTIME140.dll」
+# / 0xc000007b 而无法启动。与 dev.sh 的 RUSTFLAGS 注入(+crt-static)对齐。
+# 追加而非覆盖以保留调用方既有 RUSTFLAGS; 已含则跳过, 幂等避免重复追加。
+if ($env:RUSTFLAGS -notmatch 'crt-static') {
+    $env:RUSTFLAGS = (@($env:RUSTFLAGS, '-C target-feature=+crt-static') -join ' ').Trim()
+}
+
+# ---------- 输出辅助 ----------
+function Say  ([string]$m) { Write-Host $m -ForegroundColor Green }
+function Warn ([string]$m) { Write-Host $m -ForegroundColor Yellow }
+function ErrMsg ([string]$m) { Write-Host $m -ForegroundColor Red }
+function Gray ([string]$m) { Write-Host $m -ForegroundColor DarkGray }
+
+# release → BUILD_DIR; dev → BUILD_DEV_DIR
+function Out-For ([string]$profile) { if ($profile -eq "dev") { $BuildDevDir } else { $BuildDir } }
+
+# cargo 项目的 target 目录 (产物落点)。
+#
+# 不能拼 "<项目>\target" —— 本机若在 ~/.cargo/config.toml 里设了 build.target-dir
+# (几个 Rust 项目共用一份依赖编译产物, 省下几十 G 磁盘), 或设了 CARGO_TARGET_DIR,
+# 产物就根本不在项目目录内, 硬拼出来的路径会指向一个空壳, 或上一次的旧二进制 ——
+# 后者更坏: 构建报成功、装上去的却是旧的。
+#
+# 向 cargo 自己要这个值是唯一可靠来源: 各设备的共享目录路径不同也无需改脚本; 没设
+# 共享时它返回的就是 <项目>\target, 与旧行为完全一致。cargo 不可用或项目不在时回落
+# 硬拼, 裸环境仍可用。PowerShell 自带 ConvertFrom-Json, 故不像 sh 版那样依赖 jq。
+#
+# 结果按项目缓存: cargo metadata 要解析整份 JSON, 同一项目问一次就够。
+$script:CargoTargetDirCache = @{}
+function Get-CargoTargetDir ([string]$projDir) {
+    if ($script:CargoTargetDirCache.ContainsKey($projDir)) { return $script:CargoTargetDirCache[$projDir] }
+    $d = $null
+    $manifest = Join-Path $projDir "Cargo.toml"
+    if (Test-Path $manifest) {
+        # 原生命令的失败不触发 try/catch, 只能看 $LASTEXITCODE。多行输出要先拼回单串,
+        # 否则 ConvertFrom-Json 会按行逐个解析而失败。
+        $json = (& cargo metadata --format-version 1 --no-deps --manifest-path $manifest 2>$null) -join "`n"
+        if ($LASTEXITCODE -eq 0 -and $json) {
+            try { $d = ($json | ConvertFrom-Json).target_directory } catch { $d = $null }
+        }
+    }
+    if (-not $d) { $d = Join-Path $projDir "target" }
+    $script:CargoTargetDirCache[$projDir] = $d
+    return $d
+}
+
+# ---------- 构建: 核心 exe ----------
+# dev 变体 = dev-variant profile（继承 dev + 关断言）:
+#   ① debug_assertions 关闭 → windows_subsystem="windows" 生效, 无控制台窗口;
+#   ② 优化构建, 输入法手感正常; ③ 仍是独立 _dev 身份 (管道/目录隔离)。
+function Build-Core ([string]$profile = "release", [string]$outdir = $null) {
+    if (-not $outdir) { $outdir = Out-For $profile }
+    New-Item -ItemType Directory -Path $outdir -Force | Out-Null
+    $suffix = ""; $prof = "release"
+    if ($profile -eq "dev") { $suffix = "_dev"; $prof = "dev-variant" }
+    Say "`n[core] 构建 aurora_input ($prof)..."
+    Push-Location $ProjectRoot
+    try {
+        cargo build --profile $prof -p wind_service
+        if ($LASTEXITCODE -ne 0) { ErrMsg "aurora_input 构建失败!"; return $false }
+    } finally { Pop-Location }
+    $src = Join-Path (Get-CargoTargetDir $ProjectRoot) "$prof\aurora_input.exe"
+    if (-not (Test-Path $src)) { ErrMsg "未找到产物: $src"; return $false }
+    Copy-Item $src "$outdir\aurora_input$suffix.exe" -Force
+    $sz = [math]::Round((Get-Item "$outdir\aurora_input$suffix.exe").Length / 1MB, 1)
+    Gray "已构建: aurora_input$suffix.exe (${sz}MB)"
+    # CLI 包装器 (aurora_input config ...; 运行时自辨 dev/release exe, 两变体共用一份)
+    $cli = "$ProjectRoot\scripts\wind_cli.bat"
+    if (Test-Path $cli) { Copy-Item $cli "$outdir\wind_cli.bat" -Force; Gray "已复制: wind_cli.bat" }
+    return $true
+}
+
+# ---------- 校验: PE 头的机器类型 ----------
+# x86/x64 共用同一个输出文件名, 改名一旦失手就会把 x64 当 x86 交付, 而 32 位宿主加载它
+# 只是静默失败 (无日志无报错)。故构建后按 PE 头实测一次, 把「产物架构」变成硬判据。
+function Test-PeArch ([string]$path, [string]$platform) {
+    if (-not (Test-Path $path)) { return $false }
+    $want = if ($platform -eq "Win32") { 0x14c } else { 0x8664 }
+    $fs = [IO.File]::OpenRead($path)
+    try {
+        $br = New-Object IO.BinaryReader($fs)
+        $fs.Position = 0x3C
+        $fs.Position = $br.ReadInt32()                            # e_lfanew → PE 签名
+        if ($br.ReadUInt32() -ne 0x00004550) { return $false }    # 'PE\0\0'
+        return ($br.ReadUInt16() -eq $want)                       # COFF Machine
+    } catch { return $false }
+    finally { $fs.Dispose() }
+}
+
+# ---------- 构建: C++ TSF DLL (x64 + x86; CMake/MSVC) ----------
+# CMakeLists 把 DLL 写死输出到 ..\build[_dev], x86/x64 同名 wind_tsf.dll。
+# 故先编 x86 → 改名 _x86, 再编 x64 (保留无后缀名), 避免互相覆盖。
+function Build-TsfAll ([string]$profile = "release", [string]$outdir = $null) {
+    if (-not $outdir) { $outdir = Out-For $profile }
+    New-Item -ItemType Directory -Path $outdir -Force | Out-Null
+    if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+        Warn "未找到 cmake; 跳过 TSF (安装 CMake + VS2022 C++ 工具后可构建)。"; return $true
+    }
+    $suffix = ""; $dvFlag = "OFF"
+    if ($profile -eq "dev") { $suffix = "_dev"; $dvFlag = "ON" }
+    # 解析版本号 (写入版本资源)
+    $vp = ($Version -split '[.\-]')
+    $vMaj = if ($vp.Count -ge 1) { $vp[0] } else { "0" }
+    $vMin = if ($vp.Count -ge 2) { $vp[1] } else { "0" }
+    $vPat = if ($vp.Count -ge 3) { $vp[2] } else { "0" }
+    Say "`n[tsf] CMake 交叉构建 x64 + x86 ($profile, VS2022/MSVC)..."
+    # arch: cmake -A 平台名 / 产物后缀
+    $arches = @(
+        @{ A = "Win32"; Sfx = "_x86" },   # 先 x86 → 改名
+        @{ A = "x64";   Sfx = "" }        # 后 x64 → 保留无后缀
+    )
+    foreach ($a in $arches) {
+        $bin = "$CacheDir\tsf-cmake\$($a.A)$suffix"
+        New-Item -ItemType Directory -Path $bin -Force | Out-Null
+        cmake -S $TsfDir -B $bin -G "Visual Studio 17 2022" -A $a.A `
+            "-DWIND_DEV_VARIANT=$dvFlag" `
+            "-DAPP_VERSION_STR=$Version" `
+            "-DAPP_VERSION_MAJOR=$vMaj" "-DAPP_VERSION_MINOR=$vMin" "-DAPP_VERSION_PATCH=$vPat" `
+            | Out-Null
+        if ($LASTEXITCODE -ne 0) { ErrMsg "TSF $($a.A) CMake 配置失败!"; return $false }
+        # CMakeLists 输出到 $outdir\wind_tsf$suffix.dll; x86 需改名加 _x86。
+        # 构建前必须先删这个文件: 两个架构共用它, MSBuild 的增量判据也看它。x86 这轮若
+        # 撞见上一轮 x64 留下的同名文件比输入新, 会判定「已最新」而跳过链接, 下面的改名
+        # 就把那个 x64 产物当成 x86 交付 (实测踩中)。删掉输出即强制重新链接, 不重编 .obj。
+        $produced = "$outdir\wind_tsf$suffix.dll"
+        Remove-Item $produced -Force -ErrorAction SilentlyContinue
+        # MSBuild 的编译警告走 stdout, 整条 | Out-Null 会连警告一起吞掉 (C++ 侧等于零编译期
+        # 信号)。故只丢进度噪音, 保留 warning/error 行原样打出。Select-String 不改 $LASTEXITCODE
+        # (它由最后一个原生命令 cmake 设定), 下面的失败判定照常成立。
+        cmake --build $bin --config Release |
+            Select-String -Pattern 'warning|error|警告|错误' |
+            ForEach-Object { Warn "  $($_.Line.Trim())" }
+        if ($LASTEXITCODE -ne 0) { ErrMsg "TSF $($a.A) 构建失败!"; return $false }
+        # 末尾化: 架构后缀在前, 变体后缀在后 → wind_tsf_x86_dev.dll
+        $final    = "$outdir\wind_tsf$($a.Sfx)$suffix.dll"
+        if ((Test-Path $produced) -and ($produced -ne $final)) {
+            Move-Item $produced $final -Force
+        }
+        if (-not (Test-PeArch $final $a.A)) {
+            ErrMsg "TSF 产物架构不符: $(Split-Path $final -Leaf) 不是 $($a.A)!"; return $false
+        }
+    }
+    # 清理 CMake 顺带产出的导入库/导出表, 保持 outdir == 安装内容
+    Get-ChildItem -Path $outdir -Include "*.lib", "*.exp" -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    $dlls = (Get-ChildItem -Path $outdir -Filter "wind_tsf*.dll" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join " "
+    Gray "已构建: $dlls"
+    return $true
+}
+
+# ---------- 构建: 设置程序 (aurora_core\apps\setting) ----------
+# 独立仓库; 不存在时跳过。dev 变体产物重命名为 wind_setting_dev.exe。
+function Build-Setting ([string]$profile = "release", [string]$outdir = $null) {
+    if (-not $outdir) { $outdir = Out-For $profile }
+    if (-not (Test-Path $SettingDir)) { Warn "aurora_core\apps\setting 不存在, 跳过设置程序。"; return $true }
+    $suffix = ""; $targetDir = "release"
+    if ($profile -eq "dev") { $suffix = "_dev"; $targetDir = "debug" }
+    New-Item -ItemType Directory -Path $outdir -Force | Out-Null
+    Say "`n[setting] 构建 aurora_setting ($profile)..."
+    $env:AURORA_APP_VERSION = $Version   # 版本注入: docs/VERSION → 设置程序 (与主仓统一)
+    Push-Location $SettingDir
+    try {
+        if ($profile -eq "dev") { cargo build } else { cargo build --release }
+        if ($LASTEXITCODE -ne 0) { ErrMsg "aurora_setting 构建失败!"; return $false }
+    } finally { Pop-Location }
+    $exe = Join-Path (Get-CargoTargetDir $SettingDir) "$targetDir\aurora_setting.exe"
+    if (-not (Test-Path $exe)) { ErrMsg "未找到产物: $exe"; return $false }
+    Copy-Item $exe "$outdir\aurora_setting$suffix.exe" -Force
+    $sz = [math]::Round((Get-Item "$outdir\aurora_setting$suffix.exe").Length / 1MB, 1)
+    Gray "已构建: aurora_setting$suffix.exe (${sz}MB)"
+    return $true
+}
+
+# ---------- 构建: wind-portable (绿色版便携启动器) ----------
+# 独立仓库; 不存在时跳过。dev/release 产出同一份 exe。
+function Build-Portable ([string]$profile = "release", [string]$outdir = $null) {
+    if (-not $outdir) { $outdir = Out-For $profile }
+    if (-not (Test-Path $PortableDir)) { Warn "../wind-portable 仓库不存在, 跳过便携启动器。"; return $true }
+    New-Item -ItemType Directory -Path $outdir -Force | Out-Null
+    Say "`n[portable] 构建 aurora_portable ($profile → 单一二进制)..."
+    $env:AURORA_APP_VERSION = $Version   # 版本注入: docs/VERSION → wind-portable (与主仓统一)
+    Push-Location $PortableDir
+    try {
+        cargo build --release
+        if ($LASTEXITCODE -ne 0) { ErrMsg "aurora_portable 构建失败!"; return $false }
+    } finally { Pop-Location }
+    $exe = Join-Path (Get-CargoTargetDir $PortableDir) "release\aurora_portable.exe"
+    if (-not (Test-Path $exe)) { ErrMsg "未找到产物: $exe"; return $false }
+    Copy-Item $exe "$outdir\aurora_portable.exe" -Force
+    $sz = [math]::Round((Get-Item "$outdir\aurora_portable.exe").Length / 1MB, 1)
+    Gray "已构建: aurora_portable.exe (${sz}MB)"
+    return $true
+}
+
+# ---------- 代码质量 ----------
+function Do-Check  { Say "`n正在运行 cargo check (全工作区)...";  Push-Location $ProjectRoot; try { cargo check --workspace }  finally { Pop-Location } }
+# -Deny 把警告升为错误(CI 走这条)。本地 `dev.ps1 l` 不带, 迭代中途的 warning 不该中断。
+# --all-targets 不可省: 不带它连测试代码都不检查, 而测试里同样会长出警告。
+# --keep-going 同样不可省, 且必须与 scripts/dev.sh 的 do_clippy 保持一致:
+# cargo 默认在首个 crate 失败后就不再调度新任务, 一轮只报得出一个错误。实测同一份代码
+# 不带它报 1 条, 带上报 22 条(分五层, 层与层之间是 crate 依赖关系, 前一层不修后一层
+# 根本不被检查)。
+# ⚠ 2026-09-11: 本函数曾漏掉 --keep-going 而 dev.sh 有 —— 两侧对同一件事的实现漂移,
+# 使得在 Windows 上跑本地 CI 只看得到第一个错, 修完推上去 CI 又报下一个, 退化成
+# "推一次修一个"。改这里时请同步查 dev.sh。
+function Do-Clippy {
+    param([switch]$Deny)
+    Say "`n正在运行 cargo clippy (全工作区含测试)..."
+    Push-Location $ProjectRoot
+    try {
+        if ($Deny) { cargo clippy --keep-going --workspace --all-targets -- -D warnings }
+        else { cargo clippy --keep-going --workspace --all-targets }
+    } finally { Pop-Location }
+}
+function Do-Test   { Say "`n正在运行 cargo test (全工作区)...";   Push-Location $ProjectRoot; try { cargo test --workspace }   finally { Pop-Location } }
+function Do-Fmt    { Say "`n正在运行 cargo fmt...";                Push-Location $ProjectRoot; try { cargo fmt }                finally { Pop-Location } }
+function Do-FmtCheck { Say "`n正在运行 cargo fmt --check...";      Push-Location $ProjectRoot; try { cargo fmt --all -- --check } finally { Pop-Location } }
+function Do-Clean  { Say "`n正在运行 cargo clean...";              Push-Location $ProjectRoot; try { cargo clean }              finally { Pop-Location } }
+function Do-HooksInstall {
+    Say "`n激活 .githooks (git config core.hooksPath .githooks)..."
+    Push-Location $ProductRoot; try { git config core.hooksPath .githooks } finally { Pop-Location }
+    Say "已激活："
+    Gray "  pre-commit  暂存的 .rs 跑 rustfmt --check"
+    Gray "  pre-push    待推内容跑 fmt + clippy(-D warnings)，拦下 CI 会红的 lint"
+    Gray "  逃生口：git commit/push --no-verify"
+}
+
+# 协议常量对账：Rust 真源 ↔ C++（BinaryProtocol.h / ExtProtocol.h）↔ Swift。
+#
+# 拦住「改了 protocol.rs 忘了镜像」。那类漂移的症状是**某类消息静默丢失**：两侧值都合法、
+# 都能编译、都在跑，零报错。与 CI 的「协议常量对账」步、.githooks/pre-push 第 5 步、
+# dev.sh 的 do_proto_check 同一条命令。
+function Do-ProtoCheck {
+    Say "`n[proto] 协议常量对账..."
+    Push-Location $ProjectRoot
+    try { cargo run -q -p aurora-tools --bin gen_protocol } finally { Pop-Location }
+}
+
+# 线格式真值表：Rust 编解码器产出的字节 vs 各前端读出来的东西。
+#
+# 与上面那条是**两层**：`gen_protocol` 管命令码（漂了症状是「某类消息静默丢失」）；
+# 这条管 **payload 的字节布局**（漂了症状是上屏一串错字 / preedit 残留，两端都不报错、
+# 日志里一个字都没有）。TSF 的 SendKeyEvent 直接 memcpy 结构体上送，
+# `static_assert(sizeof(...))` 连「两个 uint16_t 互换」都拦不住。
+#
+# 与 CI、.githooks/pre-push 第 6 步、dev.sh 的 do_wire_check 同一条命令。
+function Do-WireCheck {
+    Say "`n[wire] 线格式真值表..."
+    Push-Location $ProjectRoot
+    try { cargo test -q -p aurora-ipc --test wire_vectors } finally { Pop-Location }
+}
+
+function Do-Ci {
+    Push-Location $ProjectRoot
+    try {
+        Do-FmtCheck; if ($LASTEXITCODE -ne 0) { ErrMsg "fmt 检查失败!"; return $false }
+        Do-Clippy -Deny; if ($LASTEXITCODE -ne 0) { ErrMsg "clippy 失败!"; return $false }
+        Do-Test;     if ($LASTEXITCODE -ne 0) { ErrMsg "test 失败!";   return $false }
+    } finally { Pop-Location }
+    Do-ProtoCheck; if ($LASTEXITCODE -ne 0) { ErrMsg "协议常量对账失败!"; return $false }
+    Do-WireCheck;  if ($LASTEXITCODE -ne 0) { ErrMsg "线格式真值表失败!"; return $false }
+    Say "`nCI 全部通过 ✓"; return $true
+}
+
+# ---------- 词库下载 ----------
+function Get-Dict ([string]$url, [string]$dst, [string]$desc = "") {
+    if (Test-Path $dst) { Gray "[skip] $(Split-Path $dst -Leaf) 已存在"; return $true }
+    Gray "[get ] $(Split-Path $dst -Leaf) $desc"
+    # 用 PowerShell 原生下载 (Invoke-WebRequest), 静默进度条以提速; 最多重试 3 次。
+    $old = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
+    try {
+        for ($i = 1; $i -le 3; $i++) {
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $dst -UseBasicParsing -TimeoutSec 120
+                return $true
+            } catch {
+                if (Test-Path $dst) { Remove-Item $dst -Force -ErrorAction SilentlyContinue }  # 清理半截文件
+                if ($i -eq 3) { ErrMsg "下载失败 ($i/3): $url`n  $($_.Exception.Message)"; return $false }
+                Warn "下载重试 ($i/3): $(Split-Path $dst -Leaf)"
+                Start-Sleep -Seconds 2
+            }
+        }
+    } finally { $ProgressPreference = $old }
+    return $false
+}
+
+function Download-Dicts {
+    Say "`n下载外部词库 → $CacheDir"
+    $rimeFrost   = "$CacheDir\rime-frost"
+    $rimeFrostCn = "$rimeFrost\cn_dicts"
+    $rimeFrostEn = "$rimeFrost\en_dicts"
+    $opencc      = "$CacheDir\opencc\dictionaries"
+    $pinyinData  = "$CacheDir\pinyin-data"
+    $rimeWubi    = "$CacheDir\rime-wubi"
+    $cldr        = "$CacheDir\cldr"
+    $auxCode     = "$CacheDir\aux-code"
+    $rimeEmoji   = "$CacheDir\rime-emoji"
+    $rimeEmojiCc = "$rimeEmoji\opencc"
+    foreach ($d in @($rimeFrostCn, $rimeFrostEn, $opencc, $pinyinData, $rimeWubi, $cldr, $auxCode, $rimeEmojiCc)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+
+    $frostBase = "https://raw.githubusercontent.com/gaboolic/rime-frost/master"
+    Gray "rime-frost (拼音):"
+    Get-Dict "$frostBase/rime_frost.dict.yaml"           "$rimeFrost\rime_frost.dict.yaml"      "词库入口"     | Out-Null
+    Get-Dict "$frostBase/cn_dicts/8105.dict.yaml"        "$rimeFrostCn\8105.dict.yaml"          "单字词库"     | Out-Null
+    Get-Dict "$frostBase/cn_dicts/41448.dict.yaml"       "$rimeFrostCn\41448.dict.yaml"         "扩展字表"     | Out-Null
+    Get-Dict "$frostBase/cn_dicts/base.dict.yaml"        "$rimeFrostCn\base.dict.yaml"          "基础词库"     | Out-Null
+    Get-Dict "$frostBase/cn_dicts/ext.dict.yaml"         "$rimeFrostCn\ext.dict.yaml"           "扩展词库"     | Out-Null
+    Get-Dict "$frostBase/cn_dicts/others.dict.yaml"      "$rimeFrostCn\others.dict.yaml"        "容错词"       | Out-Null
+    Get-Dict "$frostBase/cn_dicts/corrections.dict.yaml" "$rimeFrostCn\corrections.dict.yaml"   "错音词"       | Out-Null
+    Get-Dict "$frostBase/cn_dicts/tencent.dict.yaml"     "$rimeFrostCn\tencent.dict.yaml"       "腾讯词频"     | Out-Null
+    # emoji / 符号表: emoji 附加模块的数据源 (aurora-config 的 EMOJI_MODULES, 出厂只开 emoji)
+    New-Item -ItemType Directory -Path "$rimeFrost\opencc" -Force | Out-Null
+    Get-Dict "$frostBase/opencc/emoji.txt"  "$rimeFrost\opencc\emoji.txt"  "emoji 表"        | Out-Null
+    Get-Dict "$frostBase/opencc/others.txt" "$rimeFrost\opencc\others.txt" "符号 / 杂项表"   | Out-Null
+    New-Item -ItemType Directory -Path "$rimeFrost\cn_dicts_cell" -Force | Out-Null
+    foreach ($c in $FrostCells) {
+        Get-Dict "$frostBase/cn_dicts_cell/$c.dict.yaml" "$rimeFrost\cn_dicts_cell\$c.dict.yaml" "扩展词库" | Out-Null
+    }
+
+    Gray "rime-frost (英文):"
+    Get-Dict "$frostBase/en_dicts/en.dict.yaml"     "$rimeFrostEn\en.dict.yaml"     "主词库" | Out-Null
+    Get-Dict "$frostBase/en_dicts/en_ext.dict.yaml" "$rimeFrostEn\en_ext.dict.yaml" "扩展"   | Out-Null
+
+    $pinyinBase = "https://raw.githubusercontent.com/mozillazg/pinyin-data/master"
+    Gray "pinyin-data (汉字拼音反查):"
+    Get-Dict "$pinyinBase/pinyin.txt"         "$pinyinData\pinyin.txt"         "全量底表(官方合成)" | Out-Null
+    Get-Dict "$pinyinBase/kXHC1983.txt"       "$pinyinData\kXHC1983.txt"       "新华字典多音字" | Out-Null
+    Get-Dict "$pinyinBase/kTGHZ2013.txt"      "$pinyinData\kTGHZ2013.txt"      "通用规范汉字"   | Out-Null
+    Get-Dict "$pinyinBase/kMandarin_8105.txt" "$pinyinData\kMandarin_8105.txt" "8105 标准首音"  | Out-Null
+    Get-Dict "$pinyinBase/overwrite.txt"      "$pinyinData\overwrite.txt"      "手工纠正"       | Out-Null
+
+    # 五笔词库: 下载上游原始档, 主库与 extra 由 gen_dict 重排/拆分后写入 build 目录;
+    # district 不经 gen_dict, 原样复制 (见 Assemble-Data)
+    $wubiBase = "https://raw.githubusercontent.com/KyleBing/rime-wubi86-jidian/master"
+    Gray "rime-wubi86-jidian (五笔):"
+    Get-Dict "$wubiBase/wubi86_jidian.dict.yaml"                "$rimeWubi\wubi86_jidian.dict.yaml"                "主词库"     | Out-Null
+    Get-Dict "$wubiBase/wubi86_jidian_extra.dict.yaml"          "$rimeWubi\wubi86_jidian_extra.dict.yaml"          "扩展词库"   | Out-Null
+    Get-Dict "$wubiBase/wubi86_jidian_extra_district.dict.yaml" "$rimeWubi\wubi86_jidian_extra_district.dict.yaml" "行政区域"   | Out-Null
+
+    # Unicode CLDR emoji 中文注解 + emoji 白名单。不参与常规构建 —— emoji 命名表
+    # (custom_emoji_named.txt) 已入库, 这些原始档只在需要重新生成它时用到:
+    #   cargo run -p wind-tools --bin gen_emoji_names -- --cldr .cache\cldr `
+    #     --stopwords <gen_dict数据目录>\emoji_stopwords.txt --out <同目录>\custom_emoji_named.txt
+    # 生成的命名表交给 gen_dict 反查五笔码 (「足球」-> khgf)。
+    # 许可证 Unicode-3.0, 见 NOTICE.md
+    $cldrBase = "https://raw.githubusercontent.com/unicode-org/cldr/main/common"
+    Gray "Unicode CLDR (emoji 中文名):"
+    Get-Dict "$cldrBase/annotations/zh.xml"        "$cldr\zh.xml"         "emoji 注解"     | Out-Null
+    Get-Dict "$cldrBase/annotationsDerived/zh.xml" "$cldr\zh_derived.xml" "派生注解(国旗)" | Out-Null
+    Get-Dict "https://unicode.org/Public/emoji/latest/emoji-test.txt" "$cldr\emoji-test.txt" "emoji 白名单" | Out-Null
+
+    # 辅助码表: 拼音候选的字形二次筛选 (默认关闭的功能, 见 schema.pinyin.aux_code)。
+    # 小鹤/自然码两张已是 `字=码` 行格式, 零转换; 笔画表来自 rime-stroke 的 .dict.yaml,
+    # 由 gen_aux_code 剥 YAML 头 + 按字集裁剪 (字表来自 zispace/hanzi-chars)。
+    # ⚠️ rime-stroke 是 LGPL-3.0, 与本仓 GPL-3.0 不同 —— 同 rime-frost 处理: 只下载不入库,
+    # 产物随发行版分发并适用原许可, 见 NOTICE.md。
+    $auxBase = "https://raw.githubusercontent.com/HowcanoeWang/rime-lua-aux-code/main/aux_code"
+    Gray "辅助码表:"
+    Get-Dict "$auxBase/flypy_full.txt"   "$auxCode\flypy_full.txt"   "小鹤形码"   | Out-Null
+    Get-Dict "$auxBase/ZRM-wanxiang.txt" "$auxCode\ZRM-wanxiang.txt" "自然码形码" | Out-Null
+    Get-Dict "https://raw.githubusercontent.com/rime/rime-stroke/master/stroke.dict.yaml" `
+             "$auxCode\stroke.dict.yaml" "笔画(上游全表)" | Out-Null
+    # 笔画表裁剪用的字集 (文件名须与 gen_aux_code::CHARSET_FILES 一致)
+    $charsetDir = "$auxCode\charset"
+    New-Item -ItemType Directory -Path $charsetDir -Force | Out-Null
+    $hanziBase = "https://raw.githubusercontent.com/zispace/hanzi-chars/main"
+    foreach ($cs in @(
+        @{ Path = "data-charset/GB 18030-2000.txt";                 Label = "GB18030 基本集" },
+        @{ Path = "data-charlist/《通用规范汉字表》（2013年）.txt";  Label = "通用规范汉字表" },
+        @{ Path = "data-unicode/Unicode-CJK 〇.txt";                 Label = "〇" }
+    )) {
+        $leaf = Split-Path $cs.Path -Leaf
+        # 路径含中文/空格, 需 URL 编码后再拼接
+        $encoded = ($cs.Path -split '/' | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+        Get-Dict "$hanziBase/$encoded" "$charsetDir\$leaf" "字集: $($cs.Label)" | Out-Null
+    }
+
+    $openccBase = "https://raw.githubusercontent.com/BYVoid/OpenCC/master/data/dictionary"
+    Gray "OpenCC 简繁词典:"
+    Get-Dict "$openccBase/STCharacters.txt" "$opencc\STCharacters.txt" "简->繁 字级" | Out-Null
+    Get-Dict "$openccBase/STPhrases.txt"    "$opencc\STPhrases.txt"    "简->繁 词级" | Out-Null
+    # 繁->简 两张表供「繁入简出」(input.t2s)。用官方表而不是反转 ST*: 繁->简的取舍
+    # (异体字归并、一简对多繁的收敛方向) 官方表是直接给出的, 反转出来的要自己定夺。
+    Get-Dict "$openccBase/TSCharacters.txt" "$opencc\TSCharacters.txt" "繁->简 字级" | Out-Null
+    Get-Dict "$openccBase/TSPhrases.txt"    "$opencc\TSPhrases.txt"    "繁->简 词级" | Out-Null
+    Get-Dict "$openccBase/TWVariants.txt"   "$opencc\TWVariants.txt"   "台湾字形"   | Out-Null
+    Get-Dict "$openccBase/TWPhrases.txt"    "$opencc\TWPhrases.txt"    "台湾词汇"   | Out-Null
+    Get-Dict "$openccBase/HKVariants.txt"   "$opencc\HKVariants.txt"   "香港字形"   | Out-Null
+
+    # Emoji 候选扩展 (设计见 docs\design\emoji-suggestion.md, 出厂关闭)。
+    # ⚠️ rime-emoji 是 LGPL-3.0, 与本仓 GPL-3.0 不同。政策与 rime-stroke 一致 —— 只下载不入库;
+    #    但**分发方式刻意不同**: 本表随发行版**原样**分发 (不做构建期转换), 我们分发的因此是
+    #    逐字副本而非衍生作品, LGPL 的修改版义务不触发。繁->简归一与二进制化都在**用户本机**
+    #    首次启用时进行, 产物是本机缓存, 从不离开用户机器 => 不构成 conveying。
+    #    详见 NOTICE.md 与设计文档 §3.5。⛔ 切勿 include_bytes! 嵌进 exe (会构成 LGPL §4
+    #    Combined Work, 须另行提供重新链接机制)。
+    $emojiBase = "https://raw.githubusercontent.com/rime/rime-emoji/master"
+    Gray "rime-emoji (候选扩展):"
+    Get-Dict "$emojiBase/opencc/emoji_word.txt"     "$rimeEmojiCc\emoji_word.txt"     "词->emoji"   | Out-Null
+    Get-Dict "$emojiBase/opencc/emoji_category.txt" "$rimeEmojiCc\emoji_category.txt" "分类->emoji" | Out-Null
+    # 许可证全文必须随数据一起分发 (GPL-3.0 §4: give all recipients a copy of this License)。
+    Get-Dict "$emojiBase/LICENSE"                   "$rimeEmoji\LICENSE"              "LGPL-3.0"    | Out-Null
+    return $true
+}
+
+# 随包附带的 rime-frost 细胞词库。清单与理由见 dev.sh 的 FROST_CELLS（几处要同步）。
+$FrostCells = @('exthot', 'idiom', 'place', 'history', 'name', 'name2', 'sport', 'geography', 'animal',
+                'computer', 'music', 'media', 'industry_product', 'inputmethod', 'chess', 'chess2')
+
+# rime-frost others.txt 里不随包的分组。理由与清单见 dev.sh 的 FROST_OTHERS_EXCLUDE（几处要同步）。
+$FrostOthersExclude = @('著名表演艺术家')
+
+# 按分组标题过滤 rime-frost 的 OpenCC 杂项表 (同 dev.sh 的 strip_frost_sections):
+# 被剔除的组从其标题到下一个标题整段去掉, 其余行原样保留。按 LF 切行、按 LF 拼回。
+function Copy-FrostOthers ([string]$src, [string]$dst) {
+    $lines = [IO.File]::ReadAllText($src, [Text.UTF8Encoding]::new($false)) -split "`n"
+    $skip = $false
+    $out = foreach ($l in $lines) {
+        if ($l -match '^-{10}([^\t]*)\t-+\s*$') { $skip = $FrostOthersExclude -contains $Matches[1].TrimStart('-') }
+        if (-not $skip) { $l }
+    }
+    [IO.File]::WriteAllText($dst, ($out -join "`n"), [Text.UTF8Encoding]::new($false))
+}
+
+# 把 rime 主表 import_tables 里**没随包**的子表、以及全部 cn_dicts_cell/ 细胞词库注释掉（就地改写）。
+# 理由见 dev.sh 的 strip_unshipped_imports（同一件事，改一边要同步另外两边）：
+# 免去缺失子表的 warn；细胞词库作为扩展词库单独开关，留在主表里就关不掉。其余子表的判据是
+# 输出目录里有没有这个文件，不写死名单。
+# 按 LF 切行、按 LF 拼回，原文件的换行与编码（UTF-8 无 BOM）保持不变。
+function Remove-UnshippedImports ([string]$main) {
+    $dir = Split-Path $main -Parent
+    $lines = [IO.File]::ReadAllText($main, [Text.UTF8Encoding]::new($false)) -split "`n"
+    $inBlock = $false; $done = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $l = $lines[$i]
+        if ($l -match '^\.\.\.\s*$') { $done = $true }
+        if ($done) { continue }
+        if ($l -match '^import_tables:') { $inBlock = $true; continue }
+        if ($inBlock -and $l -match '^[^\s#-]') { $inBlock = $false }
+        if ($inBlock -and $l -match '^\s*-\s*([^\s#]+)(.*)$') {
+            if ($Matches[1].StartsWith('cn_dicts_cell/')) {
+                $lines[$i] = "  # [扩展词库] $($Matches[1])$($Matches[2])"
+            } elseif (-not (Test-Path (Join-Path $dir "$($Matches[1]).dict.yaml"))) {
+                $lines[$i] = "  # [未随包] $($Matches[1])$($Matches[2])"
+            }
+        }
+    }
+    [IO.File]::WriteAllText($main, ($lines -join "`n"), [Text.UTF8Encoding]::new($false))
+}
+
+# 从 data/(源) + .cache/(下载/生成) 组装完整运行时数据到 $outdir\data\
+function Assemble-Data ([string]$outdir = $BuildDevDir) {
+    $data      = "$outdir\data"
+    $schemas   = "$data\schemas"
+    $pinyin    = "$schemas\pinyin"
+    $pinyinCn  = "$pinyin\cn_dicts"
+    $english   = "$schemas\english"
+    $rimeFrost = "$CacheDir\rime-frost"
+
+    Say "`n组装 data/ → $data"
+    if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+
+    # 1. 复制 data/ 源文件 (configs、五笔词库、主题等)
+    New-Item -ItemType Directory -Path $outdir -Force | Out-Null
+    Copy-Item "$ProductRoot\data" -Destination $outdir -Recurse -Force
+    # AI 工具在会话 cwd 下落的运行时状态 (.omc\state\… 等) 会随复制混进产物、进安装包/靶机。
+    # 它们被 .gitignore 挡着, git 里看不见, 只能在组装时剥掉。清单与 dev.sh 的 TOOL_STATE_DIRS 同源。
+    $ToolStateDirs = @('.omc', '.omx', '.claude', '.remember')
+    Get-ChildItem -LiteralPath $data -Recurse -Force -Directory -EA SilentlyContinue |
+        Where-Object { $ToolStateDirs -contains $_.Name } |
+        Remove-Item -Recurse -Force -EA SilentlyContinue
+
+    # 1b. 合并 aurora_input\data\settings\ (manifest.toml 等 RPC 元数据)
+    if (Test-Path "$ProjectRoot\data\settings") {
+        New-Item -ItemType Directory -Path "$data\settings" -Force | Out-Null
+        Copy-Item "$ProjectRoot\data\settings\*" -Destination "$data\settings" -Recurse -Force
+    }
+
+    # 2. rime-frost 拼音词库
+    New-Item -ItemType Directory -Path $pinyinCn -Force | Out-Null
+    if (Test-Path "$rimeFrost\rime_frost.dict.yaml") {
+        Copy-Item "$rimeFrost\rime_frost.dict.yaml" $pinyin -Force
+        foreach ($f in @("8105.dict.yaml", "41448.dict.yaml", "base.dict.yaml", "ext.dict.yaml", "others.dict.yaml", "corrections.dict.yaml")) {
+            if (Test-Path "$rimeFrost\cn_dicts\$f") { Copy-Item "$rimeFrost\cn_dicts\$f" $pinyinCn -Force }
+        }
+        # 细胞词库放主词库目录的 ext\（扩展词库的默认发现目录），不沿用上游的 cn_dicts_cell\
+        New-Item -ItemType Directory -Path "$pinyin\ext" -Force | Out-Null
+        foreach ($c in $FrostCells) {
+            if (Test-Path "$rimeFrost\cn_dicts_cell\$c.dict.yaml") { Copy-Item "$rimeFrost\cn_dicts_cell\$c.dict.yaml" "$pinyin\ext" -Force }
+        }
+        Remove-UnshippedImports "$pinyin\rime_frost.dict.yaml"
+    } else { Warn "缺 .cache\rime-frost\, 拼音词库不可用 (运行 gen-data 下载)" }
+
+    # 3. 英文词库
+    New-Item -ItemType Directory -Path $english -Force | Out-Null
+    foreach ($f in @("en.dict.yaml", "en_ext.dict.yaml")) {
+        if (Test-Path "$rimeFrost\en_dicts\$f") { Copy-Item "$rimeFrost\en_dicts\$f" $english -Force }
+    }
+
+    # 4. (unigram.txt 不再随 data/ 分发：引擎侧的读取链已移除, 词图打分改用词条自身的
+    #    词典权重, 见 aurora-engine/pinyin/lattice.rs::score_node_inner。
+    #    .cache 里的 unigram.txt 仍由 gen-data 生成 —— gen_dict 用它给五笔扩展词库的
+    #    CJK 条目赋权, 见 gen_dict/extra.rs::assign_bucket_weights。)
+
+    # 4b. 汉字拼音反查表
+    $pinyinMap = "$CacheDir\pinyin-data\pinyin_map.txt"
+    if (Test-Path $pinyinMap) { Copy-Item $pinyinMap "$data\pinyin_map.txt" -Force }
+    else { Warn "缺 pinyin_map.txt (运行 gen-data 生成)" }
+
+    # 5. OpenCC 编译 .octrie (Rust 工具 gen_opencc)
+    New-Item -ItemType Directory -Path "$data\opencc" -Force | Out-Null
+    if ((Test-Path "$CacheDir\opencc\dictionaries") -and (Get-ChildItem "$CacheDir\opencc\dictionaries\*.txt" -ErrorAction SilentlyContinue)) {
+        Gray "编译 OpenCC → .octrie ..."
+        Push-Location $ProjectRoot
+        try {
+            cargo run -q -p wind-tools --bin gen_opencc -- --src "$CacheDir\opencc\dictionaries" --out "$data\opencc"
+            if ($LASTEXITCODE -ne 0) { Warn "OpenCC 编译失败 (简繁转换不可用)" }
+        } finally { Pop-Location }
+    } else { Warn "缺 .cache\opencc\, OpenCC 不可用 (运行 gen-data 下载)" }
+
+    # 6. 五笔词库 (Rust 工具 gen_dict): 主库按词频重排 + extra 拆成 4 库
+    #    产物直接写进 build 目录, 不入版本库 —— 源码树 data\schemas\wubi86\ 只保留
+    #    wubi86.schema.toml 与字体等真正的源文件, 避免再把生成物误当源文件手工编辑
+    $wubiOut  = "$schemas\wubi86"
+    $rimeWubi = "$CacheDir\rime-wubi"
+    if (Test-Path "$rimeWubi\wubi86_jidian.dict.yaml") {
+        Gray "生成五笔词库 (gen_dict) ..."
+        New-Item -ItemType Directory -Path $wubiOut -Force | Out-Null
+        Push-Location $ProjectRoot
+        try {
+            # district 由 gen_dict 的 passthrough 一并处理 (原样透传 + 清洗头部)
+            cargo run -q -p wind-tools --bin gen_dict -- --cache $CacheDir --out $wubiOut --report $rimeWubi
+            if ($LASTEXITCODE -ne 0) { Warn "五笔词库生成失败 (五笔方案不可用)" }
+        } finally { Pop-Location }
+    } else { Warn "缺 .cache\rime-wubi\, 五笔词库不可用 (运行 gen-data 下载)" }
+
+    # 7. 辅助码表 (Rust 工具 gen_aux_code): 小鹤/自然码原样透传, 笔画表 YAML→`字=码` + 字集裁剪。
+    #    -schema-out 另从同一份笔画数据产出「笔画」码表方案的词库 schemas\stroke\stroke.dict.yaml
+    #    (权重取 rime-frost 单字字频; 方案文件 stroke.schema.toml 入库、随 data\ 一起复制)。
+    #    全拼默认辅助码引用的就是这个方案 (schema:stroke); stroke.txt 照旧产出, 供旧写法的用户 override。
+    #    与五笔同理: 产物只进 build 目录, 不入版本库 (rime-stroke 是 LGPL-3.0, 见 NOTICE.md)。
+    #    功能出厂关闭, 故缺表只是「辅助码 / 笔画方案用不了」, 不影响其它一切 —— 用 Warn 不中断构建。
+    $auxCache = "$CacheDir\aux-code"
+    if (Test-Path "$auxCache\stroke.dict.yaml") {
+        Gray "生成辅助码表 + 笔画方案词库 (gen_aux_code) ..."
+        New-Item -ItemType Directory -Path "$schemas\aux_code" -Force | Out-Null
+        Push-Location $ProjectRoot
+        try {
+            cargo run -q -p wind-tools --bin gen_aux_code -- --cache $CacheDir --out "$schemas\aux_code" --schema-out $schemas
+            if ($LASTEXITCODE -ne 0) { Warn "辅助码表生成失败 (辅助码功能与笔画方案不可用)" }
+        } finally { Pop-Location }
+    } else { Warn "缺 .cache\aux-code\, 辅助码不可用 (运行 gen-data 下载)" }
+
+    # 8. Emoji 候选扩展表: **原样复制**, 不做任何构建期转换 (与 5/6/7 的生成物刻意不同)。
+    #    繁->简归一、撞键合并与二进制化全部推迟到用户本机首次启用时 —— 这样我们分发的是
+    #    LGPL 原文的逐字副本, 而非衍生作品 (见 NOTICE.md 与 design\emoji-suggestion.md §3.5)。
+    #    LICENSE 必须一并复制: 缺了它这份分发就不合规。
+    #    功能出厂关闭, 故缺表只是「emoji 扩展用不了」, 用 Warn 不中断构建。
+    $emojiCache = "$CacheDir\rime-emoji"
+    if (Test-Path "$emojiCache\opencc\emoji_word.txt") {
+        Gray "复制 emoji 扩展表 (原样) ..."
+        $emojiOut = "$data\emoji"
+        New-Item -ItemType Directory -Path $emojiOut -Force | Out-Null
+        Copy-Item "$emojiCache\opencc\emoji_word.txt"     "$emojiOut\" -Force
+        # 分类表可缺 (出厂关), 缺了不影响主表。
+        if (Test-Path "$emojiCache\opencc\emoji_category.txt") {
+            Copy-Item "$emojiCache\opencc\emoji_category.txt" "$emojiOut\" -Force
+        }
+        if (Test-Path "$emojiCache\LICENSE") {
+            Copy-Item "$emojiCache\LICENSE" "$emojiOut\LICENSE" -Force
+        } else { Warn "缺 rime-emoji LICENSE, 该数据不得分发 (重跑 gen-data)" }
+    } else { Warn "缺 .cache\rime-emoji\, emoji 扩展不可用 (运行 gen-data 下载)" }
+
+    # 8b. rime-frost 的 emoji / 符号表 (emoji 附加模块)。GPL-3.0, 与拼音词库同源同许可。
+    #     others.txt 剔除不随包的分组 ($FrostOthersExclude), 其余分组运行时按模块取。
+    if (Test-Path "$rimeFrost\opencc\emoji.txt") {
+        New-Item -ItemType Directory -Path "$data\emoji" -Force | Out-Null
+        Copy-Item "$rimeFrost\opencc\emoji.txt" "$data\emoji\frost_emoji.txt" -Force
+        if (Test-Path "$rimeFrost\opencc\others.txt") {
+            Copy-FrostOthers "$rimeFrost\opencc\others.txt" "$data\emoji\frost_others.txt"
+        }
+    } else { Warn "缺 .cache\rime-frost\opencc\, 白霜 emoji 模块不可用 (运行 gen-data 下载)" }
+
+    $cnt = (Get-ChildItem $data -Recurse -File).Count
+    Gray "data/ 组装完成 ($cnt 文件)"
+    return $true
+}
+
+# 下载外部词库 + 生成 unigram/pinyin + 组装 data/
+function Do-GenData ([string]$outdir = $BuildDevDir) {
+    if (-not (Download-Dicts)) { return $false }
+
+    # 生成 unigram 词频表 (Rust 工具 gen_unigram)。仅供 gen_dict 给五笔扩展词库的
+    # CJK 条目赋权, 不随 data\ 分发 —— 引擎侧已改用词条自身的词典权重打分。
+    $unigram = "$CacheDir\pinyin-frost\unigram.txt"
+    New-Item -ItemType Directory -Path (Split-Path $unigram -Parent) -Force | Out-Null
+    if (-not (Test-Path $unigram)) {
+        Say "生成 unigram 词频表..."
+        Push-Location $ProjectRoot
+        try {
+            cargo run -q -p wind-tools --bin gen_unigram -- --rime "$CacheDir\rime-frost\cn_dicts" --out $unigram
+            if ($LASTEXITCODE -ne 0) { Warn "unigram 生成失败 (gen_dict 五笔赋权将随之失败)" }
+        } finally { Pop-Location }
+    } else { Gray "unigram 已缓存" }
+
+    # 生成汉字拼音反查表 (Rust 工具 gen_pinyin)
+    $pinyinMap = "$CacheDir\pinyin-data\pinyin_map.txt"
+    if (Test-Path "$CacheDir\pinyin-data\pinyin.txt") {
+        Say "生成汉字拼音反查表..."
+        Push-Location $ProjectRoot
+        try {
+            cargo run -q -p wind-tools --bin gen_pinyin -- --src "$CacheDir\pinyin-data" --out $pinyinMap
+            if ($LASTEXITCODE -ne 0) { Warn "拼音反查表生成失败 (候选拼音提示不可用)" }
+        } finally { Pop-Location }
+    } else { Warn "缺 .cache\pinyin-data\, 拼音反查表不可用" }
+
+    Assemble-Data $outdir | Out-Null
+    Say "gen-data 完成 → $outdir\data"
+    return $true
+}
+
+# 发布前硬门禁: 校验关键运行时数据完整 (缺失/过小即失败)
+function Verify-DistData ([string]$outdir = $BuildDir) {
+    $data = "$outdir\data"
+    $ok = $true
+    $checks = @(
+        @{ Path = "schemas\pinyin\cn_dicts\base.dict.yaml"; Min = 1000000 },
+        @{ Path = "schemas\pinyin\cn_dicts\8105.dict.yaml"; Min = 10000 },
+        @{ Path = "schemas\english\en.dict.yaml";           Min = 1000 },
+        @{ Path = "pinyin_map.txt";                         Min = 10000 },
+        # 五笔词库为 gen_dict 生成物, 不入版本库 —— 忘跑 gen-data 时必须在此拦下,
+        # 否则打出来的包五笔方案整个不可用
+        @{ Path = "schemas\wubi86\wubi86_jidian.dict.yaml";       Min = 1000000 },
+        @{ Path = "schemas\wubi86\wubi86_jidian_extra.dict.yaml"; Min = 10000 },
+        @{ Path = "schemas\wubi86\wubi86_jidian_emoji.dict.yaml"; Min = 1000 },
+        @{ Path = "schemas\wubi86\wubi86_jidian_extra_district.dict.yaml"; Min = 10000 },
+        # 辅助码表同为生成物、同样不入库。功能虽出厂关闭, 缺表的后果仍是「用户在设置里
+        # 打开了却毫无反应」—— 门卫只 warn 一行日志, 用户看不到。故照样在此硬拦。
+        @{ Path = "schemas\aux_code\stroke.txt";     Min = 500000 },
+        @{ Path = "schemas\aux_code\flypy_full.txt"; Min = 50000 },
+        # 笔画方案词库同为 gen_aux_code 生成物; 全拼默认辅助码经 schema:stroke 引用它
+        @{ Path = "schemas\stroke\stroke.dict.yaml"; Min = 500000 }
+    )
+    Say "`n校验发布数据完整性 → $data"
+    foreach ($c in $checks) {
+        $p = "$data\$($c.Path)"
+        if (-not (Test-Path $p)) { ErrMsg "  ✗ 缺失: $($c.Path)"; $ok = $false; continue }
+        $sz = (Get-Item $p).Length
+        if ($sz -lt $c.Min) { ErrMsg "  ✗ 过小 (${sz}B < 期望 $($c.Min)B): $($c.Path)"; $ok = $false }
+        else { Gray "  ✓ $($c.Path) ($([math]::Round($sz/1KB))KB)" }
+    }
+    $octrie = @(Get-ChildItem "$data\opencc\*.octrie" -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 })
+    if ($octrie.Count -lt 1) { ErrMsg "  ✗ 缺失: opencc\*.octrie (简繁转换编译失败)"; $ok = $false }
+    else { Gray "  ✓ opencc\*.octrie ($($octrie.Count) 个)" }
+
+    if (-not $ok) {
+        ErrMsg "`n发布数据校验失败! 上述文件缺失或异常会导致功能残缺。"
+        ErrMsg "请排查 gen-data 的下载/生成 (词库源、网络、gen_opencc/gen_dict)。"
+        return $false
+    }
+    Say "发布数据校验通过 ✓"; return $true
+}
+
+# ---------- 全构建 (1 / d1) ----------
+# 全部模块 + 数据落到【产品根】build/(release) 或 build_dev/(dev)。
+# 先清空输出目录, 确保内容 == 部署到目标目录的内容, 无任何中间产物。
+# ---------- 版本变化侦测: 版本号变更时强制重建关键产物 (确定性保险) ----------
+# 产品版本唯一真源是 docs/VERSION。cargo 的 rerun-if-env-changed 与 CMake -D 已能在
+# 版本变化时自动重建; 此处再加一道保险: 记录上次构建版本, 一旦变化即清理最终产物
+# (Rust 最终二进制包 + TSF 的 CMake 缓存目录), 强制重新写入版本资源。仅版本真变时付代价。
+function Sync-VersionStamp {
+    $stampFile = "$CacheDir\.last_build_version"
+    $lastVer = if (Test-Path $stampFile) { (Get-Content $stampFile -Raw).Trim() } else { "" }
+    if ($lastVer -eq $Version) { return }   # 版本未变 → 走增量, 不清理
+
+    if ($lastVer) { Say "`n[version] 版本变化 $lastVer -> $Version, 清理关键产物强制刷新版本号..." }
+    else          { Say "`n[version] 首次记录版本 $Version, 清理关键产物确保版本号写入..." }
+
+    # 1. Rust: 仅清最终二进制包 (依赖库保留, 秒级); build.rs 随之重跑注入新版本资源。
+    # 注意: $ProjectRoot 已是 aurora_core 目录 (见路径定义), 勿再拼 \aurora_core。
+    Push-Location $ProjectRoot
+    try { cargo clean -p wind_service 2>&1 | Out-Null } catch {} finally { Pop-Location }
+    if (Test-Path $SettingDir) {
+        Push-Location $SettingDir
+        try { cargo clean -p aurora_setting 2>&1 | Out-Null } catch {} finally { Pop-Location }
+    }
+    if (Test-Path $PortableDir) {
+        Push-Location $PortableDir
+        try { cargo clean -p aurora_portable 2>&1 | Out-Null } catch {} finally { Pop-Location }
+    }
+
+    # 2. TSF: 删 CMake 缓存目录, 强制 configure_file 重新生成 version.rc。
+    $tsfCache = "$CacheDir\tsf-cmake"
+    if (Test-Path $tsfCache) { Remove-Item -Recurse -Force $tsfCache -ErrorAction SilentlyContinue }
+
+    # 记录当前版本, 避免下次重复清理。
+    New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null
+    Set-Content -Path $stampFile -Value $Version -NoNewline
+}
+
+# ---------- 全构建的并行编排 (仅在 $env:AURORA_PARALLEL_BUILD 非空时启用) ----------
+# core / tsf / setting / portable 四步互不依赖: 各写各的产物文件, 且 setting 与 portable
+# 用的是各自仓库的 target\, 与主仓的 cargo 锁不冲突。串行跑纯属浪费 —— 实测 48 核编译机
+# 上整个构建期间平均只用到 1 个核, 因为每步内部主要是单线程的链接与 LTO。
+#
+# ⚠️ 默认关闭, 且必须默认关闭: 本机走的是同一段代码, 而在 12 核机器上同时跑四个构建会把
+#    机器压死 —— 那正是当初把编译搬去远程的原因。由 remote-build.ps1 在远程侧注入开启。
+#
+# 用子进程而非 Start-ThreadJob: 这三步各自就是一条现成的子命令 (dm1/dm3/dm4, release 为
+# m1/m3/m4), 直接复用比把函数和几十个脚本级变量搬进独立 runspace 可靠得多。
+# Do-GenData 不参与并行: 它跑 cargo run -p wind-tools, 与 Build-Core 共用主仓的 target
+# 锁, 并行只会互相等锁, 还多占一份内存。
+function Invoke-BuildStagesParallel ([string]$profile, [string]$outdir) {
+    $p = if ($profile -eq "dev") { "d" } else { "" }
+    $stages = @(
+        @{ Cmd = "${p}m1"; Name = "tsf" },
+        @{ Cmd = "${p}m3"; Name = "setting" },
+        @{ Cmd = "${p}m4"; Name = "portable" }
+    )
+    Say "`n[parallel] core 与 tsf / setting / portable 并行构建 ($($stages.Count + 1) 路)..."
+    # 子进程必须带上 AURORA_NO_REMOTE: 万一这台机器自身也配了 build.local.ps1, 子进程会把
+    # 命令再转发一次 —— 而转发目标很可能就是它自己。
+    $prevNoRemote = $env:AURORA_NO_REMOTE
+    $env:AURORA_NO_REMOTE = "1"
+    $pwshPath = (Get-Process -Id $PID).Path
+    $jobs = @()
+    try {
+        foreach ($s in $stages) {
+            $log = Join-Path $env:TEMP "wind-par-$($s.Name)-$PID.log"
+            $proc = Start-Process -FilePath $pwshPath -PassThru -NoNewWindow `
+                -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, $s.Cmd) `
+                -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+            $jobs += @{ Proc = $proc; Log = $log; Name = $s.Name }
+        }
+        # 主进程自己跑 core, 与上面三路并发
+        $swCore = [System.Diagnostics.Stopwatch]::StartNew()
+        $ok = Build-Core $profile $outdir
+        $swCore.Stop()
+    } finally { $env:AURORA_NO_REMOTE = $prevNoRemote }
+
+    foreach ($j in $jobs) {
+        $j.Proc.WaitForExit()
+        # 子进程输出攒到各自结束后一次性打印 —— 四路实时交织完全没法读
+        foreach ($f in @($j.Log, "$($j.Log).err")) {
+            if (Test-Path $f) {
+                $t = Get-Content $f -Raw -ErrorAction SilentlyContinue
+                if ($t -and $t.Trim()) { Write-Host $t.TrimEnd() }
+                Remove-Item $f -Force -ErrorAction SilentlyContinue
+            }
+        }
+        if ($j.Proc.ExitCode -ne 0) {
+            ErrMsg "$($j.Name) 构建失败 (退出码 $($j.Proc.ExitCode))"
+            $ok = $false
+        }
+    }
+    # ⚠️ 每路耗时必须取子进程自己的 ExitTime-StartTime。用外层 Stopwatch 是错的: 停表发生在
+    #    按顺序 WaitForExit 之后, 先结束那几路会把「等主进程轮到自己」的时间一并计入, 四路
+    #    因此显示成同一个数 (踩过一次, 差点据此误判成并行没生效)。
+    $each = $jobs | ForEach-Object {
+        @{ Name = $_.Name; Sec = ($_.Proc.ExitTime - $_.Proc.StartTime).TotalSeconds }
+    }
+    $sum = ($each | ForEach-Object { $_.Sec } | Measure-Object -Sum).Sum + $swCore.Elapsed.TotalSeconds
+    $wall = [math]::Max((($each | ForEach-Object { $_.Sec } | Measure-Object -Maximum).Maximum), $swCore.Elapsed.TotalSeconds)
+    $detail = (@("core {0:N1}s" -f $swCore.Elapsed.TotalSeconds) +
+               ($each | ForEach-Object { "{0} {1:N1}s" -f $_.Name, $_.Sec })) -join "  ·  "
+    Gray "[parallel] $detail"
+    # 判据: 墙钟 ≈ 最慢那一路 = 真并行; 墙钟 ≈ 各路之和 = 卡在了 cargo 的全局 package
+    # cache 锁上 (子进程输出里会出现 "Blocking waiting for file lock on package cache")。
+    Gray ("[parallel] 墙钟 {0:N1}s, 串行则需 {1:N1}s (并行度 {2:N2}x)" -f $wall, $sum, ($sum / [math]::Max($wall, 0.1)))
+    return $ok
+}
+
+# ---------- 代码签名 (默认关闭; 需在命令里显式写 sign) ----------
+# 实现在 scripts\sign.ps1, 配置在 scripts\sign.local.ps1 (gitignore, 模板见 .example)。
+#
+# 【默认不签】—— 签名次数按月计费且有限, 一次全构建 5 个 PE、加打包 7 次。
+# 开关是位置无关的命令关键字 sign (定义见文件末尾"入口"段):
+#     dev.ps1 1        只构建, 不签         dev.ps1 sign 1   构建并签名
+#     dev.ps1 8        出包, 不签           dev.ps1 sign 8   出包并签名
+#
+# 三个接线点的顺序不是随意的, 每一条都由一个会静默出坏包的约束定死:
+#
+#   1. build[_dev]\ 下的 PE  → 必须在【打包/压缩之前】签。
+#      晚一步它们就被封进 Setup 的压缩块 / zip 里, 再也签不到了。
+#
+#   2. Setup.exe            → 必须在【pack.ps1 之后、New-UpdateManifest 之前】签。
+#      签名会改变文件长度与哈希; 排在 manifest 之后, latest.json 里的 sha256/size
+#      就与实际文件对不上, 在线升级会在校验环节整体失败 —— 而且是发出去才发现。
+#
+#   3. 便携 zip             → zip 本身签不了 (Authenticode 只认 PE)。靠的是压缩前
+#      build\ 里每个 PE 都已签好, 故 Do-PortableZip 在 Compress-Archive 前再签一次
+#      (幂等: 已签的会被跳过, skip 模式下没走 Do-Full 时这一次就是唯一的机会)。
+#
+# 签名不可用时【只警告不中断】—— 本机日常开发不该被一个过期的签名会话挡住。
+# 正式发版用 `dev.ps1 8 verify-sign` 或 `sign.ps1 -Verify dist` 硬校验。
+function Invoke-SignArtifacts ([string[]]$targets, [string]$what) {
+    # 没写 sign 就整段不走 —— 签名次数按月计费, 默认必须是不签。
+    if (-not $script:SignRequested) { return $true }
+    $ps1 = Join-Path $ScriptDir "sign.ps1"
+    if (-not (Test-Path $ps1)) { return $true }   # 脚本被删也不该拖垮构建
+    $existing = @($targets | Where-Object { Test-Path $_ })
+    if ($existing.Count -eq 0) { return $true }
+
+    $global:LASTEXITCODE = 0
+    try {
+        & $ps1 @existing
+    } catch {
+        ErrMsg "签名 $what 失败: $($_.Exception.Message)"
+        return $false
+    }
+    # sign.ps1 未配置/会话不可用时退 0 (警告后跳过); 只有真正签失败才非 0。
+    if ($LASTEXITCODE -ne 0) { ErrMsg "签名 $what 失败 (见上方 signtool 输出)"; return $false }
+    return $true
+}
+
+function Do-Full ([string]$profile = "release") {
+    $outdir = Out-For $profile
+    Sync-VersionStamp   # 版本号变化则强制重建关键产物 (确定性保险)
+    Say "`n========== 全构建 ($profile) → $outdir =========="
+    if (Test-Path $outdir) { Remove-Item -Recurse -Force $outdir }
+    New-Item -ItemType Directory -Path $outdir -Force | Out-Null
+    # Sync-VersionStamp 必须已经跑完再分叉: 版本变化时它会 cargo clean + 删 tsf-cmake 缓存,
+    # 几个进程同时干这件事必然打架。跑完之后它对子进程是幂等的 (版本已匹配, 直接 return)。
+    if ($env:AURORA_PARALLEL_BUILD) {
+        if (-not (Invoke-BuildStagesParallel $profile $outdir)) { return $false }
+    } else {
+    if (-not (Build-Core     $profile $outdir)) { return $false }   # aurora_input[_dev].exe
+    if (-not (Build-TsfAll   $profile $outdir)) { return $false }   # wind_tsf[_x86][_dev].dll
+    if (-not (Build-Setting  $profile $outdir)) { return $false }   # aurora_setting[_dev].exe (可选)
+    if (-not (Build-Portable $profile $outdir)) { return $false }   # aurora_portable.exe (可选)
+    }
+    if (-not (Do-GenData     $outdir))          { return $false }   # data/
+    if (-not (Verify-DistData $outdir))         { return $false }   # 硬门禁
+    # 签 outdir 根层的 exe/dll。放在这里而不是各 Build-* 里: 并行构建时四路各签各的会
+    # 同时去抢同一张虚拟智能卡, 而 signtool 对卡的访问不是并发安全的。收口到一处串行签。
+    if (-not (Invoke-SignArtifacts @($outdir) "$profile 产物")) { return $false }
+    Say "`n========== 全构建完成 ($profile) → $outdir =========="
+    Gray "内容即部署到目标目录的内容 (无中间产物)"
+    return $true
+}
+
+# ---------- 部署 (Go 非便携式 / 系统安装) ----------
+# 与便携式不同: 复制到安装目录后, regsvr32 注册 TSF COM (DllRegisterServer 自带
+# AddLanguageProfile + RegisterCategories, 输入法直接进系统列表), 授权 AppContainer
+# 宿主读取 DLL, 安装字根字体, 写开机自启, 直接启动 aurora_input[_dev].exe (不靠
+function Test-Admin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# 部署命令 → 目标安装目录; 非部署命令返回 $null (兼作"是否部署命令"判断)。
+# 注: 便携命令 (pb*/ub*) 刻意【不】列入 —— 便携部署是纯文件复制, 目标在普通目录,
+# 不注册 COM 也不装字体, 无需管理员; 列进来只会让每次部署白弹一次 UAC。
+function Deploy-TargetForCmd ([string]$cmd) {
+    if (@("p1","pm1","pm2","pm3","pm4","u1","u") -contains $cmd)            { return $AURORA_DIR_RELEASE }
+    if (@("pd1","pdm1","pdm2","pdm3","pdm4","ud1","ud") -contains $cmd)     { return $AURORA_DIR_DEV }
+    return $null
+}
+
+# 需管理员但【非】部署的命令。刻意与 Deploy-TargetForCmd 分开: 后者的返回值是
+# 真实的部署目标目录, 会被部署流程当路径使用; 把非部署命令塞进去就得编造假目录,
+# 使一个返回值同时承担"目标路径"与"要不要提权"两个语义 —— 二者对边缘输入的期望相反。
+# 目前只有 Defender 排除项的写入与移除属于此类 (写系统策略)。只读预览刻意不列入
+# —— 让预览也弹一次 UAC 会毁掉它"随手看一眼"的用途。
+function Test-NeedsAdminCmd ([string]$cmd) {
+    return (@("av", "avr") -contains $cmd)
+}
+
+# 系统安装(注册 COM/icacls/字体)始终需管理员。非管理员执行部署命令时自动 UAC 提权。
+# 返回三态: "skip" = 非部署命令/已是管理员 (调用方本地执行);
+#           "done" = 提权进程已执行完毕, 输出已在当前窗口显示 (调用方直接继续);
+#           "fail" = 提权被取消/失败 (调用方报错并以非零码退出)。
+function Invoke-Elevated ([string]$cmd, [string]$arg) {
+    $isDeploy = [bool](Deploy-TargetForCmd $cmd)
+    if (-not $isDeploy -and -not (Test-NeedsAdminCmd $cmd)) { return "skip" }   # 无需管理员
+    if (Test-Admin) { return "skip" }
+    $why = if ($isDeploy) { "系统安装" } else { "修改 Defender 排除项" }
+    Warn "$why 需要管理员权限, 正在请求 UAC 提升..."
+    $host_exe = (Get-Process -Id $PID).Path   # pwsh.exe 或 powershell.exe
+    if (-not $host_exe) { $host_exe = "pwsh.exe" }
+    # 临时日志文件捕获提权子进程的全部输出流 (*>), 执行后读回在本窗口显示。
+    $TmpLog = Join-Path $env:TEMP "wind_deploy_$(Get-Random -Maximum 99999999).log"
+    $argPart = if ($arg) { " `"$arg`"" } else { "" }
+    $innerCmd = "& `"$PSCommandPath`" `"$cmd`"$argPart *> `"$TmpLog`""
+    $encodedCmd = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($innerCmd))
+    try {
+        # -PassThru 取得进程对象; 用 WaitForExit() 替代 -Wait 以确保子进程真正退出后再读日志。
+        # (-Verb RunAs + -Wait 在部分 PS5.1 版本下存在不可靠的竞争问题)
+        $proc = Start-Process -FilePath $host_exe -Verb RunAs -PassThru -ErrorAction Stop `
+            -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-EncodedCommand", $encodedCmd
+        $proc.WaitForExit()
+        if (Test-Path $TmpLog) {
+            Get-Content $TmpLog | ForEach-Object { Write-Host $_ }
+            Remove-Item $TmpLog -ErrorAction SilentlyContinue
+        }
+        if ($proc.ExitCode -ne 0) { return "fail" }
+        return "done"
+    } catch {
+        if (Test-Path $TmpLog) { Remove-Item $TmpLog -ErrorAction SilentlyContinue }
+        ErrMsg "提权失败或被取消: $($_.Exception.Message)"
+        ErrMsg "可【以管理员身份】重开 PowerShell 再运行本脚本。"
+        return "fail"
+    }
+}
+
+# 部署安全网: 非管理员 (如被直接调用未经提权) → 明确报错。
+function Require-Admin {
+    if (-not (Test-Admin)) {
+        ErrMsg "系统安装需要管理员权限 (注册 TSF COM / 设置权限 / 安装字体)。"
+        ErrMsg "请以【管理员身份】打开 PowerShell 后重试。"
+        return $false
+    }
+    return $true
+}
+
+# 32 位 regsvr32 (注册 x86 TSF DLL, 写 WOW6432Node 供 32 位应用加载)。
+function Get-Regsvr32X86 { Join-Path $env:SystemRoot "SysWOW64\regsvr32.exe" }
+
+# TSF DLL 的系统目录落点: <System32|SysWOW64>\IME\<AppName>\。
+#
+# 为什么必须进系统目录: CS2 等开启 Trusted Mode 的游戏按【加载路径】放行 in-proc DLL,
+# 装在 Program Files 的副本连加载都被拒 (游戏日志 "Unknown foreign dll")。判据由三方
+# 对照实测锁定 —— QQ五笔(System32+签名)可用 / 冰凌(Program Files+签名)被拒 / 小狼毫
+# (System32+未签名)被拒, 即「系统目录 AND 有签名」两个条件缺一不可。
+# 详见 docs/design/game-compat-tsf-uielement.md。布局对齐 inbox IME 与 QQ五笔。
+#
+# ⚠️ 32 位差异: 本函数假定调用方是 64 位进程 (dev.ps1 走 pwsh)。32 位进程访问
+# System32 会被 WOW64 文件系统重定向静默改写到 SysWOW64 —— x64 DLL 装错地方且不报错。
+# 故显式断言, 不做「自动纠正」: 静默纠正会掩盖调用方本身跑错了架构这一事实。
+function Get-TsfSystemDir ([string]$suffix, [bool]$wow64) {
+    if (-not [Environment]::Is64BitProcess) {
+        throw "Get-TsfSystemDir 需在 64 位 PowerShell 中运行 (32 位进程访问 System32 会被 WOW64 重定向)"
+    }
+    $app  = if ($suffix) { "AuroraInputDev" } else { "AuroraInput" }
+    $root = if ($wow64)  { "SysWOW64" }     else { "System32" }
+    return (Join-Path $env:SystemRoot "$root\IME\$app")
+}
+
+# 应用注册表键 HKLM\Software\<AppName>。与安装器清单 [app] id、Rust 侧
+# aurora-config::variant::app_dir_name()、C++ 侧 AURORA_APP_NAME 同名 (四处无编译期约束)。
+function Get-AppRegKey ([string]$suffix) {
+    $app = if ($suffix) { "AuroraInputDev" } else { "AuroraInput" }
+    return "HKLM:\Software\$app"
+}
+
+# 反注册旧 TSF COM (x64 + x86) 并清掉系统副本。
+function Unregister-Tsf ([string]$dir, [string]$suffix) {
+    # 系统副本优先: regsvr32 注册的是哪个副本, InprocServer32 就指向哪个 —— 现行部署
+    # 注册的是系统副本。安装目录副本仍反注册一次, 兜住「从就地注册的存量版本升级」。
+    $sysX64 = Join-Path (Get-TsfSystemDir $suffix $false) "wind_tsf$suffix.dll"
+    $sysX86 = Join-Path (Get-TsfSystemDir $suffix $true)  "wind_tsf_x86${suffix}.dll"
+    foreach ($p in @($sysX64, (Join-Path $dir "wind_tsf$suffix.dll"))) {
+        if (Test-Path $p) { & regsvr32 /u /s $p 2>$null }
+    }
+    foreach ($p in @($sysX86, (Join-Path $dir "wind_tsf_x86${suffix}.dll"))) {
+        if (Test-Path $p) { & (Get-Regsvr32X86) /u /s $p 2>$null }
+    }
+    # 删掉系统副本, 免得下次注册撞上被宿主锁住的旧映像。删不掉只告警: 随后的
+    # Copy-Item 会覆盖它, 覆盖不成才是真失败 —— 那时由 Register-Tsf 报错, 不在此处抢报。
+    foreach ($p in @($sysX64, $sysX86)) {
+        if (Test-Path $p) {
+            try { Remove-Item $p -Force -ErrorAction Stop }
+            catch { Warn "  - 系统副本删除失败 (仍被加载, 将改名让路)" }
+        }
+    }
+    # 清掉历次让路留下的 .old_*。系统目录不在安装目录那套 *.old* 清理的范围内,
+    # 不在这里收就会一直累积 —— 每次部署撞上被锁的旧映像都会多留一个。
+    foreach ($d in @((Get-TsfSystemDir $suffix $false), (Get-TsfSystemDir $suffix $true))) {
+        if (Test-Path $d) {
+            Get-ChildItem -Path $d -Filter "*.old_*" -File -ErrorAction SilentlyContinue |
+                ForEach-Object { try { Remove-Item $_.FullName -Force -ErrorAction Stop } catch { } }
+        }
+    }
+}
+
+# 注册 TSF COM (x64 必须成功; x86 失败仅告警, 不阻断 64 位使用)。
+# 模式: 复制到系统目录 → 授 AppContainer 读权限 → 对【系统副本】regsvr32。
+# DllRegisterServer 内的 GetModuleFileName 取到系统副本路径, InprocServer32 自然指向它。
+function Register-Tsf ([string]$dir, [string]$suffix) {
+    $sid = "*S-1-15-2-1"   # ALL APPLICATION PACKAGES: AppContainer 宿主读取 DLL 所需
+
+    # 安装目录回指。DLL 搬进系统目录后 GetModuleFileName 只能取到系统副本路径, 推不出
+    # 安装目录 —— 服务拉起与便携标记检测都改读这个键 (读端 aurora_tsf/src/IPCClient.cpp
+    # 的 _ResolveAppBaseDir)。必须写在 regsvr32 之前: 注册后宿主可能立刻加载 DLL,
+    # 那一刻键还不存在就会白拉一次服务。
+    $regKey = Get-AppRegKey $suffix
+    if (-not (Test-Path $regKey)) { New-Item -Path $regKey -Force | Out-Null }
+    Set-ItemProperty -Path $regKey -Name "InstallDir" -Value $dir
+
+    $x64Src = Join-Path $dir "wind_tsf$suffix.dll"
+    $x64Dir = Get-TsfSystemDir $suffix $false
+    New-Item -ItemType Directory -Force -Path $x64Dir | Out-Null
+    $x64Dst = Join-Path $x64Dir "wind_tsf$suffix.dll"
+    # 走 Copy-Replace 而不是 Copy-Item: 系统副本是 in-proc 常驻的, 宿主不重启就一直锁着
+    # 旧映像, 直接覆盖会抛错中断部署。让路逻辑与安装目录副本共用同一套。
+    Copy-Replace $x64Dir "wind_tsf$suffix.dll" $x64Src
+    & icacls $x64Dst /grant "${sid}:(RX)" /c | Out-Null
+    & regsvr32 /s $x64Dst
+    if ($LASTEXITCODE -ne 0) { ErrMsg "  - x64 COM 注册失败: $x64Dst"; return $false }
+    Gray "  - x64 COM 已注册 ($x64Dst)"
+
+    # x86 走 SysWOW64: 32 位宿主只能加载 32 位 in-proc DLL, 且必须用 SysWOW64 下的
+    # regsvr32 注册, 注册项才会落进 WOW6432Node 视图。
+    $x86Src = Join-Path $dir "wind_tsf_x86${suffix}.dll"
+    if (Test-Path $x86Src) {
+        $x86Dir = Get-TsfSystemDir $suffix $true
+        New-Item -ItemType Directory -Force -Path $x86Dir | Out-Null
+        $x86Dst = Join-Path $x86Dir "wind_tsf_x86${suffix}.dll"
+        Copy-Replace $x86Dir "wind_tsf_x86${suffix}.dll" $x86Src
+        & icacls $x86Dst /grant "${sid}:(RX)" /c | Out-Null
+        & (Get-Regsvr32X86) /s $x86Dst
+        if ($LASTEXITCODE -ne 0) { Warn "  - x86 COM 注册失败 (32 位应用可能无法使用输入法)" }
+        else { Gray "  - x86 COM 已注册 ($x86Dst)" }
+    }
+
+    # 游戏场景 (CS2 等 Trusted Mode) 的判据是「系统目录 AND 有代码签名」, 缺一不可。
+    # 而日常 dev 构建默认不签名 (签名按次计费), 部署照样报成功 —— 不提示的话表现就是
+    # 「装好了、普通程序能打字、一进游戏就没有输入法」, 且没有任何线索可查。
+    if ((Get-AuthenticodeSignature $x64Dst).Status -ne "Valid") {
+        Warn "  - x64 DLL 未签名: 普通程序可用, 但 Trusted Mode 游戏 (CS2 等) 会拒绝加载它"
+        Gray '    需要游戏内可用时: dev.ps1 sign dm1 (重新构建并签名) 后再部署'
+    }
+    return $true
+}
+
+# 将本变体 TSF 输入法加入【当前用户】中文(zh-CN)输入法列表 → 默认启用, 免去手动"添加键盘"。
+# 背景: regsvr32/DllRegisterServer 只把 IME 注册为系统级"可用"; 对已配置好的语言, Windows
+#       不会自动把新 TIP 追加进用户启用列表 (RegisterProfile 的 bEnabledByDefault 仅在该语言
+#       【首次添加】时生效)。故此处显式追加。
+# 注1: CLSID/Profile GUID 必须与 wind_tsf\src\Globals.cpp 一致 (dev=DEB0/DEB1, release=EE30/EE31)。
+# 注2: 仅"添加"本变体, 绝不删除其它输入法 → 与系统已装的标准版清风/微软拼音等共存。
+# 注3: 部署在管理员令牌下运行; 同账户 UAC 提升时 HKCU 仍指向本人, 故对当前用户生效。
+function Enable-TsfForUser ([string]$profile) {
+    if ($profile -eq "dev") {
+        $tip = "0804:{99C2DEB0-5C57-45A2-9C63-FB54B34FD90A}{99C2DEB1-5C57-45A2-9C63-FB54B34FD90A}"
+    } else {
+        $tip = "0804:{99C2EE30-5C57-45A2-9C63-FB54B34FD90A}{99C2EE31-5C57-45A2-9C63-FB54B34FD90A}"
+    }
+    try {
+        $list = Get-WinUserLanguageList
+        $zh = $list | Where-Object { $_.LanguageTag -like "zh-Hans*" -or $_.LanguageTag -like "zh-CN*" } | Select-Object -First 1
+        if (-not $zh) {
+            $list.Add("zh-Hans-CN")
+            $zh = $list | Where-Object { $_.LanguageTag -like "zh-Hans*" } | Select-Object -First 1
+        }
+        if ($zh -and ($zh.InputMethodTips -notcontains $tip)) {
+            $zh.InputMethodTips.Add($tip)
+            Set-WinUserLanguageList -LanguageList $list -Force
+            Gray "  - 已加入当前用户输入法列表 (默认启用, 与标准版共存)"
+        } else {
+            Gray "  - 输入法已在用户列表, 跳过"
+        }
+    } catch {
+        Warn "  - 自动启用输入法失败 (可在 设置>时间和语言>语言>中文>选项>键盘 手动添加): $($_.Exception.Message)"
+    }
+}
+
+# 授权 ALL APPLICATION PACKAGES 读取执行 TSF DLL (开始菜单/搜索等 AppContainer 宿主需要)。
+function Grant-TsfAcl ([string]$dir, [string]$suffix) {
+    $sid = "*S-1-15-2-1"
+    foreach ($n in @("wind_tsf$suffix.dll", "wind_tsf_x86${suffix}.dll")) {
+        $p = Join-Path $dir $n
+        if (Test-Path $p) { & icacls $p /grant "${sid}:(RX)" /c | Out-Null }
+    }
+}
+
+# 安装 PUA 字根字体到系统 (供 DirectWrite fallback; 已存在且一致则跳过)。best-effort。
+function Install-WubiFont ([string]$dir) {
+    $src = Join-Path $dir "data\schemas\wubi86\HeiTiZiGen.ttf"
+    if (-not (Test-Path $src)) { return }
+    $dest = Join-Path $env:SystemRoot "Fonts\HeiTiZiGen.ttf"
+    try {
+        $need = $true
+        if (Test-Path $dest) {
+            try { if ((Get-FileHash $src -Algorithm SHA1).Hash -eq (Get-FileHash $dest -Algorithm SHA1).Hash) { $need = $false } } catch { $need = $true }
+        }
+        if ($need) { Copy-Item $src $dest -Force }
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts" -Name "黑体字根 (TrueType)" -Value "HeiTiZiGen.ttf" -Force
+        Gray "  - 字体: 黑体字根 $(if($need){'已安装'}else{'已存在,跳过'})"
+    } catch { Warn "  - 安装字体失败: $($_.Exception.Message)" }
+}
+
+# 写开机自启 (HKCU Run; 免管理员)。
+function Set-AutoStart ([string]$dir, [string]$suffix) {
+    $name = if ($suffix) { "AuroraInputDev" } else { "AuroraInput" }
+    $exe  = Join-Path $dir "aurora_input$suffix.exe"
+    try {
+        Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name $name -Value "`"$exe`"" -Force
+        Gray "  - 已配置开机自启 ($name)"
+    } catch { Warn "  - 配置开机自启失败" }
+}
+
+# 终止占用目标 exe 的进程 (按镜像名), 等其退出让出文件锁; 仅对 .exe 生效。
+# 背景: Stop-WindService 只杀核心服务 aurora_input; 独立打开的设置程序 aurora_setting[_dev].exe /
+#       便携版 aurora_portable.exe 不随之退出, 覆盖前需先按名杀掉 (对齐设置程序 Do-Copy 的处理)。
+# DLL 由宿主进程加载, 没有独立进程可杀 → 跳过, 仍靠 Copy-Replace 的改名让路兜底。
+function Stop-ProcessForFile ([string]$fileName) {
+    if ($fileName -notmatch '\.exe$') { return }
+    $procName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+    $procs = @(Get-Process -Name $procName -ErrorAction SilentlyContinue)
+    if ($procs.Count -gt 0) {
+        Gray "  - 终止运行中的 $fileName ($($procs.Count) 个进程)..."
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+# 复制单个文件, 处理被占用的 DLL/EXE。
+# 顺序: ① 先杀占用该 exe 的进程 (如独立开着的设置程序) 并等待让出文件锁
+#       ② 尝试覆盖 (= 删旧写新) ③ 仍被锁 (如已加载的 TSF DLL) 则改名让路再写。
+function Copy-Replace ([string]$targetDir, [string]$fileName, [string]$srcPath) {
+    $dst = Join-Path $targetDir $fileName
+    if (-not (Test-Path $dst)) { Copy-Item $srcPath $dst -Force; Gray "  - $fileName"; return }
+    Stop-ProcessForFile $fileName   # 先判断并杀进程等待, 再尝试覆盖; 覆盖失败才改名让路
+    try { Copy-Item $srcPath $dst -Force -ErrorAction Stop; Gray "  - $fileName"; return } catch { }
+    # 让路后缀必须每次唯一: NTFS 允许改名在用文件, 但不允许改名去【覆盖】一个在用文件。
+    # 曾用固定 .old 槽复用, 结果上轮 .old 仍被宿主进程 map 着时 Move -Force 直接失败, 部署中断
+    # (TSF DLL in-proc 常驻, 宿主不重启就一直锁旧代, 双代同锁是常态)。唯一后缀则目标必不存在,
+    # 改名恒成功。垃圾累积由 Remove-OrRename 侧「不重复改名已让路文件」+ 各处 *.old* 清理消化。
+    $old = "$dst.old_$(Get-Random -Maximum 99999999)"
+    try {
+        Move-Item $dst $old -Force -ErrorAction Stop
+        Copy-Item $srcPath $dst -Force
+        Gray "  - $fileName (旧文件已改名 $(Split-Path $old -Leaf))"
+    } catch { ErrMsg "  [错误] 无法替换 ${fileName}: 旧文件被锁定且改名让路失败, 请重启后重试" }
+}
+
+function Stop-WindService ([string]$suffix) {
+    Get-Process -Name "aurora_input$suffix" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 600
+}
+
+# 部署期抑制 TSF DLL 自动拉起服务 (必须成对调用, 用 try/finally 保证清零)。
+#
+# 背景: 宿主进程里常驻的 wind_tsf DLL 连不上管道时会 CreateProcess 自行拉起服务
+# (wind_tsf\src\IPCClient.cpp 的 _StartService)。部署期服务已被杀、data\ 正在重建,
+# 此刻任何敲键/切焦点都会把服务拉起来读到【半截 data】—— 主题 not found、码表
+# os error 3、拆字库缺失。更坏的是它占住单例后, 脚本末尾那次正规启动会被单例挡掉,
+# 且单例检查在 init_logger 之前就 exit(1), 连一行日志都不留。于是那个残废进程一直
+# 服务到下次重启, 表现为"重启一下就好了"的间歇性主题/词库丢失。
+#
+# DLL 侧早有闸门: HKLM\Software\WindInput 的 InstallerRunning="1" 时直接不拉
+# (NSIS 安装器走的就是这条路), 但本脚本此前从不写它 —— 读端在本仓、写端在安装器仓,
+# 没有任何编译期约束能发现这条部署路径漏接。
+#
+# 注: 键按变体分开 —— DLL 读的是 AURORA_APP_REGKEY = Software\<AURORA_APP_NAME>
+# (wind_tsf\include\Globals.h), dev 变体即 Software\WindInputDev。此前这里写死
+# Software\WindInput, 部署 dev 时闸门写错了键、dev DLL 照样抢跑拉起旧 exe
+# (2026-09-24 靶机实锤, dev.sh 侧同症见 remote_deploy_guard)。
+function Set-InstallerRunning ([bool]$on, [string]$profile = "release") {
+    $app = if ($profile -eq "dev") { "AuroraInputDev" } else { "AuroraInput" }
+    $key = "HKLM:\Software\$app"
+    try {
+        if ($on) {
+            if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+            Set-ItemProperty -Path $key -Name "InstallerRunning" -Value "1" -Type String -Force -ErrorAction Stop
+            # 残留的已死安装器 owner 会让 DLL 判闸门为遗留物而放行, 开闸时一并清掉。
+            Remove-ItemProperty -Path $key -Name "InstallerRunningOwner" -ErrorAction SilentlyContinue
+            Gray "  - $app InstallerRunning=1 (部署期禁止 TSF DLL 拉起服务)"
+        }
+        elseif (Test-Path $key) {
+            Set-ItemProperty -Path $key -Name "InstallerRunning" -Value "0" -Type String -Force -ErrorAction Stop
+        }
+    }
+    catch {
+        # 写不进去只是失去保护, 不该中断部署 —— 但必须喊出来, 否则又变成静默的竞态温床。
+        Warn "  - InstallerRunning 闸门$(if($on){'开启'}else{'清除'})失败 ($_); 部署期请勿敲键或切换窗口"
+    }
+}
+
+# 原子替换 data\: 先复制到同盘暂存目录, 再用两次改名切过去。
+#
+# 直接 Remove + Copy 会让 data\ 有【数秒】处于空/半截状态 (几万个文件), 这正是上面
+# 那个抢跑窗口最危险的一段。改成暂存 + 改名后, 复制全程 data\ 仍是旧的【完整】数据,
+# 真正的空窗压缩到两次改名之间的几毫秒 —— 即便闸门失效 (旧版 DLL 没有该判据、或
+# 并发跑了别的部署), 抢跑进程拿到的也是一套自洽的旧数据, 而不是残废态。
+# 暂存目录必须与目标同盘, 否则 Rename-Item 跨卷失败。
+function Copy-DataAtomic ([string]$srcData, [string]$targetDir) {
+    $td      = Join-Path $targetDir "data"
+    $staging = Join-Path $targetDir "data.new_$(Get-Random -Maximum 99999999)"
+    try {
+        Copy-Item $srcData -Destination $staging -Recurse -Force -ErrorAction Stop
+    }
+    catch {
+        ErrMsg "  [错误] data\ 暂存复制失败: $_"
+        Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    $retired = $null
+    if (Test-Path $td) {
+        $retired = "$td.old_$(Get-Random -Maximum 99999999)"
+        try { Rename-Item $td $retired -ErrorAction Stop }
+        catch {
+            ErrMsg "  [错误] 旧 data\ 改名让路失败 (被进程占用?): $_"
+            Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+    }
+    try { Rename-Item $staging $td -ErrorAction Stop }
+    catch {
+        ErrMsg "  [错误] 新 data\ 就位失败: $_"
+        # 切换失败必须把旧数据放回去, 否则留下一个没有 data\ 的安装目录。
+        if ($retired) { Rename-Item $retired $td -ErrorAction SilentlyContinue }
+        return $false
+    }
+    if ($retired) { Remove-Item $retired -Recurse -Force -ErrorAction SilentlyContinue }
+    Gray "  - data\ (词库、方案、主题; 暂存+改名原子切换)"
+    return $true
+}
+
+# 系统安装: 全部 build[_dev]/ → 安装目录, 注册 TSF + 开机自启 + 启动服务 (p1 / pd1)。
+function Deploy-Full ([string]$profile = "release") {
+    $outdir = Out-For $profile
+    $targetDir = if ($profile -eq "dev") { $AURORA_DIR_DEV } else { $AURORA_DIR_RELEASE }
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    if (-not (Require-Admin)) { return $false }
+    if (-not (Test-Path "$outdir\aurora_input$suffix.exe")) {
+        ErrMsg "无 $outdir 产物; 请先 '$(if($profile -eq 'dev'){'d1'}else{'1'})' 全构建。"; return $false
+    }
+    Say "`n========== 系统安装 ($profile) → $targetDir =========="
+    # 闸门必须在停服务【之前】拉起 —— 服务一死, 宿主里的 DLL 立刻就有拉起它的动机。
+    Set-InstallerRunning $true $profile
+    try {
+        Say "[1/7] 停止旧进程..."; Stop-WindService $suffix
+        Say "[2/7] 反注册旧 TSF COM..."; Unregister-Tsf $targetDir $suffix
+        Say "[3/7] 准备目录..."; New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+        Say "[4/7] 复制文件..."
+        Copy-Replace $targetDir "aurora_input$suffix.exe" "$outdir\aurora_input$suffix.exe"
+        if (Test-Path "$outdir\wind_cli.bat")      { Copy-Replace $targetDir "wind_cli.bat"      "$outdir\wind_cli.bat" }
+        foreach ($dll in (Get-ChildItem "$outdir\wind_tsf*.dll" -ErrorAction SilentlyContinue)) {
+            Copy-Replace $targetDir $dll.Name $dll.FullName
+        }
+        if (Test-Path "$outdir\aurora_setting$suffix.exe") { Copy-Replace $targetDir "aurora_setting$suffix.exe" "$outdir\aurora_setting$suffix.exe" }
+        if (Test-Path "$outdir\aurora_portable.exe")       { Copy-Replace $targetDir "aurora_portable.exe"       "$outdir\aurora_portable.exe" }
+        if (Test-Path "$outdir\data") {
+            if (-not (Copy-DataAtomic "$outdir\data" $targetDir)) { return $false }
+        }
+        Say "[5/7] 设置权限 + 注册 TSF COM..."
+        Grant-TsfAcl $targetDir $suffix
+        if (-not (Register-Tsf $targetDir $suffix)) { return $false }
+        Install-WubiFont $targetDir
+        Say "[6/7] 配置开机自启 + 默认启用输入法..."
+        Set-AutoStart $targetDir $suffix
+        Enable-TsfForUser $profile
+        Get-ChildItem "$targetDir\*.old*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Say "[7/7] 启动输入法服务..."
+        $exe = Join-Path $targetDir "aurora_input$suffix.exe"
+        Start-Process -FilePath $exe; Gray "  - 已启动 aurora_input$suffix.exe"
+        Say "`n系统安装完成 ($profile) → $targetDir"
+        Say "提示: 按 Win+Space 切换到极光输入法$(if($suffix){' (Dev)'})。"
+        return $true
+    }
+    finally {
+        # 任何出口 (含中途 return $false 与异常) 都必须清零, 否则闸门永久留在 1,
+        # DLL 从此再不肯拉起服务 —— 那会是个比本竞态更难查的故障。
+        Set-InstallerRunning $false $profile
+    }
+}
+
+# 模块名 → 该模块的产物文件。Required 缺失即判失败 (防"部署成功但什么都没换"),
+# Optional 有则一并带上。系统安装与便携部署共用同一份映射, 免得两处各写一遍而漂移。
+function Get-ModuleFiles ([string]$mod, [string]$suffix) {
+    switch ($mod) {
+        "tsf"     { @{ Required = @("wind_tsf$suffix.dll", "wind_tsf_x86${suffix}.dll"); Optional = @() } }
+        # wind_cli.bat 两变体共用一份、且 Build-Core 里是"存在才复制", 故列为可选
+        "core"    { @{ Required = @("aurora_input$suffix.exe"); Optional = @("wind_cli.bat") } }
+        "setting" { @{ Required = @("aurora_setting$suffix.exe"); Optional = @() } }
+        # 便携启动器是单一二进制, 不带变体后缀 (运行时按同级有无 _dev exe 自辨变体)
+        "portable" { @{ Required = @("aurora_portable.exe"); Optional = @() } }
+        default   { $null }
+    }
+}
+
+# 系统安装单模块 (不重编, 用现有产物): pm1=tsf pm2=core pm3=setting pm4=portable (pd 前缀=dev)。
+#   tsf : 停服务 → 反注册旧 COM → 复制 → icacls → 重注册 → 重启服务
+#   core: 停服务 → 复制 (含 wind_cli.bat) → 重启服务
+#   setting/portable: 仅复制 —— 它们是独立进程, 不参与输入法运行时。停/重启核心服务会
+#   平白打断正在使用的输入法, 故这两个模块不碰服务 (Copy-Replace 内部按镜像名杀各自进程)。
+function Deploy-Module ([string]$profile, [string]$mod) {
+    $outdir = Out-For $profile
+    $targetDir = if ($profile -eq "dev") { $AURORA_DIR_DEV } else { $AURORA_DIR_RELEASE }
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    $spec = Get-ModuleFiles $mod $suffix
+    if (-not $spec) { ErrMsg "未知模块: $mod (tsf|core|setting|portable)"; return $false }
+    $touchesService = @("tsf", "core") -contains $mod
+    if (-not (Require-Admin)) { return $false }
+    if (-not (Test-Path $targetDir)) {
+        ErrMsg "安装目录不存在: $targetDir; 请先 '$(if($profile -eq 'dev'){'pd1'}else{'p1'})' 完整安装。"; return $false
+    }
+    foreach ($f in $spec.Required) {
+        if (-not (Test-Path "$outdir\$f")) { ErrMsg "本地无 $outdir\$f (先构建对应模块)"; return $false }
+    }
+    Say "`n========== 系统安装模块 ($profile/$mod) → $targetDir =========="
+    # 模块部署不动 data\, 但 core/tsf 会杀服务或换 DLL —— 同样给了 DLL 抢跑的机会,
+    # 拉起的是新旧混搭的一代 (如新 DLL 配旧 exe), 故一并上闸门。
+    if ($touchesService) { Set-InstallerRunning $true $profile }
+    try {
+        if ($touchesService) { Say "[1/4] 停止旧进程..."; Stop-WindService $suffix }
+        else                 { Say "[1/4] (跳过停服务: $mod 不参与输入法运行时)" }
+        if ($mod -eq "tsf") { Say "[2/4] 反注册旧 TSF COM..."; Unregister-Tsf $targetDir $suffix }
+        else                { Say "[2/4] ($mod 无需反注册 COM)" }
+        Say "[3/4] 复制模块文件..."
+        foreach ($f in $spec.Required) { Copy-Replace $targetDir $f "$outdir\$f" }
+        foreach ($f in $spec.Optional) { if (Test-Path "$outdir\$f") { Copy-Replace $targetDir $f "$outdir\$f" } }
+        if ($mod -eq "tsf") {
+            Grant-TsfAcl $targetDir $suffix
+            if (-not (Register-Tsf $targetDir $suffix)) { return $false }
+            Enable-TsfForUser $profile
+        }
+        Get-ChildItem "$targetDir\*.old*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        if ($touchesService) {
+            Say "[4/4] 启动输入法服务..."
+            $exe = Join-Path $targetDir "aurora_input$suffix.exe"
+            if (Test-Path $exe) { Start-Process -FilePath $exe; Gray "  - 已启动 aurora_input$suffix.exe" }
+        } else {
+            Say "[4/4] (跳过重启服务: $mod 不参与输入法运行时)"
+        }
+        Say "`n模块部署完成 ($profile/$mod)"
+        return $true
+    }
+    finally {
+        if ($touchesService) { Set-InstallerRunning $false $profile }
+    }
+}
+
+# ---------- 便携部署 (绿色版: 纯复制到本地目录, 免注册免污染) ----------
+# 与系统安装的区别: 不 regsvr32、不写 HKCU Run、不装字体、不改用户输入法列表 —— 这些全部
+# 由 aurora_portable.exe 运行期自行完成 (registration.rs 见到便携标记才走便携注册路径), 退出时
+# 再自行撤销。故便携部署 = 复制文件 + 写标记 + 拉起 launcher, 全程无需管理员。
+function Portable-TargetFor ([string]$profile) {
+    if ($profile -eq "dev") { return $AURORA_DIR_PORTABLE_DEV }
+    return $AURORA_DIR_PORTABLE_RELEASE
+}
+
+# 便携根目录合法性校验 —— 对齐 wind-portable\src\layout.rs 的 is_protected_dir。
+# 提前拦下, 否则文件都复制完了才在启动 launcher 时收到"不支持便携模式"而白忙一场。
+# 注: $profile 显式传参 —— 不可省。PowerShell 的 $profile 就是自动变量 $PROFILE (用户配置
+# 文件路径, 变量名不区分大小写); 函数内不声明就会靠动态作用域偷读调用方的同名参数, 调用链
+# 一变即静默读到那个路径串。
+function Test-PortableRoot ([string]$root, [string]$profile = "release") {
+    $prefixes = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramW6432, $env:SystemRoot) |
+        Where-Object { $_ }
+    $lower = $root.ToLower().TrimEnd('\')
+    foreach ($p in $prefixes) {
+        $pl = $p.ToLower().TrimEnd('\')
+        if ($lower -eq $pl -or $lower.StartsWith("$pl\")) {
+            ErrMsg "便携目录不能位于系统保护目录下: $root"
+            ErrMsg "  (命中前缀: $p) —— aurora_portable 会拒绝在此启动便携模式。"
+            $varName = if ($profile -eq 'dev') { 'AURORA_DIR_PORTABLE_DEV' } else { 'AURORA_DIR_PORTABLE_RELEASE' }
+            ErrMsg "请在 scripts\deploy.local.ps1 中把 `$$varName 改到普通目录, 如 D:\WindInputPortable。"
+            return $false
+        }
+    }
+    return $true
+}
+
+# 只停【本便携目录下】的进程。便携版与系统安装版镜像名完全相同 (都是 aurora_input.exe),
+# 按名杀会连正在使用的系统安装版一起干掉, 故必须按 Path 前缀过滤。
+function Stop-PortableProcesses ([string]$root, [string]$suffix) {
+    $names = @("aurora_portable", "aurora_input$suffix", "aurora_setting$suffix")
+    $rootPrefix = $root.TrimEnd('\') + "\"
+    $killed = 0
+    foreach ($n in $names) {
+        $procs = @(Get-Process -Name $n -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and $_.Path.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+        })
+        foreach ($p in $procs) { $p | Stop-Process -Force -ErrorAction SilentlyContinue; $killed++ }
+    }
+    if ($killed -gt 0) { Gray "  - 已停止 $killed 个便携进程"; Start-Sleep -Milliseconds 600 }
+    else { Gray "  - 无运行中的便携进程" }
+}
+
+# 写便携标记文件 (root\portable_mode)。launcher 启动时也会自建, 此处先写是为了让
+# "复制完还没跑过 launcher"的目录就已经是合法便携包 (直接双击 aurora_input.exe 也走便携路径)。
+# 内容与 wind-portable\src\service.rs ensure_portable_layout 一致; 已存在则不覆盖 ——
+# 运行期可能写入 stopped=1 等守卫位, 覆盖会抹掉状态。
+# 存量目录里可能只有旧名: 补写新名完成迁移, 旧名保留 (回退到旧版程序时它仍是唯一被认的标记)。
+function Write-PortableMarker ([string]$root) {
+    $marker = Join-Path $root $PortableMarkerName
+    if (Test-Path $marker) { Gray "  - 便携标记已存在, 保留 ($PortableMarkerName)"; return }
+    [System.IO.File]::WriteAllText($marker, "aurora_portable=1`n", (New-Object System.Text.UTF8Encoding($false)))
+    if (Test-Path (Join-Path $root $PortableMarkerLegacy)) {
+        Gray "  - 已补写新便携标记 ($PortableMarkerName); 旧名 $PortableMarkerLegacy 保留"
+    } else {
+        Gray "  - 已写便携标记 ($PortableMarkerName)"
+    }
+}
+
+# 启动便携 launcher。WorkingDirectory 必须设为便携根 —— layout.rs 的候选根探测会用到
+# current_dir, 从别处拉起可能探到错误的根。
+function Start-Portable ([string]$root) {
+    $exe = Join-Path $root "aurora_portable.exe"
+    if (-not (Test-Path $exe)) {
+        Warn "  - 无 aurora_portable.exe, 跳过启动 (可手动运行目录下的 aurora_input*.exe)"
+        return
+    }
+    Start-Process -FilePath $exe -WorkingDirectory $root
+    Gray "  - 已启动 aurora_portable.exe"
+}
+
+# 便携部署全部 (pb1 / pbd1): build[_dev]\ 全量 → 便携目录。
+# userdata\ 是便携版的用户数据 (词库/配置/统计), 就在便携根目录内部 —— 全量部署只替换
+# 程序文件与 data\, 绝不碰 userdata\, 否则一次重新部署就抹掉用户全部个人数据。
+function Deploy-Portable ([string]$profile = "release") {
+    $outdir = Out-For $profile
+    $root = Portable-TargetFor $profile
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    if (-not (Test-Path "$outdir\aurora_input$suffix.exe")) {
+        ErrMsg "无 $outdir 产物; 请先 '$(if($profile -eq 'dev'){'d1'}else{'1'})' 全构建。"; return $false
+    }
+    if (-not (Test-PortableRoot $root $profile)) { return $false }
+    Say "`n========== 便携部署 ($profile) → $root =========="
+    Say "[1/5] 停止便携进程..."; Stop-PortableProcesses $root $suffix
+    Say "[2/5] 准备目录..."; New-Item -ItemType Directory -Path $root -Force | Out-Null
+    Say "[3/5] 复制程序文件..."
+    Copy-Replace $root "aurora_input$suffix.exe" "$outdir\aurora_input$suffix.exe"
+    if (Test-Path "$outdir\wind_cli.bat") { Copy-Replace $root "wind_cli.bat" "$outdir\wind_cli.bat" }
+    foreach ($dll in (Get-ChildItem "$outdir\wind_tsf*.dll" -ErrorAction SilentlyContinue)) {
+        Copy-Replace $root $dll.Name $dll.FullName
+    }
+    if (Test-Path "$outdir\aurora_setting$suffix.exe") { Copy-Replace $root "aurora_setting$suffix.exe" "$outdir\aurora_setting$suffix.exe" }
+    if (Test-Path "$outdir\aurora_portable.exe")       { Copy-Replace $root "aurora_portable.exe"       "$outdir\aurora_portable.exe" }
+    # 便携版同样走原子替换 (理由见 Copy-DataAtomic)。此处不上 InstallerRunning 闸门:
+    # 便携部署不要求管理员, 写不了 HKLM; 便携实例的服务由 launcher 托管、DLL 另走
+    # portable_mode 标记路径, 抢跑面小于系统安装。
+    if (Test-Path "$outdir\data") {
+        if (-not (Copy-DataAtomic "$outdir\data" $root)) { return $false }
+    }
+    Get-ChildItem "$root\*.old*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Say "[4/5] 写便携标记..."; Write-PortableMarker $root
+    Say "[5/5] 启动便携版..."; Start-Portable $root
+    Say "`n便携部署完成 ($profile) → $root"
+    Gray "用户数据目录: $root\$PortableDataDir (部署不会覆盖)"
+    return $true
+}
+
+# 便携部署单模块 (pbm1..pbm4 / pbdm1..pbdm4): 只换指定模块文件, 不重编不动 data\。
+# 停的是整个便携实例 —— 便携版由 launcher 统一托管 (TSF DLL 由它注册、服务由它拉起),
+# 换任何一个模块都得让它整体重启才能生效, 单独换文件而不重启等于没换。
+function Deploy-PortableModule ([string]$profile, [string]$mod) {
+    $outdir = Out-For $profile
+    $root = Portable-TargetFor $profile
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    $spec = Get-ModuleFiles $mod $suffix
+    if (-not $spec) { ErrMsg "未知模块: $mod (tsf|core|setting|portable)"; return $false }
+    if (-not (Test-PortableRoot $root $profile)) { return $false }
+    if (-not (Test-Path $root)) {
+        ErrMsg "便携目录不存在: $root; 请先 '$(if($profile -eq 'dev'){'pbd1'}else{'pb1'})' 完整部署。"; return $false
+    }
+    foreach ($f in $spec.Required) {
+        if (-not (Test-Path "$outdir\$f")) { ErrMsg "本地无 $outdir\$f (先构建对应模块)"; return $false }
+    }
+    Say "`n========== 便携部署模块 ($profile/$mod) → $root =========="
+    Say "[1/3] 停止便携进程..."; Stop-PortableProcesses $root $suffix
+    Say "[2/3] 复制模块文件..."
+    foreach ($f in $spec.Required) { Copy-Replace $root $f "$outdir\$f" }
+    foreach ($f in $spec.Optional) { if (Test-Path "$outdir\$f") { Copy-Replace $root $f "$outdir\$f" } }
+    Get-ChildItem "$root\*.old*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Say "[3/3] 重启便携版..."; Write-PortableMarker $root; Start-Portable $root
+    Say "`n便携模块部署完成 ($profile/$mod)"
+    return $true
+}
+
+# 便携卸载 (ub1/ub / ubd1/ubd): 停进程 + 删程序文件; userdata\ 保留。
+# 【不】动 HKCU Run 与 TSF COM 注册 —— 便携版用的是与系统安装版【完全相同】的自启值名
+# (WindInput) 和 CLSID, 脚本在此清理会连同已装的系统版一起废掉。这些注册项由便携版自己
+# 在退出时撤销, 故正确姿势是先在便携版托盘里退出, 再跑本命令。
+function Uninstall-Portable ([string]$profile = "release") {
+    $root = Portable-TargetFor $profile
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    if (-not (Test-Path $root)) { Warn "便携目录不存在, 无需卸载: $root"; return $true }
+    Say "`n========== 便携卸载 ($profile) → $root =========="
+    Say "[1/2] 停止便携进程..."; Stop-PortableProcesses $root $suffix
+    Say "[2/2] 删除程序文件 (保留 $PortableDataDir\)..."
+    $dataRoot = (Join-Path $root $PortableDataDir).TrimEnd('\') + "\"
+    Get-ChildItem "$root\*.old*" -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    $allGone = $true
+    Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.FullName.StartsWith($dataRoot, [System.StringComparison]::OrdinalIgnoreCase)) { return }
+        if (-not (Remove-OrRename $_.FullName)) { $allGone = $false }
+    }
+    # 清空的子目录一并删掉 (userdata\ 除外); 目录本身留待最后判断
+    Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Name -ieq $PortableDataDir) { return }
+        if (-not (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue)) {
+            Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (Test-Path (Join-Path $root $PortableDataDir)) {
+        Say "`n便携卸载完成 ($profile); 用户数据已保留:"
+        Warn "  $root\$PortableDataDir  (如需彻底清除请手动删除整个 $root)"
+    } elseif ($allGone) {
+        try { Remove-Item $root -Recurse -Force -ErrorAction Stop; Gray "  - 已删除便携目录 $root" }
+        catch { Warn "  - 文件已清空, 但目录未能删除 (重启后可删): $root" }
+        Say "`n便携卸载完成 ($profile)。"
+    } else {
+        Warn "  - 部分文件被占用已改名让路; 重启后重跑本命令或手动删除: $root"
+    }
+    Gray "注: 便携版的开机自启与 TSF 注册由其自身托管, 本命令未改动 (与系统安装版共用同一注册项)。"
+    return $true
+}
+
+# ---------- 卸载 (系统卸载 = 安装的逆操作) ----------
+# 从当前用户中文输入法列表移除本变体 TIP (Enable-TsfForUser 的逆操作)。
+function Disable-TsfForUser ([string]$profile) {
+    if ($profile -eq "dev") {
+        $tip = "0804:{99C2DEB0-5C57-45A2-9C63-FB54B34FD90A}{99C2DEB1-5C57-45A2-9C63-FB54B34FD90A}"
+    } else {
+        $tip = "0804:{99C2EE30-5C57-45A2-9C63-FB54B34FD90A}{99C2EE31-5C57-45A2-9C63-FB54B34FD90A}"
+    }
+    try {
+        $list = Get-WinUserLanguageList
+        $changed = $false
+        foreach ($l in $list) {
+            if ($l.InputMethodTips -contains $tip) { [void]$l.InputMethodTips.Remove($tip); $changed = $true }
+        }
+        if ($changed) { Set-WinUserLanguageList -LanguageList $list -Force; Gray "  - 已从用户输入法列表移除" }
+        else { Gray "  - 用户列表无此输入法, 跳过" }
+    } catch { Warn "  - 移除用户输入法失败: $($_.Exception.Message)" }
+}
+
+# 移除开机自启 (HKCU Run; Set-AutoStart 的逆操作)。
+function Remove-AutoStart ([string]$suffix) {
+    $name = if ($suffix) { "AuroraInputDev" } else { "AuroraInput" }
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name $name -ErrorAction SilentlyContinue
+    Gray "  - 已移除开机自启 ($name)"
+}
+
+# 删除单个文件; 被占用(已加载的 DLL)时改名让路 — NTFS 允许改名在用文件, 仅不可删。
+# 返回 $true=已真正删除; $false=删不掉(已改名让路或失败)。与 Copy-Replace 同一唯一后缀让路策略。
+function Remove-OrRename ([string]$path) {
+    if (-not (Test-Path $path)) { return $true }
+    $leaf = Split-Path $path -Leaf
+    try { Remove-Item $path -Force -ErrorAction Stop; Gray "  - 删除 $leaf"; return $true }
+    catch {
+        # 已带让路标记的文件不再重复改名: 它已经让过路了, 改成 .old_a.old_b 既无意义,
+        # 又是垃圾累积的真正来源 (卸载遍历目录下所有文件, 每轮把删不掉的存量整体翻新一遍)。
+        # 只标记未让路的原文件, 则每个原文件至多留一个残留, 待宿主释放后被 *.old* 清理带走。
+        if ($leaf -match '\.old(_\d+)?$') {
+            Warn "  - $leaf 仍被占用 (历史让路文件, 不再改名); 重启后可清除"
+            return $false
+        }
+        $old = "$path.old_$(Get-Random -Maximum 99999999)"
+        try {
+            Move-Item $path $old -Force -ErrorAction Stop
+            Warn "  - $leaf 被占用, 已改名让路 ($(Split-Path $old -Leaf)); 重启后可清除"
+        } catch {
+            ErrMsg "  - $leaf 删除/改名均失败: $($_.Exception.Message)"
+        }
+        return $false
+    }
+}
+
+# 系统卸载: 完整撤销 Deploy-Full 的副作用 (u1 / ud1)。
+#   停进程 → 移出用户输入法列表 → 反注册 TSF COM(x64+x86) → 移除开机自启 → 删安装目录。
+# 共存安全: 仅动本变体 (CLSID/目录/自启名均带本变体后缀), 不影响另一变体或系统其它输入法。
+# 字体(黑体字根)为两变体共享, 故【不】卸载, 以免影响仍在用的另一变体。
+# 个人数据(词库/配置/统计)默认保留; 仅打印路径供手动清除。
+function Uninstall-Full ([string]$profile = "release") {
+    $targetDir = if ($profile -eq "dev") { $AURORA_DIR_DEV } else { $AURORA_DIR_RELEASE }
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    if (-not (Require-Admin)) { return $false }
+    Say "`n========== 系统卸载 ($profile) → $targetDir =========="
+    Say "[1/5] 停止进程..."; Stop-WindService $suffix
+    Say "[2/5] 移出用户输入法列表..."; Disable-TsfForUser $profile
+    Say "[3/5] 反注册 TSF COM..."
+    # ⚠️ 不能因「安装目录不存在」跳过: 系统副本在 <System32|SysWOW64>\IME\ 下【独立存在】,
+    # 跳过就会永久滞留 (安装目录删除够不着它)。Unregister-Tsf 内部逐个 Test-Path, 空跑安全。
+    Unregister-Tsf $targetDir $suffix
+    Gray "  - 已反注册 (x64 + x86, 含系统目录副本)"
+    # 安装目录回指键随之清掉, 免得指向一个已删除的目录。
+    $regKey = Get-AppRegKey $suffix
+    if (Test-Path $regKey) {
+        Remove-ItemProperty -Path $regKey -Name "InstallDir" -ErrorAction SilentlyContinue
+    }
+    Say "[4/5] 移除开机自启..."; Remove-AutoStart $suffix
+    Say "[5/5] 删除安装文件 (锁定的 DLL 改名让路)..."
+    if (Test-Path $targetDir) {
+        # 先清掉历史改名残留 (上次卸载留下、此刻或已可删)
+        Get-ChildItem "$targetDir\*.old*" -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        # 逐文件删除; 占用的(TSF DLL 等)改名让路, 不再因单个锁定文件整体失败
+        $allGone = $true
+        Get-ChildItem $targetDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+            if (-not (Remove-OrRename $_.FullName)) { $allGone = $false }
+        }
+        if ($allGone) {
+            try { Remove-Item $targetDir -Recurse -Force -ErrorAction Stop; Gray "  - 已删除安装目录 $targetDir" }
+            catch { Warn "  - 文件已清空, 但目录未能删除 (重启后可删): $targetDir" }
+        } else {
+            Warn "  - 部分文件被占用已改名让路; 重启系统后重跑本命令或手动删除残留目录:"
+            Warn "    $targetDir"
+        }
+    } else { Gray "  - 目录不存在, 跳过" }
+    Say "`n系统卸载完成 ($profile)。"
+    $appName = if ($suffix) { "AuroraInputDev" } else { "AuroraInput" }
+    Warn "提示: 个人数据已保留, 如需彻底清除请手动删除:"
+    Warn "  漫游配置/词库: $env:APPDATA\$appName"
+    Warn "  本机缓存/日志: $env:LOCALAPPDATA\$appName"
+    return $true
+}
+
+# 在 TOML 的指定段内设置若干键: 已存在则就地替换, 不存在则追加到段末。
+# 段外同名键不受影响 (只在目标段的边界内改写)。
+#
+# 存在的意义是【不丢未知键】: 清单里同一个段既有随变体而异的键 (clsid/dll_x64…),
+# 又有该从 config\app.toml 原样继承的键 (lang_id/sweep_residue…)。整段替换会把后者
+# 静默抹掉 —— 判据是「至多一个覆盖式写入者」, 而 config 与本脚本都在写 [ime]。
+function Set-TomlKeysInSection ([string]$text, [string]$section, [hashtable]$kv) {
+    $lines = $text -split "`r?`n"
+    $out   = New-Object System.Collections.Generic.List[string]
+    $inSec = $false
+    $seen  = @{}
+    # 补齐缺键时先摘掉段尾空行, 追加完再放回 —— 否则新键会插在空行之后、紧贴下一个段头。
+    $flush = {
+        $tail = New-Object System.Collections.Generic.List[string]
+        while ($out.Count -gt 0 -and $out[$out.Count - 1] -match '^\s*$') {
+            $tail.Insert(0, $out[$out.Count - 1]); $out.RemoveAt($out.Count - 1)
+        }
+        foreach ($k in $kv.Keys) { if (-not $seen[$k]) { $out.Add(("{0} = {1}" -f $k, $kv[$k])) } }
+        foreach ($t in $tail) { $out.Add($t) }
+    }
+    foreach ($line in $lines) {
+        if ($line -match '^\s*\[') {                       # 段头: 离开旧段前补齐缺键
+            if ($inSec) { & $flush; $inSec = $false }
+            if ($line -match "^\s*\[$([regex]::Escape($section))\]\s*$") { $inSec = $true; $seen = @{} }
+            $out.Add($line); continue
+        }
+        if ($inSec -and $line -match '^\s*([A-Za-z0-9_]+)\s*=') {
+            $k = $Matches[1]
+            if ($kv.ContainsKey($k)) { $out.Add(("{0} = {1}" -f $k, $kv[$k])); $seen[$k] = $true; continue }
+        }
+        $out.Add($line)
+    }
+    if ($inSec) { & $flush }                                # 段落收在文本末尾的情形
+    return ($out -join "`r`n")
+}
+
+# ---------- 安装包打包 (调用兄弟项目 wind-installer, app.toml 驱动) ----------
+# wind-installer 是「通用安装器生成器」: 同一预编译 stub 配不同 app.toml 即生成不同安装包。
+# 安装目录由 app.toml 的 [app] id 派生 (ProgramFiles\<id>), 故 dev=WindInputDev、release=WindInput
+# 自然落到与 pd1/p1 一致的目录; IME 注册 GUID/文件名/字体亦全部由清单描述, 无需改安装器源码。
+#
+# 生成变体 app.toml: 全用绝对路径 + 正斜杠 (TOML 与 Windows 均接受正斜杠, 免去反斜杠转义;
+# 且 pack.ps1 用 "([^"]+)" 正则解析 source_dir, 双引号字符串才能匹配)。落到 dist\ (在 source 之外,
+# 不会被 packer 递归打进包)。GUID 必须与 wind_tsf\src\Globals.cpp 一致 (dev=DEB0/DEB1, release=EE30/EE31)。
+function New-InstallerConfig ([string]$profile, [string]$outdir, [string]$cfgPath, [string]$assetsDir) {
+    if ($profile -eq "dev") {
+        $id = "AuroraInputDev"; $disp = "极光输入法 (开发版)"; $mainExe = "wind_input_dev.exe"
+        $menu = "极光输入法 (开发版)"; $title = "极光输入法 (开发版) 安装向导"; $proto = "windinputdev"
+        $settingExe = "wind_setting_dev.exe"
+        $procs = '["wind_setting_dev", "aurora_portable", "wind_input_dev"]'
+        $acl   = '["wind_tsf_dev.dll", "wind_tsf_x86_dev.dll"]'
+        $clsid = "{99C2DEB0-5C57-45A2-9C63-FB54B34FD90A}"; $prof = "{99C2DEB1-5C57-45A2-9C63-FB54B34FD90A}"
+        $dllX64 = "wind_tsf_dev.dll"; $dllX86 = "wind_tsf_x86_dev.dll"; $outName = "WindInputDev-Setup"
+    } else {
+        $id = "AuroraInput"; $disp = "极光输入法"; $mainExe = "aurora_input.exe"
+        $menu = "极光输入法"; $title = "极光输入法 安装向导"; $proto = "windinput"
+        $settingExe = "aurora_setting.exe"
+        $procs = '["aurora_setting", "aurora_portable", "aurora_input"]'
+        $acl   = '["wind_tsf.dll", "wind_tsf_x86.dll"]'
+        $clsid = "{99C2EE30-5C57-45A2-9C63-FB54B34FD90A}"; $prof = "{99C2EE31-5C57-45A2-9C63-FB54B34FD90A}"
+        $dllX64 = "wind_tsf.dll"; $dllX86 = "wind_tsf_x86.dll"; $outName = "WindInput-Setup"
+    }
+    # 设置程序为可选模块: aurora_core\apps\setting 不存在时 Build-Setting 会跳过, build/ 里就没有产物。
+    # 此时必须置空 setting_exe, 否则安装器会为不存在的文件建开始菜单快捷方式。
+    if (-not (Test-Path (Join-Path $outdir $settingExe))) {
+        Warn "未找到 $outdir\$settingExe, 本次打包不含设置程序 (setting_exe 置空)"
+        $settingExe = ""
+    }
+    $srcFwd  = $outdir.Replace('\', '/')
+    $distFwd = $DistDir.Replace('\', '/')
+    $logoFwd = (Join-Path $assetsDir "logo.png").Replace('\', '/')
+    $iconFwd = (Join-Path $assetsDir "installer.ico").Replace('\', '/')
+
+    # 单一真相: 读 config\app.toml, 仅把 [app]/[ime]/[package] 替换为变体/机器相关值;
+    # [[font]]/[autostart]/[[shortcut]]/[startup]/[datadir]/[strings]/[ui] 等能力与文案段原样继承。
+    # 快捷方式用 {setting_exe}/{main_exe}/{display_name} 占位符, 安装器运行期按 [app] 字段替换,
+    # 故一份 config 对 dev/release 通用; {setting_exe} 为空 (无设置程序) 时安装器自动跳过该快捷方式。
+    # 这样 wind-installer 新增能力段时只需改 config\app.toml 一处, 无需同步本脚本 (消除双真相漂移)。
+    $baseCfg = Join-Path $ProductRoot "config\app.toml"
+    if (-not (Test-Path $baseCfg)) { ErrMsg "未找到清单基底: $baseCfg"; throw "缺少 config\app.toml" }
+    $base = Get-Content $baseCfg -Raw
+
+    $appSec = @"
+[app]
+id                = "$id"
+display_name      = "$disp"
+version           = "$Version"
+publisher         = "极光输入法 项目"
+description       = "轻量开源输入法"
+main_exe          = "$mainExe"
+setting_exe       = "$settingExe"
+start_menu_folder = "$menu"
+window_title      = "$title"
+url_protocol      = "$proto"
+portable_marker   = "portable_mode"
+process_names     = $procs
+acl_dlls          = $acl
+"@
+    # [ime] 随变体而异的键。⛔ 别改回整段替换 (@"[ime] …"@ + regex 覆盖整段):
+    # 那样 config\app.toml 里本脚本没列出的键会被静默丢掉 —— sweep_residue = true
+    # 就这么丢过, 打出的清单里根本没有它, 安装器一路按缺省 false 走, 悬空注册清扫
+    # 从未生效。稀疏替换后新增键只需改 config\app.toml 一处。
+    $imeKeys = @{
+        clsid         = "`"$clsid`""
+        profile_guid  = "`"$prof`""
+        dll_x64       = "`"$dllX64`""
+        dll_x86       = "`"$dllX86`""
+        system_subdir = "`"IME/$id`""
+    }
+    $pkgSec = @"
+[package]
+compression = "zstd"
+source_dir  = "$srcFwd"
+output_name = "$outName"
+output_dir  = "$distFwd"
+logo        = "$logoFwd"
+icon        = "$iconFwd"
+"@
+    # 砍掉 config 的 [package] 及之后 (打包参数按机器生成), 再替换 [app]/[ime] 段。
+    # 用 MatchEvaluator 回调返回字面串, 避免 -replace 把替换文本里的 $ 当分组引用。
+    $head = ($base -split '(?m)^\[package\]', 2)[0]
+    $head = [regex]::Replace($head, '(?ms)^\[app\]\r?\n.*?(?=^\[)', { param($x) $appSec + "`r`n`r`n" })
+    $head = Set-TomlKeysInSection $head "ime" $imeKeys
+    $ai = $head.IndexOf("[app]"); if ($ai -gt 0) { $head = $head.Substring($ai) }
+    $gen = "# 本文件由 dev.ps1 自动生成 —— $profile 变体; [app]/[ime]/[package] 为变体/机器值, 其余段继承 config\app.toml。请勿手工编辑。`r`n"
+    $toml = $gen + $head.TrimEnd() + "`r`n`r`n" + $pkgSec + "`r`n"
+
+    # 无 BOM UTF-8 写出 (Rust toml 解析器对前置 BOM 会报错; PS5.1 的 Set-Content -Encoding UTF8 带 BOM)。
+    [System.IO.File]::WriteAllText($cfgPath, $toml, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# ---------- 在线升级元数据 (latest.json / latest-dev.json) ----------
+# 供设置程序的在线升级检查读取, 与安装包一并上传 CDN。
+# 字段契约见 aurora_core\apps\setting\docs\online-update-plan.md §3.2。要点:
+#   · sha256/size 为必填 —— 客户端在缺失或不匹配时拒绝升级, 不退化为"不校验就装"
+#     (旧 Go 版官网渠道 size 恒为 0, 导致 %TEMP% 里一个被截断的同名文件会被当成完整包安装)。
+#   · channel 与客户端自身变体交叉校验, 防 CDN 缓存串档把 dev 包发给正式版用户。
+# 两个变体各写各的文件, 互不干扰; 上传时务必**先传 exe 再传 json** —— json 是开关,
+# 反过来会让客户端看到新版本却下载到 404。
+function New-UpdateManifest ([string]$profile, [string]$setupPath) {
+    $isDev    = ($profile -eq "dev")
+    $channel  = if ($isDev) { "dev" } else { "stable" }
+    $base     = if ($isDev) { "AuroraInputDev" } else { "AuroraInput" }
+    $jsonName = if ($isDev) { "latest-dev.json" } else { "latest.json" }
+
+    $item = Get-Item $setupPath
+    $sha  = (Get-FileHash -Path $setupPath -Algorithm SHA256).Hash.ToLower()
+
+    # sha256 sidecar (标准 sha256sum 格式), 便于手工核对与 CDN 侧校验
+    $shaFile = "$setupPath.sha256"
+    [System.IO.File]::WriteAllText($shaFile, "$sha  $($item.Name)`n",
+        (New-Object System.Text.UTF8Encoding($false)))
+
+    $manifest = [ordered]@{
+        version         = $Version
+        tag             = "v$Version"
+        channel         = $channel
+        exeUrl          = "$CdnBase/$($item.Name)"
+        sha256          = $sha
+        size            = $item.Length
+        releaseNotesUrl = "$CdnBase/$base-$Version-Release.md"
+        publishedAt     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+
+    $out = Join-Path $DistDir $jsonName
+    # 无 BOM UTF-8: 客户端按 UTF-8 文本解析, 前置 BOM 会让 serde_json 报错。
+    [System.IO.File]::WriteAllText($out, ($manifest | ConvertTo-Json -Depth 3),
+        (New-Object System.Text.UTF8Encoding($false)))
+
+    Say "升级元数据: $out"
+    Gray "  channel=$channel  version=$Version  size=$($item.Length)"
+    Gray "  sha256=$sha"
+    Gray "  上传顺序: 先 $($item.Name), 确认可访问后再 $jsonName"
+}
+
+# 生成安装包: (除非 skip) 全构建当前变体 → 生成 app.toml → 调 wind-installer\scripts\pack.ps1。
+#   pack.ps1 负责: 原生编译 stub/uninstaller/packer → 注入并加工 uninstall.exe → wind-packer build。
+#   分两次调用 (-PrepOnly / -SkipPrep), 中间夹一次签名 —— 卸载器加工完即为终态, 只有
+#   这个窗口能签它; 详见 Do-Installer 第 4a 步。
+# 打包是纯文件 IO + cargo 构建, 不需管理员 (故未纳入 UAC 提权命令)。
+# 便携版压缩包: build[_dev]\ → dist\WindInput[Dev]-Portable-<版本>.zip (+ .sha256)
+# 与 dev.sh 的 9/portable-zip 同口径 (同名、同结构), 两边产物可互换。
+# 内容依据 Deploy-Portable (便携部署的权威定义): 程序文件 + data\ + 便携标记。
+# 【不含 userdata\】—— 那是便携版的用户数据目录 (配置/词频/用户词库), 打进包等于把
+# 打包机的个人数据分发给所有人; 同时排除部署残留的 *.old*。
+function Do-PortableZip ([string]$profile = "release", [bool]$skipBuild = $false) {
+    $outdir = Out-For $profile
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    if (-not $skipBuild) {
+        if (-not (Do-Full $profile)) { return $false }
+    } elseif (-not (Test-Path "$outdir\aurora_input$suffix.exe")) {
+        ErrMsg "无 $outdir 产物; 去掉 skip 先全构建, 或运行 '$(if($profile -eq 'dev'){'d1'}else{'1'})'。"
+        return $false
+    }
+
+    $base  = if ($profile -eq "dev") { "AuroraInputDev" } else { "AuroraInput" }
+    $name  = "$base-$Version"                       # zip 内顶层目录, 避免解压散落
+    $zip   = Join-Path $DistDir "$base-Portable-$Version.zip"
+    $stage = Join-Path $DistDir ".portable-stage"
+
+    Say "`n========== 打包便携版 ($profile) → $zip =========="
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    New-Item -ItemType Directory -Path "$stage\$name" -Force | Out-Null
+    Copy-Item "$outdir\*" -Destination "$stage\$name" -Recurse -Force
+
+    $ud = Join-Path "$stage\$name" $PortableDataDir
+    if (Test-Path $ud) { Remove-Item $ud -Recurse -Force }   # 用户数据, 绝不入包
+    Get-ChildItem "$stage\$name\*.old*" -ErrorAction SilentlyContinue | Remove-Item -Force
+
+    # 便携标记: 复用 Write-PortableMarker, 与 wind-portable 的 ensure_portable_layout 同内容。
+    # 缺了它 aurora_input.exe 会退化成安装版行为把用户数据写进 %APPDATA%。
+    Write-PortableMarker "$stage\$name"
+
+    $hasLauncher = Test-Path "$stage\$name\aurora_portable.exe"
+
+    # 压缩前签暂存区里的 PE。zip 本身签不了 (Authenticode 只认 PE), 便携版的可信度
+    # 全靠包内每个 exe/dll 各自带签名。
+    # 签暂存区而非 $outdir: skip 模式 (9s/d9s) 不走 Do-Full, $outdir 里的 PE 可能还没签;
+    # 而暂存区是 zip 内容的权威快照, 签它才能保证「进了 zip 的都签过」。已签的会跳过。
+    if (-not (Invoke-SignArtifacts @("$stage\$name") "便携版内容")) { return $false }
+
+    if (Test-Path $zip) { Remove-Item $zip -Force }
+    Compress-Archive -Path "$stage\$name" -DestinationPath $zip -CompressionLevel Optimal
+
+    # sha256 sidecar (标准 sha256sum 格式, 与安装包 sidecar 一致)
+    $sha = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
+    [System.IO.File]::WriteAllText("$zip.sha256", "$sha  $(Split-Path $zip -Leaf)`n",
+        (New-Object System.Text.UTF8Encoding($false)))
+
+    Remove-Item $stage -Recurse -Force
+    $sz = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+    Say "`n便携版打包完成: $zip (${sz}MB)"
+    if (-not $script:SignRequested) { Warn "本次【未签名】(要签名: dev.ps1 sign $(if($profile -eq 'dev'){'d9'}else{'9'}))" }
+    if ($hasLauncher) {
+        Gray "使用: 解压后运行 aurora_portable.exe (注册组件并拉起服务)"
+    } else {
+        Gray "使用: 包内无便携启动器 —— 需管理员 regsvr32 注册 wind_tsf.dll"
+        Gray "      (x86 版用 %SystemRoot%\SysWOW64\regsvr32.exe), 再手动运行 aurora_input.exe"
+    }
+    return $true
+}
+
+function Do-Installer ([string]$profile = "release", [bool]$skipBuild = $false) {
+    # 1. 定位 wind-installer 兄弟项目
+    $instDir = $InstallerDir
+    if (Test-Path $InstallerDir) { $instDir = (Resolve-Path $InstallerDir).Path }
+    if (-not (Test-Path $instDir)) {
+        ErrMsg "未找到 wind-installer 项目: $instDir"
+        ErrMsg "请将 wind-installer 与 WindInput 放在同级目录, 或在 scripts\deploy.local.ps1 设置 `$InstallerDir。"
+        return $false
+    }
+    $packPs1 = Join-Path $instDir "scripts\pack.ps1"
+    if (-not (Test-Path $packPs1)) { ErrMsg "缺少打包脚本: $packPs1"; return $false }
+    # 品牌资产 (logo.png / installer.ico) 取本仓 assets\, 不取 wind-installer\assets\ ——
+    # 后者是通用安装器生成器的中性兜底图 (W 字标), 借用它会让安装界面与 Setup.exe 顶着
+    # 别人的标识。且 logo 读不到只警告并回退到 stub 内置默认 (icon 才是硬错误),
+    # 一旦路径失效会静默变成 W, 不会打包失败。
+    $assetsDir = Join-Path $ProductRoot "assets"
+
+    # 2. 构建产物 (除非 skip)
+    $outdir = Out-For $profile
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    if (-not $skipBuild) {
+        if (-not (Do-Full $profile)) { return $false }
+    } elseif (-not (Test-Path "$outdir\aurora_input$suffix.exe")) {
+        ErrMsg "无 $outdir 产物; 去掉 skip 先全构建, 或运行 '$(if($profile -eq 'dev'){'d1'}else{'1'})'。"; return $false
+    }
+
+    # 2.5 签 build\ 下的 PE —— 必须在 pack 之前, 因为 pack 就是把它们封进压缩块。
+    #
+    # ⚠️ 这一步【不能】只依赖 Do-Full 里那次: skip 模式 (8s/d8s) 根本不走 Do-Full,
+    #    于是会打出一个「外壳签了、里面 5 个 PE 全裸」的安装包 —— 而且从外面完全看不
+    #    出来 (验签 Setup.exe 是通过的)。实测踩过。
+    #    非 skip 模式下 Do-Full 已经签过, 这里按签名者指纹识别后整体跳过, 不重复消耗配额。
+    if (-not (Invoke-SignArtifacts @($outdir) "$profile 产物")) { return $false }
+
+    # 3. 生成变体 app.toml → dist\ (在 source 之外)
+    New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
+    $cfgName = if ($profile -eq "dev") { "AuroraInputDev.app.toml" } else { "AuroraInput.app.toml" }
+    $cfg = Join-Path $DistDir $cfgName
+    New-InstallerConfig $profile $outdir $cfg $assetsDir
+
+    Say "`n========== 生成安装包 ($profile) =========="
+    Gray "  安装器: $instDir"
+    Gray "  产物:   $outdir"
+    Gray "  配置:   $cfg"
+    Gray "  输出:   $DistDir"
+
+    # 4. 调 pack.ps1 (编译 stub + 注入卸载器 + packer build)。
+    #    skip 模式且 installer 二进制已在 → 透传 -SkipBuild 跳过 stub 重编 (加速反复打包)。
+    # 三件套齐全即透传 -SkipBuild。unstage 还原的中转产物正是落在这三个路径上, 所以
+    # 「CI 编译 → 本机打包」时这里天然命中, 本机一行代码都不编译。
+    $bins = Get-InstallerBinaries $instDir
+    $instBuilt = @($bins.Keys | Where-Object { -not (Test-Path $bins[$_]) }).Count -eq 0
+    # 哈希表 splat 才能按名绑定 (数组 splat 会把 -Config 当成位置参数的值)。
+    $packArgs = @{ Config = $cfg }
+    if ($skipBuild -and $instBuilt) { $packArgs['SkipBuild'] = $true }
+
+    # 4a. 加工卸载器 → 签它。拆成两段调用【只为给这次签名腾位置】:
+    #     uninstall.exe 的清单 overlay 早先是【安装期在用户机器上】追加的, 于是它永远
+    #     签不了 —— Authenticode 要求证书表是文件最后一段, 尾部多一个字节即"无签名"。
+    #     overlay 的内容全部来自 app.toml, 没有一个字节依赖安装期, 故前移到这里:
+    #       prep (写版本信息+图标+overlay) → 签名 → pack (封进压缩块) → 装机端只解压。
+    #     ⚠️ 顺序两头都是死的: 早于 prep 签的是裸 stub (随后被 prep 改掉),
+    #        晚于 pack 签则它已在压缩块里, 补签只能签到外壳。
+    $prepArgs = $packArgs.Clone()
+    $prepArgs['PrepOnly'] = $true
+    $uninstExe = Join-Path $outdir "uninstall.exe"
+    # 加工过(可能已签名)的卸载器绝不能留在 build\ 里: Do-PortableZip 是 Copy-Item "$outdir\*",
+    # 会把它带进便携版 zip (便携版没有卸载入口, 不该有这个文件); 下一轮 2.5 步的整目录
+    # 签名也会扫到它。正常路径由 pack.ps1 的 finally 删, 但中途失败时轮不到那里。
+    try {
+        & $packPs1 @prepArgs
+        if ($LASTEXITCODE -ne 0) { ErrMsg "卸载器加工失败 (见上方 wind-packer 输出)"; return $false }
+        # 显式断言而非交给签名脚本: Invoke-SignArtifacts 对不存在的目标是【静默返回成功】的
+        # (见其 $existing.Count -eq 0 那一支)。这里的路径与 pack.ps1 从 app.toml 的 source_dir
+        # 解析出的路径是两处独立推导, 一旦失配, 签名整段被跳过而打包照常成功 —— 又一个
+        # 「外壳签了、里面裸的」形态, 从外面看不出来。
+        if (-not (Test-Path $uninstExe)) {
+            ErrMsg "卸载器加工后未在预期路径出现: $uninstExe"
+            ErrMsg "请核对 $cfg 里的 package.source_dir 是否指向 $outdir。"
+            return $false
+        }
+        if (-not (Invoke-SignArtifacts @($uninstExe) "卸载器")) { return $false }
+
+        # 4b. 打包。-SkipPrep: 卸载器已就绪且已签名, 再走一次 prep 会覆盖掉签名。
+        #     -SkipBuild: 4a 那次已经编译过 stub 三件套了。
+        $buildArgs = $packArgs.Clone()
+        $buildArgs['SkipBuild'] = $true
+        $buildArgs['SkipPrep']  = $true
+        & $packPs1 @buildArgs
+        if ($LASTEXITCODE -ne 0) { ErrMsg "打包失败 (见上方 wind-packer 输出)"; return $false }
+    } finally {
+        Remove-Item $uninstExe -Force -ErrorAction SilentlyContinue
+    }
+
+    $setup = Join-Path $DistDir "$(if($profile -eq 'dev'){'WindInputDev-Setup'}else{'WindInput-Setup'})-$Version.exe"
+    if (Test-Path $setup) {
+        $sz = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+        Say "`n安装包已生成: $setup (${sz}MB)"
+        if (-not $script:SignRequested) { Warn "本次【未签名】(要签名: dev.ps1 sign $(if($profile -eq 'dev'){'d8'}else{'8'}))" }
+        # 5. 签 Setup.exe —— 必须夹在这里: pack 之后 (否则签的是还没塞进 payload 的空壳),
+        #    New-UpdateManifest 之前 (否则 latest.json 的 sha256/size 全是签名前的旧值)。
+        if (-not (Invoke-SignArtifacts @($setup) "安装包")) { return $false }
+        # 6. 生成在线升级元数据 + sha256 sidecar (供设置程序检查更新)
+        New-UpdateManifest $profile $setup
+    } else {
+        Warn "打包脚本已结束, 但未找到预期输出: $setup"
+        Warn "请检查上方 wind-packer 实际输出名 (dist\ 下)。"
+    }
+    return $true
+}
+
+# ---------- 发布中转产物 (stage / unstage) ----------
+# 「CI 编译 → 本机签名打包」的载体, 与远程编译机那条路同构 (见 Dispatch 的「打包留本机」
+# 段): 编译在别处, 签名和打包必须在本机同一次里做完。
+#
+# ⚠️ 为什么不能让 CI 直接出包、本机只补签外壳:
+#    签名【夹在打包中间】—— PE 签在封进压缩块之前, Setup.exe 签在 pack 之后、
+#    New-UpdateManifest 之前。对成品补签只能签到外壳, 包内 5 个 PE 仍是全裸的, 而
+#    signtool verify 验 Setup.exe 照样通过 —— 从外面完全看不出来 (实测踩过, 见
+#    Do-Installer 第 2.5 步)。所以中转的必须是打包【之前】的散件。
+#
+# 包内结构:
+#   build\      全构建产物; 内容 == 安装内容, 是安装包与便携包的共同上游
+#   installer\  wind-installer 的 stub / packer / uninstaller
+#   stage.json  版本号等清单, unstage 时硬校验
+# 带上 installer\ 是为了让本机【一行代码都不编译】—— Do-Installer 见三件套已在, 会给
+# pack.ps1 透传 -SkipBuild; 少了它们本机仍会 cargo build 一遍安装器。
+$StageManifestName = "stage.json"
+
+# 安装器三件套的路径 (单一真相源: Do-Installer 的 -SkipBuild 判据与 stage 打包共用)。
+function Get-InstallerBinaries ([string]$dir = $InstallerDir) {
+    $t = Get-CargoTargetDir $dir
+    return [ordered]@{
+        "wind-installer.exe"   = Join-Path $t "release\wind-installer.exe"
+        "wind-packer.exe"      = Join-Path $t "release\wind-packer.exe"
+        "wind-uninstaller.exe" = Join-Path $t "release\wind-uninstaller.exe"
+    }
+}
+
+function Do-Stage ([string]$profile = "release") {
+    $outdir = Out-For $profile
+    $suffix = if ($profile -eq "dev") { "_dev" } else { "" }
+    if (-not (Test-Path "$outdir\aurora_input$suffix.exe")) {
+        ErrMsg "无 $outdir 产物; 先跑全构建 ('$(if($profile -eq 'dev'){'d1'}else{'1'})')。"
+        return $false
+    }
+
+    $base  = if ($profile -eq "dev") { "AuroraInputDev" } else { "AuroraInput" }
+    $zip   = Join-Path $DistDir "$base-Stage-$Version.zip"
+    $stage = Join-Path $DistDir ".stage-pack"
+
+    Say "`n========== 打包中转产物 ($profile) → $zip =========="
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    New-Item -ItemType Directory -Path "$stage\build" -Force | Out-Null
+    Copy-Item "$outdir\*" -Destination "$stage\build" -Recurse -Force
+
+    # 安装器三件套缺失不算硬错误 —— 本机 unstage 后 pack.ps1 会自行编译, 只是「本机零
+    # 编译」这个目标达不成。故明确警告而不是静默放过。
+    $bins    = Get-InstallerBinaries
+    $missing = @($bins.Keys | Where-Object { -not (Test-Path $bins[$_]) })
+    if ($missing.Count -eq 0) {
+        New-Item -ItemType Directory -Path "$stage\installer" -Force | Out-Null
+        foreach ($n in $bins.Keys) { Copy-Item $bins[$n] "$stage\installer\$n" -Force }
+        Gray "  安装器: $($bins.Count) 个二进制"
+    } else {
+        Warn "wind-installer 二进制不全 (缺: $($missing -join ', ')), 中转包不含安装器"
+        Warn "  → 本机还原后 pack.ps1 会自行编译安装器, 不再是零编译"
+    }
+
+    $manifest = [ordered]@{
+        version   = $Version
+        profile   = $profile
+        createdAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        installer = ($missing.Count -eq 0)
+    }
+    [System.IO.File]::WriteAllText((Join-Path $stage $StageManifestName),
+        ($manifest | ConvertTo-Json -Depth 3), (New-Object System.Text.UTF8Encoding($false)))
+
+    New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
+    if (Test-Path $zip) { Remove-Item $zip -Force }
+    Compress-Archive -Path "$stage\*" -DestinationPath $zip -CompressionLevel Optimal
+    Remove-Item $stage -Recurse -Force
+
+    $sz = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+    Say "`n中转产物打包完成: $zip (${sz}MB)"
+    Gray "  本机还原: dev.ps1 unstage <zip>, 再 dev.ps1 sign 8s / sign 9s"
+    return $true
+}
+
+function Do-Unstage ([string]$zipPath) {
+    if (-not $zipPath)            { ErrMsg "用法: dev.ps1 unstage <中转产物.zip>"; return $false }
+    if (-not (Test-Path $zipPath)) { ErrMsg "找不到中转产物: $zipPath"; return $false }
+    $zipPath = (Resolve-Path $zipPath).Path
+
+    $tmp = Join-Path $DistDir ".stage-unpack"
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
+
+    $mf = Join-Path $tmp $StageManifestName
+    if (-not (Test-Path $mf)) {
+        ErrMsg "中转产物缺 $StageManifestName, 不是 dev.ps1 stage 产出的包"
+        Remove-Item $tmp -Recurse -Force; return $false
+    }
+    $m = Get-Content $mf -Raw | ConvertFrom-Json
+
+    # ⚠️ 版本号硬校验。打包函数用 $Version (读 docs\VERSION) 拼产物文件名, 而中转产物里
+    #    的二进制版本号是 CI 按 tag 编进去的 —— 两者不一致就会打出「文件名写 A、里面是
+    #    B」的包, 全程无任何报错。这是这条流程唯一会静默出坏包的地方, 故在此拦死。
+    if ($m.version -ne $Version) {
+        ErrMsg "版本不一致: 中转产物 $($m.version), 本机 docs\VERSION $Version"
+        Gray "  发布版本以 tag 为准; 修正: 把 docs\VERSION 改成 $($m.version) 后重试"
+        Remove-Item $tmp -Recurse -Force; return $false
+    }
+
+    $profile = if ($m.profile) { $m.profile } else { "release" }
+    $outdir  = Out-For $profile
+
+    Say "`n========== 还原中转产物 (v$($m.version), $profile) =========="
+    # 整体替换而非合并: 本机残留的旧产物会被一起打进包, 且不会有任何提示。
+    if (Test-Path $outdir) { Remove-Item $outdir -Recurse -Force }
+    New-Item -ItemType Directory -Path $outdir -Force | Out-Null
+    Copy-Item "$tmp\build\*" -Destination $outdir -Recurse -Force
+    Gray "  → $outdir"
+
+    if (Test-Path "$tmp\installer") {
+        $bins = Get-InstallerBinaries
+        $dst  = Split-Path $bins["wind-packer.exe"] -Parent
+        New-Item -ItemType Directory -Path $dst -Force | Out-Null
+        foreach ($n in $bins.Keys) {
+            $src = Join-Path "$tmp\installer" $n
+            if (Test-Path $src) { Copy-Item $src $bins[$n] -Force }
+        }
+        Gray "  → $dst (安装器三件套)"
+    } else {
+        Warn "中转产物不含安装器二进制; 打包时 pack.ps1 会自行编译一遍"
+    }
+
+    Remove-Item $tmp -Recurse -Force
+    Say "`n还原完成。下一步 (需先建立签名会话):"
+    Gray "  .\scripts\dev.ps1 sign 8s      出签名安装包 (5 个 PE + 卸载器 + 外壳, 7 次配额)"
+    Gray "  .\scripts\dev.ps1 sign 9s      出签名便携包 (PE 已签, 0 次配额)"
+    Gray "  .\scripts\dev.ps1 verify-sign  验签 dist\"
+    return $true
+}
+
+# ---------- 候选 REPL (本机) ----------
+function Do-Repl ([string]$data = "") {
+    if (-not $data) {
+        if (Test-Path "$BuildDevDir\data\schemas\pinyin\cn_dicts\base.dict.yaml") { $data = "$BuildDevDir\data" }
+        else { Warn "未找到词库数据; 请先运行 gen-data"; $data = "$BuildDevDir\data" }
+    }
+    Say "`n启动候选 REPL (data=$data)..."
+    Push-Location $ProjectRoot
+    try { $env:AURORA_DATA = $data; cargo run --release -p wind-repl -- $data } finally { Pop-Location }
+}
+
+# ---------- Defender 编译排除项 ----------
+# Rust 编译是实时反病毒的最坏负载: 数万个中小文件的高频创建/写入/删除, 每次
+# CreateFile/CloseFile 都被 minifilter 同步拦截扫描, 开销直接串进链接关键路径。
+# 用 git worktree 并行开发时还要乘以 worktree 个数 (各自独立 target)。
+# 具体排除清单与安全取舍见 scripts\defender-exclusions.ps1 的头尾注释。
+function Do-Defender ([string]$mode = "apply") {
+    $ps1 = Join-Path $ScriptDir "defender-exclusions.ps1"
+    if (-not (Test-Path $ps1)) { ErrMsg "未找到 $ps1"; return $false }
+
+    # -Scope Workspace: dev.ps1 的构建范围本就跨兄弟仓 (wind-portable /
+    # wind-installer), 排除范围与构建范围对齐才不会漏掉它们的 target。
+    $splat = @{ Scope = 'Workspace' }
+    switch ($mode) {
+        "check"  { $splat['WhatIfOnly'] = $true }
+        "remove" { $splat['Remove']     = $true }
+    }
+
+    # 子脚本正常路径不调 exit, $LASTEXITCODE 会保留上一条命令的陈旧值 —— 先清零,
+    # 否则前一条失败命令的退出码会被误判成本次失败。
+    $global:LASTEXITCODE = 0
+    try {
+        & $ps1 @splat
+    } catch {
+        ErrMsg "配置 Defender 排除项失败: $($_.Exception.Message)"
+        return $false
+    }
+    return ($LASTEXITCODE -eq 0)
+}
+
+# ---------- 新 worktree 初始化 ----------
+# 新建 git worktree 后的首次全量构建: 依赖从 sccache 取而不是重编 400 多个 crate。
+#
+# 分两阶段, 缺一不可 —— 本机实测 (wind_service 及其依赖, 冷 target):
+#   今天的做法 (无 sccache, incremental 默认) ......... 366 s
+#   阶段1 (sccache + CARGO_INCREMENTAL=0, 95% 命中) ... 155 s
+#   阶段2 (切回默认, 只重编 workspace crate) .......... 103 s
+#                                              合计 258 s, 省 30%
+#
+# 阶段2 不是可选的收尾: sccache 不缓存增量编译单元, 必须 CARGO_INCREMENTAL=0,
+# 而那会让此后【日常改一行重编】明显变慢 —— 稳态实测约 4.5 s, 关闭后约 6.5~9 s。
+# 所以 sccache 只用来过首次构建这一关, 之后必须让位给 incremental。
+#
+# 幅度刻意不给精确百分比: incremental 缓存有 5~6 轮的预热期, 期间它一边重建缓存一边
+# 编译, 反而比不用 incremental 更慢 (实测切换配置后 13.7→17.6→11.2→7.5→6.8→9.7→4.3→5.0,
+# 第 6 轮后才收敛)。短程 A/B 在这种系统里不只是噪音大, 而会【系统性指向错误方向】——
+# 本机就先后测出过 +61% 与 -21% 两个相反结果。要复测须跑到收敛后再取值。
+# 阶段2 只需 103 s 而非再来一次全量, 是因为 CARGO_INCREMENTAL 只影响 workspace 内的
+# crate —— 400 多个外部依赖的指纹不含它, 不会重编。
+function Do-WorktreeInit {
+    $sccache = Get-Command sccache -ErrorAction SilentlyContinue
+    if (-not $sccache) {
+        ErrMsg "未找到 sccache。"
+        Write-Host "  安装: cargo install sccache --locked   (从源码编译, 约 9 分钟)"
+        return $false
+    }
+
+    Say "`n新 worktree 初始化 (两阶段)"
+    Gray "  阶段1: sccache 首次全量构建"
+    Gray "  阶段2: 切回 incremental (否则日常迭代慢 61%)"
+
+    Push-Location $ProjectRoot
+    # 环境变量必须无条件还原: 菜单模式下本进程长驻, 残留的 RUSTC_WRAPPER 会让
+    # 本次会话后续所有构建都带着 sccache 跑, 表现为"今天 dev.ps1 莫名变慢"且难以归因。
+    $savedWrapper = $env:RUSTC_WRAPPER
+    $savedIncr    = $env:CARGO_INCREMENTAL
+    try {
+        Say "`n[阶段 1/2] sccache 全量构建..."
+        $env:RUSTC_WRAPPER     = "sccache"
+        $env:CARGO_INCREMENTAL = "0"
+        $sw1 = [System.Diagnostics.Stopwatch]::StartNew()
+        cargo build --workspace
+        $sw1.Stop()
+        if ($LASTEXITCODE -ne 0) { ErrMsg "阶段 1 构建失败"; return $false }
+        Say ("  阶段 1 完成: {0:N1} s" -f $sw1.Elapsed.TotalSeconds)
+
+        & sccache --show-stats 2>&1 |
+            Select-String -Pattern "Cache hits rate|Compile requests executed" |
+            ForEach-Object { Gray "  $_" }
+
+        Say "`n[阶段 2/2] 切回 incremental (只重编 workspace crate)..."
+        $env:RUSTC_WRAPPER     = $null
+        $env:CARGO_INCREMENTAL = $null
+        $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
+        cargo build --workspace
+        $sw2.Stop()
+        if ($LASTEXITCODE -ne 0) { ErrMsg "阶段 2 构建失败"; return $false }
+        Say ("  阶段 2 完成: {0:N1} s" -f $sw2.Elapsed.TotalSeconds)
+
+        $total = $sw1.Elapsed.TotalSeconds + $sw2.Elapsed.TotalSeconds
+        Say ("`n初始化完成, 合计 {0:N1} s ({1:N1} 分)。此后日常迭代走 incremental, 不受影响。" -f $total, ($total / 60))
+        return $true
+    } finally {
+        $env:RUSTC_WRAPPER     = $savedWrapper
+        $env:CARGO_INCREMENTAL = $savedIncr
+        Pop-Location
+    }
+}
+
+# ---------- 菜单 ----------
+function Show-Menu {
+    Clear-Host
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "  WindInput 开发菜单  v$Version  (Windows/MSVC)" -ForegroundColor Cyan
+    Write-Host "============================================`n" -ForegroundColor Cyan
+    Write-Host "  全构建 (→ build/, 内容 == 部署内容):" -ForegroundColor Yellow
+    Write-Host "    1    Release 全构建: aurora_input + tsf(x64/x86) + setting + portable + 词库"
+    Write-Host "    d1   Dev 全构建 (→ build_dev/)"
+    Write-Host "`n  单模块构建 (前缀 d = dev):" -ForegroundColor Yellow
+    Write-Host "    m1   仅 tsf (x64+x86)                dm1"
+    Write-Host "    m2   仅 aurora_input (核心)             dm2"
+    Write-Host "    m3   仅 aurora_setting (apps/setting)  dm3"
+    Write-Host "    m4   仅 aurora_portable (../wind-portable) dm4"
+    Write-Host "`n  系统安装 / 卸载 (注册 TSF + 开机自启 + 默认启用, 自动提权):" -ForegroundColor Yellow
+    Write-Host "    p1   安装全部 (release)        pd1   安装全部 (dev)"
+    Write-Host "    pm1..pm4  安装模块(tsf/核心/setting/portable)   pdm1..pdm4 (dev)"
+    Write-Host "    u1/u  卸载全部 (release)        ud1/ud  卸载全部 (dev)"
+    Write-Host "      release → $AURORA_DIR_RELEASE" -ForegroundColor DarkGray
+    Write-Host "      dev     → $AURORA_DIR_DEV" -ForegroundColor DarkGray
+    Write-Host "`n  便携部署 / 卸载 (纯复制 + 便携标记, 免注册免提权):" -ForegroundColor Yellow
+    Write-Host "    pb1  部署全部 (release)        pbd1  部署全部 (dev)"
+    Write-Host "    pbm1..pbm4  部署模块(tsf/核心/setting/portable)  pbdm1..pbdm4 (dev)"
+    Write-Host "    ub1/ub  卸载 (release)          ubd1/ubd  卸载 (dev)"
+    Write-Host "      release → $AURORA_DIR_PORTABLE_RELEASE" -ForegroundColor DarkGray
+    Write-Host "      dev     → $AURORA_DIR_PORTABLE_DEV" -ForegroundColor DarkGray
+    Write-Host "      用户数据 <目录>\$PortableDataDir 部署/卸载均保留" -ForegroundColor DarkGray
+    Write-Host "`n  安装包 (调用兄弟项目 wind-installer 打包):" -ForegroundColor Yellow
+    Write-Host "    8    生成安装包 (release)       d8    生成安装包 (dev)"
+    Write-Host "    8s   跳过重建直接打包 (release)  d8s   跳过重建直接打包 (dev)"
+    Write-Host "      输出 → $DistDir" -ForegroundColor DarkGray
+    Write-Host "`n  便携包 (免安装 zip, 不依赖 wind-installer):" -ForegroundColor Yellow
+    Write-Host "    9    生成便携包 (release)       d9    生成便携包 (dev)"
+    Write-Host "    9s   跳过重建直接打包 (release)  d9s   跳过重建直接打包 (dev)"
+    Write-Host "      输出 → $DistDir\WindInput[Dev]-Portable-$Version.zip" -ForegroundColor DarkGray
+    Write-Host "`n  发布中转 (CI 编译 → 本机签名打包):" -ForegroundColor Yellow
+    Write-Host "    stage          打包中转产物 (build\ + 安装器三件套), CI 上跑"
+    Write-Host "    unstage <zip>  还原中转产物, 本机跑; 之后 sign 8s / sign 9s"
+    Write-Host "      整条流程由 release.ps1 sign-draft 自动完成 (拉取→还原→签名→回传)" -ForegroundColor DarkGray
+    Write-Host "`n  代码签名 (默认不签; 签名次数按月计费且有限):" -ForegroundColor Yellow
+    Write-Host "    sign  开关(位置无关), 与构建/打包连用:  sign 1 / sign 8 / sign 9s"
+    Write-Host "    sign-status  会话体检 (证书在不在 / 几时到期)   verify-sign  验签 dist\"
+    Write-Host "      不写 sign 则一次配额也不消耗; 已签过的文件会跳过, 不重复扣次数" -ForegroundColor DarkGray
+    Write-Host "      配置模板 scripts\sign.local.ps1.example; 取舍见 docs\design\code-signing.md" -ForegroundColor DarkGray
+    Write-Host "`n  代码质量:" -ForegroundColor Yellow
+    Write-Host "    k=check  l=clippy  t=test  f=fmt  ci=fmt+clippy+test"
+    Write-Host "`n  数据 / 实测:" -ForegroundColor Yellow
+    Write-Host "    gd=gen-data  r=repl(本机)"
+    Write-Host "`n  构建环境:" -ForegroundColor Yellow
+    Write-Host "    av   配置 Defender 编译排除项 (自动提权)  avc 仅预览  avr 移除"
+    Write-Host "      加速 Rust 编译: 免去数万个 target 文件被实时扫描" -ForegroundColor DarkGray
+    Write-Host "      进程排除与路径无关, 新建 worktree 自动生效, 无需重跑" -ForegroundColor DarkGray
+    Write-Host "    wtinit  新 worktree 首次全量构建 (需 sccache)"
+    Write-Host "      实测 366s → 258s (-30%); 完成后自动切回 incremental" -ForegroundColor DarkGray
+    if ($AURORA_REMOTE_HOST) {
+        Write-Host "    runlock  Ctrl+C 中断远程构建后锁卡死时, 强制释放编译机互斥锁"
+    }
+    Write-Host "`n  杂项:" -ForegroundColor Yellow
+    Write-Host "    clean  q=退出"
+    Write-Host "============================================" -ForegroundColor Cyan
+}
+
+# ---------- 统一分发 (菜单与命令行直调共用; 命令已转小写) ----------
+# 返回 127 = 未知命令 (区别于命令执行失败)。
+# ---------- 远程构建转发 (仅在配了 build.local.ps1 时生效) ----------
+# 走远程的是「吃 CPU 的」命令。刻意排除三类:
+#   · 部署/卸载 (p* / u* / pb* / ub*) —— 要注册 COM、写注册表、装字体, 本机才是目标机;
+#   · 会改源码的 f/fmt —— cargo fmt 改的是编译机上的源码, 下次 /MIR 同步即被本机覆盖,
+#     白改且无声。(ci 走的是 Do-FmtCheck 只读, 故可以远程。)
+#   · 本机状态类 (av* / hooks / r / wtinit / clean) —— Defender 排除项、git hooks、交互
+#     repl, 以及「清哪台的 target」, 都只在本机有意义。
+$RemoteCommands = @(
+    "1", "release", "d1", "dev",
+    "m1", "m2", "m3", "m4", "dm1", "dm2", "dm3", "dm4",
+    # 打包类只列不带 s 的: 8/9 会被 Dispatch 改写成全构建转发出去, 回传后在本机打包
+    # (见 Dispatch 的「打包留本机」段)。⛔ 别把 8s/9s 加回来 —— 它们【不编译任何东西】,
+    # 转发过去只是在编译机上打个包然后留在那儿, 本机 dist\ 一无所获。
+    "8", "d8", "9", "d9",
+    "k", "check", "l", "clippy", "t", "test", "ci", "fmt-check",
+    "gd", "gen-data"
+)
+function Test-RemoteCommand ([string]$cmd) {
+    # 临时强制本机: `$env:AURORA_NO_REMOTE = "1"` (编译机关机 / 不在内网 / 要和远程做对照)。
+    # 这同时是防递归哨兵 —— remote-build.ps1 回落本机时会设上它再回调本脚本, 两边必须同判据。
+    if ($env:AURORA_NO_REMOTE) { return $false }
+    if (-not $AURORA_REMOTE_HOST) { return $false }   # 未配置 → 一律本机, 行为与从前一致
+    $list = if ($null -ne $AURORA_REMOTE_COMMANDS) { $AURORA_REMOTE_COMMANDS } else { $RemoteCommands }
+    if ($list -notcontains $cmd) { return $false }
+
+    # 打包类 (8/9) 不再因签名而整体留在本机: Dispatch 已把它们改写成
+    # 【全构建转发 → 回传 → 本机补签 → 本机打包】, 三件事各归其位 ——
+    #   · 编译在远程 (它擅长的部分, 也是耗时的大头)
+    #   · 签名在本机 (证书会话只在本机, 不该散到第二台机器上)
+    #   · 打包在本机 (发生在补签之后, 故封进包的 PE 必定已签; 且产物直接落到本机 dist\)
+    #
+    # 这同时修掉了「远程打的包留在编译机上」—— remote-build.ps1 的回传只取
+    # build[_dev]\, dist\ 从不回传, 从前转发 8/9 出去等于产物白丢。
+    # 8s/9s 不在 $RemoteCommands 里, 天然走本机。
+    return $true
+}
+
+function Dispatch ([string]$cmd, [string]$arg) {
+    # 远程转发闸门。未配置时 Test-RemoteCommand 恒 false, 直落下方本机分支; remote-build.ps1
+    # 不入库, 新 worktree 里没有它时同样自动降级为本机构建, 不报错。
+    if ((Test-RemoteCommand $cmd) -and (Test-Path "$ScriptDir\remote-build.ps1")) {
+        # ---- 打包留本机 ----
+        # 8/9 (安装包 / 便携包) 转发出去的是【全构建】, 不是打包命令本身: 打包产物落在
+        # dist\, 而 remote-build.ps1 的回传只取 build[_dev]\ —— 直接转发 8/9 的话, zip /
+        # Setup.exe 会静默留在编译机上, 本机 dist\ 空手而归 (一度如此)。
+        # 改为「远程全构建 → 回传 build[_dev]\ → 本机补签 → 本机跑 8s/9s 打包」,
+        # 打包读的就是刚回传的产物, 与纯本机构建的结果一致。
+        $fwd  = $cmd      # 真正转发给编译机的命令
+        $pack = $null     # 回传后要在本机补跑的打包命令
+        if ($cmd -match '^(d?)([89])$') {
+            $fwd  = "$($Matches[1])1"          # 8→1 / d9→d1
+            $pack = "$($Matches[1])$($Matches[2])s"   # 8→8s / d9→d9s
+            Gray "[remote] $cmd → 远程执行 $fwd (编译), 回传后本机执行 $pack (打包)"
+        }
+
+        & "$ScriptDir\remote-build.ps1" -Command $fwd | Out-Host
+        $rc = $LASTEXITCODE
+
+        # 编译在远程、签名在本机。
+        #
+        # 转发出去的命令里【不含 sign】—— sign 在入口就被摘成开关了, 编译机收到的是
+        # 光秃秃的 1/d1/m*, 于是它只编译、不签名。这正是想要的: 证书会话不该散到第二台
+        # 机器上, 编译机也建立不了会话。
+        #
+        # 产物回传到本机 build[_dev]\ 之后, 在这里补签 —— 时机等价于本机 Do-Full 末尾
+        # 那一次(都是"产物齐全、尚未打包"), 后续 8s/9s 打包时按指纹识别为已签, 不重复
+        # 消耗配额。
+        #
+        # 只对【产 PE】的命令补签: k/t/ci/fmt-check 不产任何东西, gd 只产 data\。
+        # 判据用 $fwd 而不是 $cmd —— 8/9 已被改写成全构建转发, 按原命令判会漏掉补签,
+        # 于是本机打包时封进包的还是未签名的 PE (且没有任何提示)。
+        if ($rc -eq 0 -and $script:SignRequested -and $fwd -match '^(d?(1|m[1-4])|release|dev)$') {
+            $p = if ($fwd -eq 'dev' -or $fwd -like 'd*') { 'dev' } else { 'release' }
+            if (-not (Invoke-SignArtifacts @((Out-For $p)) "$p 产物 (远程编译 → 本机签名)")) { return 1 }
+        }
+
+        # 补签之后再打包, 顺序不可颠倒: 反过来会把未签名的 PE 封进压缩块, 事后补签
+        # 够不着包内文件 —— 拿到的是「签名完好、内容全裸」的包, 而且不会报错。
+        if ($rc -eq 0 -and $pack) { return (Dispatch $pack $arg) }
+        return $rc
+    }
+    switch ($cmd) {
+        { $_ -in @("1", "release") }        { if (Do-Full release) { 0 } else { 1 }; break }
+        { $_ -in @("d1", "dev") }           { if (Do-Full dev)   { 0 } else { 1 }; break }
+        "m1"   { if (Build-TsfAll   release) { 0 } else { 1 }; break }
+        "dm1"  { if (Build-TsfAll   dev)   { 0 } else { 1 }; break }
+        "m2"   { if (Build-Core     release) { 0 } else { 1 }; break }
+        "dm2"  { if (Build-Core     dev)   { 0 } else { 1 }; break }
+        "m3"   { if (Build-Setting  release) { 0 } else { 1 }; break }
+        "dm3"  { if (Build-Setting  dev)   { 0 } else { 1 }; break }
+        "m4"   { if (Build-Portable release) { 0 } else { 1 }; break }
+        "dm4"  { if (Build-Portable dev)   { 0 } else { 1 }; break }
+        "p1"   { if (Deploy-Full release) { 0 } else { 1 }; break }
+        "pd1"  { if (Deploy-Full dev)   { 0 } else { 1 }; break }
+        "pm1"  { if (Deploy-Module release tsf)      { 0 } else { 1 }; break }
+        "pm2"  { if (Deploy-Module release core)     { 0 } else { 1 }; break }
+        "pm3"  { if (Deploy-Module release setting)  { 0 } else { 1 }; break }
+        "pm4"  { if (Deploy-Module release portable) { 0 } else { 1 }; break }
+        "pdm1" { if (Deploy-Module dev tsf)      { 0 } else { 1 }; break }
+        "pdm2" { if (Deploy-Module dev core)     { 0 } else { 1 }; break }
+        "pdm3" { if (Deploy-Module dev setting)  { 0 } else { 1 }; break }
+        "pdm4" { if (Deploy-Module dev portable) { 0 } else { 1 }; break }
+        "u"    { if (Uninstall-Full release) { 0 } else { 1 }; break }
+        "u1"   { if (Uninstall-Full release) { 0 } else { 1 }; break }
+        "ud"   { if (Uninstall-Full dev)   { 0 } else { 1 }; break }
+        "ud1"  { if (Uninstall-Full dev)   { 0 } else { 1 }; break }
+        # 便携部署 (纯复制, 不提权)
+        "pb1"   { if (Deploy-Portable release) { 0 } else { 1 }; break }
+        "pbd1"  { if (Deploy-Portable dev)     { 0 } else { 1 }; break }
+        "pbm1"  { if (Deploy-PortableModule release tsf)      { 0 } else { 1 }; break }
+        "pbm2"  { if (Deploy-PortableModule release core)     { 0 } else { 1 }; break }
+        "pbm3"  { if (Deploy-PortableModule release setting)  { 0 } else { 1 }; break }
+        "pbm4"  { if (Deploy-PortableModule release portable) { 0 } else { 1 }; break }
+        "pbdm1" { if (Deploy-PortableModule dev tsf)      { 0 } else { 1 }; break }
+        "pbdm2" { if (Deploy-PortableModule dev core)     { 0 } else { 1 }; break }
+        "pbdm3" { if (Deploy-PortableModule dev setting)  { 0 } else { 1 }; break }
+        "pbdm4" { if (Deploy-PortableModule dev portable) { 0 } else { 1 }; break }
+        "ub"    { if (Uninstall-Portable release) { 0 } else { 1 }; break }
+        "ub1"   { if (Uninstall-Portable release) { 0 } else { 1 }; break }
+        "ubd"   { if (Uninstall-Portable dev)     { 0 } else { 1 }; break }
+        "ubd1"  { if (Uninstall-Portable dev)     { 0 } else { 1 }; break }
+        { $_ -in @("8", "installer") }       { if (Do-Installer release $false) { 0 } else { 1 }; break }
+        "8s"                                 { if (Do-Installer release $true)  { 0 } else { 1 }; break }
+        { $_ -in @("d8", "installer-dev") }  { if (Do-Installer dev $false)   { 0 } else { 1 }; break }
+        "d8s"                                { if (Do-Installer dev $true)     { 0 } else { 1 }; break }
+        { $_ -in @("9", "portable-zip") }    { if (Do-PortableZip release $false) { 0 } else { 1 }; break }
+        "9s"                                 { if (Do-PortableZip release $true)  { 0 } else { 1 }; break }
+        { $_ -in @("d9", "portable-zip-dev") } { if (Do-PortableZip dev $false) { 0 } else { 1 }; break }
+        "d9s"                                { if (Do-PortableZip dev $true)   { 0 } else { 1 }; break }
+        # 发布中转产物。stage 在 CI 上跑 (打包散件), unstage 在本机跑 (还原后签名打包)。
+        "stage"   { if (Do-Stage release) { 0 } else { 1 }; break }
+        "dstage"  { if (Do-Stage dev)     { 0 } else { 1 }; break }
+        "unstage" { if (Do-Unstage $arg)  { 0 } else { 1 }; break }
+        { $_ -in @("k", "check") }   { Do-Check;  $LASTEXITCODE; break }
+        { $_ -in @("l", "clippy") }  { Do-Clippy; $LASTEXITCODE; break }
+        { $_ -in @("t", "test") }    { Do-Test;   $LASTEXITCODE; break }
+        { $_ -in @("f", "fmt") }     { Do-Fmt;    $LASTEXITCODE; break }
+        "fmt-check"                  { Do-FmtCheck; $LASTEXITCODE; break }
+        "ci"                         { if (Do-Ci) { 0 } else { 1 }; break }
+        "hooks"                      { Do-HooksInstall; 0; break }
+        "clean"                      { Do-Clean;  $LASTEXITCODE; break }
+        { $_ -in @("gd", "gen-data") }  { if (Do-GenData) { 0 } else { 1 }; break }
+        { $_ -in @("r", "repl") }       { Do-Repl $arg; 0; break }
+        # Defender 编译排除项 (av/avr 经 Invoke-Elevated 自动提权; avc 只读免管理员)
+        { $_ -in @("av", "defender") }  { if (Do-Defender apply)  { 0 } else { 1 }; break }
+        "avc"                           { if (Do-Defender check)  { 0 } else { 1 }; break }
+        "avr"                           { if (Do-Defender remove) { 0 } else { 1 }; break }
+        # 代码签名 (配置见 scripts\sign.local.ps1.example)
+        { $_ -in @("sign-status", "signst") } { & "$ScriptDir\sign.ps1" -Status; $LASTEXITCODE; break }
+        # 发版门禁: 对 dist\ 下的产物硬校验签名。签名未配置时【也会失败】—— 这正是它的
+        # 用途, 别把它当成"顺手跑跑"的检查; 日常构建不需要它。
+        { $_ -in @("verify-sign", "vsign") } { & "$ScriptDir\sign.ps1" -Verify $DistDir; $LASTEXITCODE; break }
+        { $_ -in @("wtinit", "worktree-init") } { if (Do-WorktreeInit) { 0 } else { 1 }; break }
+        # 强制释放编译机互斥锁 (Ctrl+C 中断构建后卡死时用)。这条命令本身刻意不进 $RemoteCommands
+        # 白名单转发表 —— 它不是"要转发去远程跑的构建", 而是直接操作远程锁, 走 remote-build.ps1
+        # 自己的 -Unlock 分支。未配置远程编译机时该分支会安静地报"无锁可清"。
+        { $_ -in @("runlock", "unlock-remote") } {
+            if (Test-Path "$ScriptDir\remote-build.ps1") {
+                & "$ScriptDir\remote-build.ps1" -Unlock | Out-Host; $LASTEXITCODE
+            } else { ErrMsg "remote-build.ps1 不存在 (未入库或不在本仓)"; 1 }
+            break
+        }
+        default { 127 }
+    }
+}
+
+function Menu-Loop {
+    while ($true) {
+        Show-Menu
+        $raw = (Read-Host "`n请输入选项").Trim()
+        if (-not $raw) { continue }
+        if ($raw.ToLower() -eq "q") { return }
+
+        # 支持空格分隔的连续命令: "d1 pd1" → 依次执行, 前者失败则停止
+        # @() 强制包装: 单 token 时 Where-Object 返回标量字符串, 索引会取字符而非词
+        $tokens = @($raw.ToLower() -split '\s+' | Where-Object { $_ -ne "" })
+        $i = 0
+        $anyFailed = $false
+        $needPause = $false   # UAC 成功时输出已内联显示, 无需额外暂停
+        while ($i -lt $tokens.Count -and -not $anyFailed) {
+            $choice = $tokens[$i]
+            $choiceArg = ""
+            # repl / unstage 后一个 token 是路径参数, 不是命令
+            if ($choice -in @("r", "repl", "unstage")) {
+                $i++
+                if ($i -lt $tokens.Count) { $choiceArg = $tokens[$i] }
+            }
+            $el = Invoke-Elevated $choice $choiceArg
+            if ($el -eq "skip") {
+                $needPause = $true   # 普通命令在当前窗口产生输出, 需暂停让用户阅读
+                $rc = Dispatch $choice $choiceArg
+                if ($rc -eq 127) { ErrMsg "无效选项: $choice"; $anyFailed = $true }
+                elseif ($rc -ne 0) { ErrMsg "`n命令 '$choice' 失败 (退出码 $rc)"; $anyFailed = $true }
+            } elseif ($el -eq "done") {
+                $needPause = $true   # UAC 子进程输出已内联显示, 暂停让用户阅读
+            } elseif ($el -eq "fail") {
+                $needPause = $true   # 提权失败/被取消, 需暂停让用户看到错误
+                $anyFailed = $true
+            }
+            $i++
+        }
+        if ($needPause) { Write-Host ""; Write-Host "按回车继续..." -NoNewline; Read-Host | Out-Null }
+    }
+}
+
+# ---------- 入口 ----------
+$allCmds = @($Commands | Where-Object { $_ -ne "" })
+
+# ---------- 签名开关: sign ----------
+# 签名【默认关闭】, 必须显式写 sign 才签。理由是签名次数按月计费且有限 ——
+# 一次全构建就是 5 个 PE, 加打包是 7 次; 若"配了证书就自动签", 日常 d1 几天就能把
+# 一个月的额度烧光。宁可发版时多打一个词, 也不要每次构建都在扣费。
+#
+# ⚠️ 为什么是命令关键字而不是 -Sign 参数: 本脚本的 $Commands 用了
+#    ValueFromRemainingArguments, 它会把 -Sign 一并吃进命令列表, 而 switch 恒为 $false
+#    ——【不报错、静默失效】。实测:
+#        .\dev.ps1 1 -Sign  →  Commands = [1, -Sign]   Sign = False
+#    故 named parameter 这条路在当前 param 结构下走不通。
+#
+# sign 是【位置无关】的开关, 扫描后从命令列表里摘掉, 不参与按序执行:
+#     dev.ps1 sign 1   ≡   dev.ps1 1 sign     全构建并签名
+#     dev.ps1 sign 8   ≡   dev.ps1 8 sign     出安装包并签名
+#
+# 位置无关是刻意的。若把 sign 当成"按序执行的一条命令", `dev.ps1 8 sign` 就会变成
+# 「先出未签名的包(manifest 已按未签名的 hash 算好), 再去签 build\」—— 签了个寂寞,
+# 而 latest.json 里的 sha256 与实际发布的文件对不上。摘成开关就不存在这种顺序陷阱。
+$script:SignRequested = $false
+if ($allCmds | Where-Object { $_.Trim().ToLower() -eq 'sign' }) {
+    $script:SignRequested = $true
+    $allCmds = @($allCmds | Where-Object { $_.Trim().ToLower() -ne 'sign' })
+    if ($allCmds.Count -eq 0) {
+        Warn "sign 是开关, 需与构建/打包命令连用, 例如: .\scripts\dev.ps1 sign 8"
+        Gray "只想签已有产物则直接调用: .\scripts\sign.ps1 build   (或 build_dev)"
+        exit 1
+    }
+}
+
+# 无参数 → 交互菜单
+if ($allCmds.Count -eq 0) { Menu-Loop; return }
+
+$firstCmd = $allCmds[0].Trim().ToLower()
+
+# help
+if ($firstCmd -eq "-h" -or $firstCmd -eq "--help" -or $firstCmd -eq "help") {
+    Get-Content $PSCommandPath | Where-Object { $_ -match '^#' } | ForEach-Object { $_ -replace '^# ?', '' }
+    return
+}
+
+# menu (显式)
+if ($firstCmd -eq "menu") { Menu-Loop; return }
+
+# 按序执行所有命令; repl 后一个参数为数据路径
+$i = 0
+while ($i -lt $allCmds.Count) {
+    $cmd = $allCmds[$i].Trim().ToLower()
+    $arg = ""
+    if ($cmd -in @("r", "repl", "unstage")) {
+        $i++
+        if ($i -lt $allCmds.Count) { $arg = $allCmds[$i] }
+    }
+
+    $el = Invoke-Elevated $cmd $arg
+    if ($el -eq "done") { $i++; continue }
+    if ($el -eq "fail") { exit 1 }
+
+    $rc = Dispatch $cmd $arg
+    if ($rc -eq 127) {
+        ErrMsg "未知命令: $cmd"
+        Write-Host "运行 '.\scripts\dev.ps1 --help' 查看可用命令"
+        exit 1
+    }
+    if ($rc -ne 0) { exit $rc }
+    $i++
+}
+exit 0

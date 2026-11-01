@@ -1,0 +1,58 @@
+[package]
+name = "aurora_setting"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+auroraui = { path = "../../crates/auroraui" }
+aurora-ipc = { path = "../../crates/aurora-ipc" }
+# 定制版清单（`data_custom/custom.toml`）与 `[settings] hide` 选择器：与 core 同一份解析，
+# 页面树建成之前就要知道哪些设置项不建（见 `custom_hide.rs`），等不到 `system.info`。
+aurora-config = { path = "../../crates/aurora-config" }
+serde = { version = "1", features = ["derive"] }
+# 用户配置/本机状态目录：与 core（aurora-config）同一 crate 同一大版本，
+# 保证两边算出的目录在各平台上落到同一处。
+dirs = "6"
+serde_json = "1"
+chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+tracing-appender = "0.2"
+toml = "0.8"
+ureq = "2"
+tiny_http = "0.12"
+# 升级版本比较：prerelease 与数字标识符的序由规范定义，不自行实现
+semver = "1"
+# 升级包完整性校验
+sha2 = "0.10"
+# 日志打包（设置 › 高级 › 日志）。与 core 的 aurora-transfer 同一大版本，只开 deflate。
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+# 仅测试用：core 的 capability 生成器与配置真相源，供守护 capabilities.snapshot.json
+# 与 mockdata/config.json 不与 core 漂移。
+# core 仓已因 aurora-ipc 成为硬依赖，此处不引入新的路径前提。
+aurora-rpc = { path = "../../crates/aurora-rpc" }
+# 标点转换真相源：守护 PUNCT_DEFAULTS（设置页那份四列默认表）不与 core 的转换
+# 流水线漂移。漂移的表现是「不动也判脏」，没有堆栈、只能靠这条测试看见。
+aurora-punct = { path = "../../crates/aurora-punct" }
+aurora-transform = { path = "../../crates/aurora-transform" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+# 设置页字体下拉按 DirectWrite family 枚举（与 core 渲染端同一字体模型，见 state.rs
+# `load_fonts`）。版本与 auroraui 对齐，不新增编译单元。
+windows = { version = "0.62", features = ["Win32_Graphics_DirectWrite"] }
+
+[features]
+default = []
+# 内存诊断：接管全局分配器做净堆计数，并在构建各阶段打点到 %TEMP%\wind_setting_memstat.log。
+# 仅排查用，默认关（关闭时打点函数是空实现，优化后不留指令）。
+memstat = []
+
+[build-dependencies]
+# 仅 Windows 目标嵌入图标 / 版本信息 / manifest（DPI 感知），参考 core
+winresource = "0.1"
+
+

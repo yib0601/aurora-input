@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# 激活方式（一次性）: git config core.hooksPath .githooks
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+
+echo "[pre-commit] cargo fmt check..."
+
+# ★ 只检查**本次暂存**的 .rs，不查整个工作区。
+#
+# 原先是 `cargo fmt --all -- --check`，查的是工作区全量。本仓常有多个会话并行改不同模块，
+# 别人写到一半、还没 fmt 的文件会把无关的提交一并拦下——被拦的人既不该去 fmt 别人正在
+# 编辑的文件，也不该 --no-verify 跳过，只能干等。2026-08-22 实测被拦过一次。
+#
+# 只查暂存文件是 pre-commit 的常规做法，且不放松真正的约束：要提交的东西照样逐个查。
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+if [ -z "$files" ]; then
+    echo "[pre-commit] 本次无 .rs 改动，跳过"
+    exit 0
+fi
+
+# 用 rustfmt 而不是 cargo fmt：后者没有「只格式化指定文件」的入口。
+# ⚠️ edition 必须与 workspace 一致（aurora_core/Cargo.toml 的 edition = "2024"）；
+# 漏传会按 2015 解析，把合规文件误报成不合规。改 workspace edition 时这里要跟着改。
+#
+# ⚠️ `skip_children=true` 同样不可省：rustfmt 默认**跟进 `mod` 子模块**，于是查一个
+# coordinator.rs 会连 coordinator/*.rs 一起查——上面那段想避开的「被别人写到一半的文件
+# 拦下」，就这么从子模块漏了回来。2026-09-02 实测：暂存的只是 coordinator.rs 里两行字段，
+# 却被别人正在编辑的 coordinator/message_handler.rs 拦下，而那个文件根本不在提交里。
+# 加上它，「只查这一个文件」才名副其实。走 --config 而非 --skip-children：后者是 unstable
+# 选项名，稳定版 rustfmt 不认，只能经 --config 传。
+#
+# 取舍：查的是**工作区里的那个文件**，不是暂存的内容快照。`git add` 之后又把格式改坏的
+# 情况会漏——换来的是不必为每个文件开一次 `git show :file` 临时文件。本仓是小团队自用，
+# 这个洞的代价远小于复杂度。
+bad=""
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$ROOT/$f" ] || continue
+    rustfmt --edition 2024 --config skip_children=true --check "$ROOT/$f" >/dev/null 2>&1 || bad="$bad  $f"$'\n'
+done <<< "$files"
+
+if [ -n "$bad" ]; then
+    echo ""
+    echo "  以下暂存文件格式不符："
+    printf '%s' "$bad"
+    echo ""
+    echo "  修复: cd aurora_core && cargo fmt"
+    echo ""
+    exit 1
+fi
+
+echo "[pre-commit] fmt OK"

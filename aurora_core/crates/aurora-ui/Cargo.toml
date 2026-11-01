@@ -1,0 +1,121 @@
+[package]
+name = "aurora-ui"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# Linux 上作为外部宿主（Fcitx5 addon）的服务端：启用 host-render forwarder 与真实文本后端。默认关，
+# 关闭时 Linux 仍是 mock 文本（开发机 `cargo test` 行为不变），见 build.rs 的 `ext_presenter` / `mock_text`。
+# 连带打开 aurora-bridge 的同名 feature：两个 crate 的 `ext_presenter` 必须一致，否则单独
+# `-p aurora-ui --features linux-host` 时 aurora-bridge 那边缺 Linux 外部宿主的那部分。
+linux-host = ["dep:ttf-parser", "dep:ab_glyph_rasterizer", "dep:rustybuzz", "aurora-bridge/linux-host"]
+
+[dependencies]
+# 表现层协议类型（UiCommand/UiEvent 等）的定义处；本 crate 原路径 pub use 再导出。
+aurora-ui-types = { path = "../aurora-ui-types" }
+aurora-theme = { path = "../aurora-theme" }
+aurora-candidate = { path = "../aurora-candidate" }
+aurora-bridge = { path = "../aurora-bridge" }
+# 协议常量与结构：语言栏图标 SHM 的尺寸档与变体表（langbar_icon）、host-render 常量
+# （HOST_WINDOW_CANDIDATE / HostRenderHitRect）、macOS forwarder 的帧编码。
+#
+# 置于通用依赖而非 target-specific：langbar_icon 的几何绘制与合成是平台无关逻辑，
+# 其单元测试要能在 CI 的 Linux test job 上跑到。经 aurora-bridge 本就传递依赖它，
+# 提为直接依赖不增加任何编译成本。
+aurora-ipc = { path = "../aurora-ipc" }
+# 显示浮窗前的最后一道闸（`aurora_keys::foreground::exclusive_fullscreen_recent`）：独占全屏的
+# 游戏被别的进程的窗口盖一下就会被踢出独占态，协调器那份事件驱动的缓存过期时由这里兜住。
+# 曾只在 macOS 下依赖（全局热键的 VK 表），现在两个平台都要。
+aurora-keys = { path = "../aurora-keys" }
+# 仅用于 startup_trace：UI 线程若在窗口创建阶段退出，主线程与主日志都可能毫无察觉
+aurora-config = { path = "../aurora-config" }
+tiny-skia = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+image = { workspace = true }
+# 只留 raster-images：主题 SVG 里内嵌的 data: 位图要能显示（主题编辑器就是这么引导的）。
+# 默认的 text / system-fonts / memmap-fonts 不开——我们从不往 usvg 的 fontdb 里装字体，
+# `<text>` 本来就画不出来，开着只是把 fontdb / rustybuzz / unicode-* 白编进去。
+resvg = { version = "0.44", default-features = false, features = ["raster-images"] }
+# 主题内嵌图片（`data:image/...;base64,` 形态）的载荷解码，见 image_cache。
+# 版本跟随 aurora-cmdbar 里既有的那一份。
+base64 = "0.22"
+# 截图文件名的本地时间戳（非 Windows 分支；Windows 用 GetLocalTime）
+chrono = "0.4"
+# 外部宿主 forwarder（macOS / Linux）的扩展信封的 JSON body（`shot.panel` 等）。手拼字符串在这里不安全：路径里可能有
+# 引号或反斜杠，转义漏一处就是对端解不出的坏包。
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# 局部追加 StationsAndDesktops：诊断浮层归属的桌面/窗口站（见 window.rs 的
+# current_desktop_name）。在此声明而非改 workspace 定义，避免影响其它 crate 的配置。
+windows = { workspace = true, features = ["Win32_System_StationsAndDesktops"] }
+# `#[implement]` 宏展开引用 `::windows_core`，需作为直接依赖（版本随 windows 0.58）。
+windows-core = "0.58"
+
+# Linux（linux-host）：真字形文本后端（text/linux/）。两者都是零依赖纯 Rust；字体查找运行期
+# dlopen 系统 libfontconfig，编译期不链接任何系统库、不要 -dev 包。默认构建不编它们。
+# ttf-parser 取 0.24：与 rustybuzz 0.18 配套，不多编一份。
+[target.'cfg(target_os = "linux")'.dependencies]
+ttf-parser = { version = "0.24", optional = true }
+ab_glyph_rasterizer = { version = "0.1", optional = true }
+# 只给 emoji 簇整形（ZWJ 组合 / 国旗 / 键帽 / 肤色的 GSUB 连字），普通文字仍逐字排。
+# 0.18 与 ttf-parser 0.24 配套。彩色字形的 PNG 解码、COLR / SVG 光栅复用已有的 image 与 resvg。
+rustybuzz = { version = "0.18", optional = true }
+
+# macOS：CoreText 真字形文本后端（text/coretext.rs）。
+# （aurora-ipc 已提为通用依赖，manager_macos forwarder 的帧编码照旧可用。）
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+core-graphics = "0.25"
+core-text = "22.0.0"
+# 全局热键（global_hotkey_macos）复用 key_inject 的 VK → CGKeyCode 表（aurora-keys 已是通用依赖）。
+# AppKit 绑定：软键盘面板（mac_panel.rs）是本仓 macOS 上**唯一**由服务进程自己开的窗口，
+# 其余浮窗都在 `.app` 侧，理由见该模块头。
+#
+# ⚠️ 两个 objc2-* 都关掉 default-features 再按需开：objc2-app-kit 默认会打开 300 余个
+# feature（每个 AppKit 类一个），全开会把这个 crate 的冷编译时间拖长好几倍，而我们只
+# 用得上一个 NSPanel、一个 NSView 和它们周边那几个类型。新用到别的类时在这里补一行，
+# 别图省事改回 default。
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSGeometry",
+    "NSString",
+    "NSArray",
+    "NSValue",
+    "NSObjCRuntime",
+    "NSEnumerator",
+    "NSThread",
+    # 读系统键盘重复设置（NSGlobalDomain 的 InitialKeyRepeat / KeyRepeat），
+    # 对位 Windows 的 SPI_GETKEYBOARDDELAY / SPI_GETKEYBOARDSPEED。
+    "NSUserDefaults",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSWindow",
+    "NSPanel",
+    "NSView",
+    "NSResponder",
+    "NSEvent",
+    "NSScreen",
+    "NSColor",
+    "NSTrackingArea",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "objc2-core-foundation",
+    # NSApplicationActivationPolicy 定义在这里（setActivationPolicy 归它门控）。
+    "NSRunningApplication",
+] }
+# CGImage 的裸指针（`ForeignType::as_ptr`）——贴到 CALayer.contents 上需要它。
+# core-graphics 0.25 的 foreign_type! 就出自本 crate，版本必须与它一致。
+foreign-types = "0.5"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+dispatch2 = "0.3"
+
+[lints]
+workspace = true

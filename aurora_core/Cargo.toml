@@ -1,0 +1,175 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aurora-ids",
+    "crates/aurora-ports",
+    "crates/aurora-tsf-win",
+    "crates/aurora-utils",
+    "crates/auroraui",
+    "crates/aurora-ipc",
+    "crates/aurora-bridge",
+    "crates/aurora-config",
+    "crates/aurora-store",
+    "crates/aurora-dict",
+    "crates/aurora-engine",
+    "crates/aurora-candidate",
+    "crates/aurora-transform",
+    "crates/aurora-theme",
+    "crates/aurora-transfer",
+    "crates/aurora-ui-types",
+    "crates/aurora-host",
+    "crates/aurora-mobile",
+    "crates/aurora-ui",
+    "crates/aurora-cmdbar",
+    "crates/aurora-phrase",
+    "crates/aurora-keys",
+    "crates/aurora-quick-input",
+    "crates/aurora-softkeyboard",
+    "crates/aurora-reverse",
+    "crates/aurora-aux-code",
+    "crates/aurora-punct",
+    "crates/aurora-assoc",
+    "crates/aurora-coordinator",
+    "crates/aurora-webdata",
+    "crates/aurora-userdata",
+    "crates/aurora-wdict",
+    "crates/aurora-rpc",
+    "apps/service",
+    "apps/setting",
+    "apps/repl",
+    "apps/aurora-tools",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+# 全工作区 lint 策略。各成员 crate 以 `[lints] workspace = true` 接入（新建 crate 别忘了加，
+# 否则它不受这里约束）。
+#
+# 这里只放**全工作区一致**的规则；个别函数的例外一律就地 `#[allow(...)]` 并写明理由
+# （如 codec.rs 的线协议编码、view.rs 的绘图基元），不要为了让某一处过关而在此放行整仓。
+#
+# CI 另跑 `clippy --all-targets -- -D warnings`：任何新警告直接挂构建，不再悄悄累积。
+[workspace.lints.clippy]
+# 调试残留与占位实现不得进主干：三者当前全仓为 0 处，设为 deny 即锁住这个状态。
+# `todo!`/`unimplemented!` 尤其隐蔽——它们编译得过、跑到才 panic，是最典型的「假完成」。
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
+tracing-appender = "0.2"
+file-rotate = "0.8"
+# Error handling
+anyhow = "1"
+thiserror = "2"
+# Database
+redb = "2"
+# 字素簇分割（UAX #29）。常用字覆盖要能登记「用户看到的一个图形」——⚽️ 是两个码位、
+# 👨‍👩‍👧 是五个、🇨🇳 是两个区域指示符、1️⃣ 是三个，屏幕上都只有一个图形，分辨不出差别的
+# 用户理应都能设。⛔ 别改回自己列举 ZWJ/变体选择符规则：issue #83 的教训就是逐条列举
+# Unicode 规则必随版本静默漏一类。
+unicode-segmentation = "1"
+# Image processing。features 裁到主题背景图实际支持的格式（消费点唯一：
+# aurora-ui image_cache 的 `image::open` / `load_from_memory`（主题内嵌的 data: URI）
+# + screenshot 的 PNG 编码）。默认全格式会把
+# avif(rav1e)/exr/tiff 全家桶拖进依赖闭包，编译重且无消费者——新增格式支持时在此追加。
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+    "bmp",
+    "rayon",
+] }
+# Config
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+# 2D rendering
+tiny-skia = "0.11"
+# Windows API
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_UI_HiDpi",
+    "Win32_System_SystemServices",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Mailslots",
+    "Win32_System_IO",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_DataExchange",
+    "Win32_Storage_FileSystem",
+]}
+# Random
+rand = "0.8"
+# HTTP server (core 内嵌 web API)
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# dev 构建优化：让逐像素渲染等热路径接近 release 速度。
+# 注意 package."*" 只作用于依赖，不含本工作区代码；故本工作区代码另加 opt-level=1。
+[profile.dev]
+opt-level = 1 # 本工作区代码：基础优化，仍保留可调试性（行号/断点）
+
+[profile.dev.package."*"]
+opt-level = 2 # 所有依赖（含 tiny-skia/windows）：更高优化，编译一次后缓存
+
+# dev 变体专用 profile：继承 dev 的快编译优化（工作区 opt-level=1 / 依赖 opt-level=2），
+# 仅关闭 debug_assertions → 令 windows_subsystem="windows" 生效（无控制台窗口）。
+# 身份不靠它决定（运行期按 exe 文件名），只决定编译画像。
+# 发版用 profile：**给需要 panic=unwind 的产物**（macOS 设置程序）。
+#
+# 为什么不是所有产物都用它：核心服务与 TSF 侧用 `release` 的 panic=abort，体积更小、
+# 无 unwind 表；而设置程序在 macOS 上依赖 objc2 的 catch-all 把 Objective-C 异常转成
+# 带 name/reason/ObjC 栈的 Rust panic。abort 会让转出来的 panic 落进 nounwind 上下文，
+# 崩溃现场退化成一句 "panic in a function that cannot unwind"。
+#
+# cargo 的 profile 是 workspace 级唯一，没有 per-bin profile；用自定义 profile 区分：
+#   核心 / TSF / 便携：cargo build --release
+#   设置程序（macOS）：cargo build --profile dist -p aurora_setting
+[profile.dist]
+inherits = "release"
+panic = "unwind"
+
+[profile.dev-variant]
+inherits = "dev"
+debug-assertions = false
+overflow-checks = false
+
+# inherits 不继承 package 专属覆盖，需复刻 dev 的依赖优化档。
+[profile.dev-variant.package."*"]
+opt-level = 2

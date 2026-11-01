@@ -1,0 +1,16 @@
+[package]
+name = "aurora-ids"
+version.workspace = true
+edition.workspace = true
+
+# L0：跨层共享的标识符常量。**只放 `&str` / 数字常量，不放任何逻辑**。
+#
+# 存在的理由：这些 id 被「配置层」和「功能层」同时需要，谁定义谁就制造反向依赖。
+# 例：`quick_input.*` 的成员 id 定义在 aurora-quick-input 里时，aurora-config 为了
+# 默认值与存量迁移就得依赖 aurora-quick-input —— 基础层依赖功能层。
+# 真源仍是各功能 crate，这里只是它对外暴露的那一小撮标识符。
+
+[dependencies]
+
+[lints]
+workspace = true

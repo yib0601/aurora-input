@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# 提交前门禁：格式检查（快，约 1s）。
+# 拦住未 cargo fmt 的代码，避免 CI 的 Rustfmt job 变红。
+# 启用方式：git config core.hooksPath .githooks
+#
+# ★ 只查**本次暂存**的 .rs，不查整个工作区。
+#   仓库常有多个会话并行改不同模块（改名、重构进行中），别人的 WIP 没 fmt 会把无关提交一并
+#   拦下——被拦的人既不该去 fmt 别人正在编辑的文件，也不该 --no-verify 跳过，只能干等。
+#   只查暂存文件是 pre-commit 的常规做法，且不放松真正的约束：要提交的东西照样逐个查。
+#
+# 用 rustfmt 而不是 cargo fmt：后者没有「只格式化指定文件」的入口。
+# --edition 必须与 Cargo.toml 一致（本仓 edition = "2021"）；漏传会按 2015 解析，
+# 把合规文件误报成不合规。改 edition 时这里要跟着改。
+#
+# ⚠️ `skip_children=true` 不可省：rustfmt 默认跟进 `mod` 子模块，查一个 a.rs 会连 a/*.rs
+# 一起查，上面想避开的「被别人写到一半的文件拦下」就从子模块漏了回来。走 --config 而非
+# --skip-children：后者是 unstable 选项名，稳定版 rustfmt 不认。
+#
+# 取舍：查的是**工作区里的那个文件**，不是暂存的内容快照。`git add` 之后又把格式改坏的
+# 情况会漏——换来的是不必为每个文件开一次 `git show :file` 临时文件。
+
+ROOT="$(git rev-parse --show-toplevel)"
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.rs')
+
+if [ -z "$files" ]; then
+    echo "[pre-commit] 本次无 .rs 暂存，跳过"
+    exit 0
+fi
+
+bad=""
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$ROOT/$f" ] || continue
+    rustfmt --edition 2021 --config skip_children=true --check "$ROOT/$f" >/dev/null 2>&1 \
+        || bad="$bad  $f"$'\n'
+done <<< "$files"
+
+if [ -n "$bad" ]; then
+    echo ""
+    echo "[pre-commit] 以下暂存文件格式不符："
+    printf '%s' "$bad"
+    echo "  修复: cargo fmt（或 cargo fmt -- <文件>）后重新 git add"
+    echo ""
+    exit 1
+fi
+echo "[pre-commit] fmt OK"

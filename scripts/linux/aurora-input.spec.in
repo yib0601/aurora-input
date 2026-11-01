@@ -1,0 +1,133 @@
+# 极光输入法 (Aurora Input) 的 RPM 规格文件模板。
+#
+# 不直接 `rpmbuild -bb` 这份模板：@VERSION@ / @RELEASE@ / @ARCH@ 占位由
+# scripts/linux/package-rpm.sh 在构建期替换（版本号唯一真源是 docs/VERSION，与 .deb /
+# Windows / macOS 同源）。
+#
+# 为什么 rpm 不用 %build 段自己编：服务（Rust LTO，十几分钟）与设置程序（另一个 cargo 工作区）
+# 的构建缓存要和 .deb 共用、要能在本机增量重跑，故构建在 spec 之外由 package-rpm.sh 完成，
+# spec 只做「把已构建好的文件装进包」这一步（%install 从 package-rpm.sh 给的安装树拷贝，
+# 路径经 --define 传入，见下面 %install 段）。
+# 这与在 Fedora 上从零编一遍的产物等价，且不会在打包时偷偷换掉已经验过的产物。
+
+Name:           aurora-input
+Version:        @VERSION@
+# Release 1 = 上游代码直出；本地重打同一版本时用 RELEASE=2、3…（见 package-rpm.sh）
+Release:        @RELEASE@%{?dist}
+Summary:        极光输入法 —— Fcitx5 输入法引擎 (Aurora Input)
+
+License:        GPL-3.0-or-later
+URL:            https://github.com/yib0601/aurora-input
+
+# addon 只依赖 Fcitx5 的 .so，不依赖 -devel：这是运行时包，编 addon 的 -devel 只在构建期需要。
+Requires:       fcitx5 >= 5.0.14
+# 运行时 dlopen（aurora-ui/src/text/linux/fontconfig.rs）：ELF 里没有 NEEDED，rpm 的自动
+# 依赖算不出来，必须手写，否则缺它时启动即报「找不到字体后端」。
+Requires:       fontconfig
+# 中文渲染：服务端光栅化靠系统字体，缺中文字体时候选窗里全是豆腐块。
+Requires:       (google-noto-sans-cjk-fonts or wqy-zenhei-fonts or wqy-microhei-fonts)
+
+# 剪贴板 / 打开路径走外部命令（aurora-ui/src/linux_host.rs），缺了只是对应功能如实报错，
+# 不影响打字。文件对话框：门户与 zenity 分开推荐——门户在、但没有文件选择后端时也弹不出来。
+Recommends:     xclip
+Recommends:     wl-clipboard
+Recommends:     xdg-utils
+Recommends:     xdg-desktop-portal
+Recommends:     zenity
+Recommends:     kdialog
+# Fcitx5 前端模块：没有它们，GTK/Qt 应用里的输入法拿不到按键。
+Recommends:     fcitx5-gtk3
+Recommends:     fcitx5-qt6
+# Fcitx5 的图形配置工具。Fedora 把「改输入法列表」的界面拆到了独立包，fcitx5 本体只对它写
+# Recommends；用 --setopt=install_weak_deps=False 装 fcitx5 的机器（含本仓的 smoke-rpm.sh）
+# 会把它静默跳过，于是 `fcitx5-configtool` 落到 zenity 兜底、弹「找不到 fcitx5-config-qt」。
+# 走 Requires 而非 Recommends：用户要改输入法就离不开它，且它只是 1MB 的 Qt 界面。
+Requires:       fcitx5-configtool
+Recommends:     google-noto-color-emoji-fonts
+
+%description
+极光输入法的 Linux 版：Rust 服务负责输入逻辑与候选窗渲染，Fcitx5 addon 负责与应用对接，
+另带图形设置程序（应用菜单「极光输入法设置」，或在输入时按 Ctrl+Shift+]）。
+
+安装后重启 Fcitx5（或重新登录）即可使用：首次启动时会自动把「极光输入法」加进输入法组，
+并设好共享输入状态与默认激活，无需手动配置。
+首次安装需注销并重新登录（Fcitx5 只在启动时枚举 addon）；升级只需重启 fcitx5（fcitx5 -rd）。
+
+%prep
+# 无源码解包：全部产物由 package-rpm.sh 预置好，路径经 buildroot_src 宏传入。
+
+%build
+# 构建在 spec 之外完成（见文件头说明）。
+
+%install
+rm -rf %{buildroot}
+if [ ! -d "%{buildroot_src}" ]; then
+    echo "package-rpm.sh 没准备好安装树: %{buildroot_src}" >&2
+    exit 1
+fi
+mkdir -p %{buildroot}
+cp -a "%{buildroot_src}/." %{buildroot}/
+
+%files
+# 服务 / 设置程序 / 词库同处一个私有目录：服务按可执行文件同目录找 data/
+# （variant::install_root），addon 按固定路径拉起它们（Service/SettingsLauncher 的 AURORA_*_PATH）。
+%dir /usr/lib/aurora-input
+/usr/lib/aurora-input/aurora_input
+/usr/lib/aurora-input/aurora_setting
+/usr/lib/aurora-input/data
+
+# Fcitx5 addon。所属目录 /usr/lib64/fcitx5、/usr/share/fcitx5/* 归 fcitx5 包所有，
+# 这里只装文件、不重复声明目录（重复 %dir 会让「谁拥有这个目录」变得含糊）。
+/usr/lib64/fcitx5/libaurorainput.so
+/usr/share/fcitx5/addon/aurorainput.conf
+/usr/share/fcitx5/inputmethod/aurorainput.conf
+
+# 应用菜单 + aurora-input:// 协议 / .wpkg .wtheme 包文件关联
+/usr/share/applications/aurora-input-setting.desktop
+/usr/share/applications/aurora-input-import.desktop
+/usr/share/mime/packages/aurora-input.xml
+
+# Fcitx5 系统级默认值：吞掉它的「Wayland 诊断」通知（详见 package-rpm.sh 里的说明）。
+# 打成 %config(noreplace)：rpm 在升级时保留用户改过的版本，不拿包里的覆盖回去。
+%config(noreplace) /etc/xdg/fcitx5/conf/notifications.conf
+
+# 图标（hicolor 各尺寸 PNG + scalable SVG；目录归 hicolor-icon-theme 包）
+/usr/share/icons/hicolor/*/apps/aurorainput*.png
+/usr/share/icons/hicolor/scalable/apps/aurorainput*.svg
+/usr/share/icons/hicolor/*/mimetypes/application-x-aurora-input-*.png
+/usr/share/icons/hicolor/scalable/mimetypes/application-x-aurora-input-*.svg
+
+# GNOME Shell 扩展：GNOME Wayland 下按 RelRect / 前端折光标到 X11 需要它。
+# 装上文件不会自动启用，启用步骤见该目录 README。
+/usr/share/gnome-shell/extensions/aurorainput-caret@aurorainput
+
+%license /usr/share/licenses/aurora-input/LICENSE
+%doc /usr/share/licenses/aurora-input/NOTICE.md
+%doc /usr/share/doc/aurora-input/README.md
+
+%post
+# 升级时旧服务还在跑旧二进制：结束它，addon 在下次连不上时会自动拉起新版。
+# （已加载进 fcitx5 的旧 addon 需重启 fcitx5 或重新登录才换新。）
+# 只认包里那个路径：addon 用 posix_spawn 拉起时 argv 恰为这一个全路径、不带参数，
+# 菜单「重启服务」自拉起的再多一个 `--restarted`；`pkill -x -f` 要求整条命令行与模式
+# 完全匹配——同名的开发构建、`aurora_input restart` 这类 CLI 调用都不会被误杀。
+pkill -x -f '/usr/lib/aurora-input/aurora_input( --restarted)?' 2>/dev/null || :
+# MIME / desktop / 图标数据库在 Fedora 上由 rpm 的 transfiletrigger 自动重建，这里不重复调。
+# 只补 SELinux 标签：/usr/lib/aurora-input 不是发行版已知路径，装完 label 可能是 var_lib_t
+# 之类而拒绝执行（实测本机 /usr/lib/<私有目录> 默认得 lib_t，能跑；但别的策略集不保证）。
+if command -v restorecon >/dev/null 2>&1; then
+    restorecon -R /usr/lib/aurora-input 2>/dev/null || :
+fi
+echo "极光输入法已安装。重启 Fcitx5（fcitx5 -rd）或重新登录即可使用——首次启动会自动把「极光输入法」加进输入法组并配好共享输入状态，无需手动添加。"
+
+%postun
+# 卸载动作放 postun 而不是 preun：文件删掉之后再结束进程——addon（仍在已运行的 fcitx5 里）
+# 想重新拉起时程序已不在（它先 access(X_OK)），不会在 preun 与删文件之间又起一个孤儿。
+# $1 = 0 表示最后一次卸载（不是升级），升级时不动用户正在用的服务。
+if [ "$1" = 0 ]; then
+    pkill -x -f '/usr/lib/aurora-input/aurora_input( --restarted)?' 2>/dev/null || :
+fi
+
+%changelog
+* @CHANGELOG_DATE@ Aurora Input <noreply@example.invalid> - @VERSION@-@RELEASE@
+- 本地打包构建（版本号取自 docs/VERSION）

@@ -1,0 +1,67 @@
+//! Phase 3 验证：按钮 + 事件 + 焦点。
+//!
+//! 交互窗口：cargo run --example phase3_button
+//! 截屏：    cargo run --example phase3_button -- --screenshot artifacts/phase3.png
+//!
+//! 交互正确性（点击/捕获/hover）由 core.rs 的单元测试覆盖。
+
+use auroraui::prelude::*;
+
+fn main() {
+    let ui = Element::col()
+        .fill()
+        .padding(24)
+        .spacing(16)
+        .child(
+            Element::label("点击按钮 / Tab 切换焦点 / 回车激活")
+                .font_size(18.0)
+                .fg_role(Role::Text)
+                .width_match()
+                .height(28),
+        )
+        .child(
+            Element::hstack()
+                .width_match()
+                .height(44)
+                .child(Element::button("确定").on_click(|_| println!("确定 clicked")))
+                .child(Element::button("取消").on_click(|ctx| ctx.request_close()))
+                .child(Element::button("应用").on_click(|_| println!("应用 clicked"))),
+        )
+        .child(
+            Element::col()
+                .width_match()
+                .weight(1.0)
+                .bg_role(Role::Surface)
+                .corner(10.0)
+                .border_role(Role::Border, 1)
+                .padding(20)
+                .spacing(12)
+                .child(
+                    Element::label("卡片区域")
+                        .font_size(20.0)
+                        .fg_role(Role::AccentText)
+                        .width_match()
+                        .height(28),
+                )
+                .child(
+                    Element::label(
+                        "按钮具备 normal / hover / pressed 三态与焦点环，事件经命中测试冒泡分发。",
+                    )
+                    .fg_role(Role::TextMuted)
+                    .width_match(),
+                )
+                .child(
+                    Element::hstack()
+                        .width_match()
+                        .height(40)
+                        .child(Element::button("保存").on_click(|_| println!("保存")))
+                        .child(Element::button("删除").on_click(|_| println!("删除"))),
+                ),
+        );
+
+    App::new("Phase 3 — 按钮与事件", 560, 360)
+        .icon(brand_icon())
+        .screenshot_from_args()
+        .content(ui)
+        .run();
+}

@@ -1,0 +1,54 @@
+[package]
+name = "aurora-tsf-win"
+version.workspace = true
+edition.workspace = true
+
+# Windows TSF DLL 的 Rust 实现（替代 aurora_tsf/ 的 C++ 版）。
+#
+# 只做**宿主胶水**：COM 接口实现、Win32 调用、帧收发。把它拆成两部分是为了让逻辑
+# 可测——`skipkey` / `policy` 这些模块不碰任何 Win32，`cargo test` 在本机（Linux）
+# 就能跑；COM 那层 `cfg(windows)` 门控，在本机只做编译检查。
+#
+# ⚠ 产物必须满足 /MT 等价约束：目标机可能没装 VC++ 运行库。用
+#   RUSTFLAGS="-C target-feature=+crt-static" 构建，产物依赖只剩 kernel32。
+#   这一条与 aurora_tsf/CMakeLists.txt 的 CMAKE_MSVC_RUNTIME_LIBRARY 同源。
+
+[features]
+# dev 变体：不同的 CLSID / 显示名，使正式版与开发版可同时安装。
+# 对位 aurora_tsf/CMakeLists.txt 的 AURORA_DEV_VARIANT。
+dev-variant = []
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# 纯逻辑复用：IPC 编解码走 aurora-ipc，不再手写第二份
+aurora-ipc = { path = "../aurora-ipc" }
+tracing = { workspace = true }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+    # `implement` 是 `_Impl` trait 的开关：不开它 `TextServices/impl.rs` 整个被
+    # cfg 排除，`ITfTextInputProcessor_Impl` 根本不存在（踩过）。
+    "implement",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_TextServices",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+]
+
+[target.'cfg(windows)'.dependencies.windows-core]
+version = "0.58"
+
+[lints]
+workspace = true

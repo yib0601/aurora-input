@@ -1,0 +1,3186 @@
+# Changelog
+
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [Unreleased]
+
+## [0.31.0] - 2026-10-27
+
+### 新增
+
+- **`pointer_mods()`**：最近一次指针事件的修饰键快照（`Mods`）。给 `Element::on_context_menu` 的构建器
+  用——它的签名收不到 `PointerEvent`，「Ctrl+右键」这类区分手势此前在构建器里无从判断。只在事件回调 /
+  菜单构建期间有意义，事件之外读到的是上一次的残值。
+- **`Element::text_align` 对 `text_input` 生效**：单行输入框的 `Start` / `Center` / `End` 对齐此前
+  只有内部配置字段、没有公开入口（`text_align` 链到输入框上被静默忽略）。
+
+### 修复
+
+- 单行输入框里文末的插入光标被内框裁剪吃掉：右对齐，以及文本超宽、光标滚到视口右端时（任何对齐
+  方式都会），光标正压在内框右沿被整条裁掉。水平滚动与右对齐现在都让出一个光标宽。
+
+## [0.30.0] - 2026-10-23
+
+### 新增
+
+- **`Element::combo_box(text, options)`**：可输入的下拉框——文本框右端带下拉箭头，既能直接输入，也能从
+  列表里选，选中后把该项文字写进 `text`。点箭头或按 ↓ 展开全部选项（当前值高亮打勾）；打字按前缀（不分
+  大小写）过滤并自动展开，无匹配或删空即收起；不预选，Enter 提交的始终是框里打的字，只有用 ↑↓ 挑中一项
+  才取它（指针悬停不算挑选，点下去才算）。Alt+↓ 同样展开；只读时不展开。列表开着时 Enter / Esc 先收起
+  列表，收起后与 `text_input` 一致。选中后光标默认落到正文末尾（与网页组合框一致），`.select_all_on_pick()`
+  改为全选（经典 Win32 做法，适合字号这类多半整体换掉的字段）。`.options_signal(..)` 绑定动态选项；
+  `on_commit` / `on_submit` 等 text_input 修饰符照常可用，从列表选中一项也算一次提交。列表是树内浮层而非
+  宿主菜单——宿主菜单开着时会把字符键当助记字母吃掉，边打字边过滤就做不成。
+- **`.on_segment_change(|ctx, i| ..)`**：分段控件选中变化后的副作用钩子（同 `on_switch_change`），选项即时
+  生效的场景（换主题配置、切视图）此前只能绕道。
+- fullshowcase「表单」页新增「文本光标」卡片：闪烁风格 / 粗细 / 圆角端 / 平滑移动即调即见（经 `ThemeHandle`
+  改 `theme.input.caret_*`，对整个窗口的输入框生效）。
+- **`.numeric()`**：`text_input` / `combo_box` 只允许输入数字（与 `stepper` 的数值框同一套过滤）。
+
+### 变更
+
+- 插入光标默认宽度 2 → **1.5** 逻辑 px：宽度向下吸附到整数物理像素，2 在 150% 下落成 3 像素偏粗；
+  1.5 为 100%/125% → 1、150% → 2、200% → 3 物理像素。要恒定 2 像素可配 `caret_width = { px = 2 }`。
+- **字段控件不再叠两圈焦点**：输入框、下拉框、复选菜单、组合框、步进器、取色器触发器聚焦时由外框表达
+  （强调色 + `border_width_focus` 加粗），键盘导航时宿主不再在外面加套焦点环——此前键盘聚焦比鼠标聚焦
+  粗出一大圈。新增 `Widget::frame_shows_focus()` 供自定义控件声明同样的行为；无框输入框仍画焦点环。
+- 步进器与取色器触发器的聚焦外框补上加粗（此前仍是 1px，与同一表单里的输入框、下拉框不一致）。
+- **破坏性（行为）**：`Element::popup` 的面板设 `.width_match()` 时改为与**触发器**同宽（原先是整个窗口宽，
+  文档里专门劝别这么写）。
+- **破坏性**：`TextConfig` 新增公开字段 `trail`（右侧留白），用结构体字面量构造 `TextConfig` 的代码需补上该字段
+  或改用 `..Default::default()`。
+
+### 修复
+
+- 单行输入框正文变短后（长文本整段换成短文本、删掉行尾）横向滚动不回收：短文本缩在视口左外侧、光标
+  贴在左沿，要等下一次移动光标才跳回。滚动量现在钳在「最长一行 − 视口宽」以内。
+- 视口横移（Home 跳回开头等）或整段替换正文时，光标不再从旧屏幕位置平滑滑过去，而是随正文一起落位。
+
+## [0.29.0] - 2026-10-23
+
+### 变更
+
+- **默认主题全面换新**（Tailwind / shadcn slate 风格），目标是"不手调任何参数，组合出来就是主流观感"：
+  - 配色：所有灰出自同一条 slate 色阶（原先背景纯灰、正文偏青、边框偏蓝三套色相混用）；强调色改为
+    blue-600 `#2563EB`，主按钮白字对比度由 3.3 提到 5.2；亮色主题 hover / 按下改为**变深**（原先变亮，
+    白字对比度跌到 2.5）。暗色主题改为 slate-900 底，强调色当文字用时自动提亮一档。语义色 danger / success /
+    warning 当字用均 ≥ 3:1；实底按钮优先白字，白字对比度低于 3:1 时（暗色主题的亮绿、亮琥珀）才换深字。
+  - 次要按钮（`Intent::Neutral`）由实色灰改为文字色 8% 半透明叠层，放在卡片、窗口底、暗色表面上都成立。
+  - tooltip / toast 不再写死颜色：亮色主题取反色表面（深底浅字），暗色主题取比卡片亮一档的深灰。
+  - 尺寸：按钮、输入框、下拉框、分段控件、步进器、图标按钮默认同高 32（原先 37 / 30 / 33 参差）；
+    list / nav_row / 折叠标题行统一 36（nav 原 40）；标签条 44 → 40，标签条与内容间距 16 → 12；
+    菜单行 30 → 32、字号 13.5 → 14；输入框内距 10 → 12（与下拉框对齐）。
+  - 交互态：hover / 按下 / 选中统一为三档叠层（文字色 6% / 10%、强调色 12%），原先七种取法；菜单悬停只换底、
+    字保持正文色（与 Windows 11 一致）；下拉框悬停边框改为加深一档而非强调色；输入框聚焦边框与下拉框一样加粗。
+  - 卡片默认带 1px 分隔线色描边、标题半粗，间距 10 → 12；对话框内边距 20 → 24、标题 18/700 → 16/600。
+  - 焦点环按控件自身圆角绘制（原先按钮、输入框这类圆角来自主题的控件，环是近乎直角的框）。
+- **破坏性**：`Style.font_size` 由 `f32` 改为 `Option<f32>`，`None` = 跟随主题 `metrics.font_md`（布局期解析），
+  读取改用 `Style::font_size()`。此前默认字号写死 14，改 `font_md` 毫无效果。
+- **破坏性**：`Metrics` 删除无人读取的 `spacing` / `text_pad`，新增间距档 `space_xs/sm/md/lg/xl`（4/8/12/16/24）、
+  `control_h` / `control_h_sm`（32 / 28）、`row_h`（36）、`font_xs` / `font_xl`（12 / 20）与
+  `Metrics::control_height(font)`。旧 TOML 里的两个旧键会被静默忽略。
+- **破坏性**：删除公开常量 `ui::list::ROW_H`、`ui::nav::NAV_ROW_H`，行高改取 `metrics.row_h`。
+- `Widget` 新增可选方法 `frame_corner(bounds)`（默认 `None`）：控件自绘外框的圆角，焦点环据此贴合外形。
+- `CardTheme::pad` / `gap`、`FormTheme::gap` / `row_pad_y` 改为接收 `&Metrics`（未设时回退到间距档）。
+
+### 新增
+
+- **`Element::hstack()` / `Element::vstack()`**：带主题默认间距的横排（8、纵向居中）/ 竖排（12）。
+  `row()` / `col()` 仍是间距 0 的原语，现有布局不受影响。
+- `Palette::accent_text`（`Option<Color>`，默认由 `accent` 推导）与 `Role::AccentText`：强调色当前景（链接、
+  选中文字、描边按钮、焦点环）时的取值。约定：当填充用 `accent`，当前景用 `accent_text()`。
+- `Palette::hover_overlay()` / `press_overlay()` / `selected_soft()` 与常量 `theme::HOVER_ALPHA` /
+  `PRESS_ALPHA` / `SELECTED_ALPHA`，自定义控件的交互态可直接复用。
+- `CardTheme::bordered`（默认 `true`）、`DropdownTheme::border_hover`、`text::WEIGHT_SEMIBOLD`。
+- `InputTheme::selection_text`（`[input] selection_text`）：选区上的字色，与选区底色 `selection` 成对；
+  默认不设，选中的字仍用正文色、外观不变。深色主题配不透明白底选区时用它把选中的字换成深色。
+- `dialog_panel` 的底部按钮行没设间距时自动补 `space_sm`（只认横排；`spacing(0)` 与未设分不出，要贴紧请用
+  `spacing(1)`）。
+
+### 修复
+
+- 输入框不再吞掉 Alt+方向键 / Alt+Home / Alt+End：这些组合不是编辑键（系统编辑框同样不理），此前移了光标
+  还算已消费，应用的 `on_shortcut` 收不到，对话框没法拿它们做切栏快捷键。现在交还给应用。
+- 表格单行文本格在被同行按钮、徽章撑高的行里竖直居中，原先贴在格子顶部（`table_virtual` 带操作列时最明显）。
+
+## [0.28.0] - 2026-10-23
+
+### 新增
+
+- **`render::with_pixel_snap(mode, || ..)`**：在一段绘制里临时改用另一种像素对齐策略（线程局部、可嵌套、
+  panic 也会恢复）。画图标时包成 `PixelSnap::Off`，锁体描边、竖直线、折线弧就按同一套亚像素宽度绘制，
+  不再一部分被吸成整数像素、一部分保持原宽。以前只有进程级开关，关掉会把矩形与分隔线的对齐一起丢掉。
+- **横向与双向滚动**（#23）：`Element::scroll().scroll_axis(ScrollAxis::Horizontal | Both)`，默认仍是竖向。
+  可滚方向上子节点按内容长度测量；横条贴底、溢出时才出现，双向时两条在右下角互相让位。
+  - 滚轮：新增 `PointerKind::HWheel`（正 = 向左），Win32 `WM_MOUSEHWHEEL`、macOS 触控板横向量、
+    Wayland 横轴、X11 按钮 6/7 都已接入；Shift+滚轮滚横向；只能横滚的容器上竖滚轮也转成横滚（与
+    Qt / GTK / WinUI 一致），滚到头交给外层。
+  - 触摸（Win32）：越过拖动阈值时按位移较大的一边锁定方向，平移与松手惯性、撞界回弹都沿该方向；
+    那个方向在手指下没有可滚的容器时改锁另一边（只竖滚的页面上偏横的斜滑照样竖滚）。
+    触摸这一项只有单测覆盖，尚未在触摸屏真机上验证。
+  - 焦点跟随（`scroll_into_view`）、锚定浮层的位置补偿都计入横向偏移。
+  - `EventCtx::scroll_metrics_x` / `set_scroll_x` / `scroll_by_x` / `scroll_axis` / `scroll_bars_shown` /
+    `hscrollbar_hit_zone`，`Tree::set_scroll_x` / `set_scroll_offset`。
+
+### 变更
+
+- **触摸与惯性接口按轴参数化**（为横向滚动）：`AppHandler::on_pan(pos, axis, d)`、
+  `AppHandler::start_fling(pos, axis, v)`，新增 `AppHandler::can_pan(pos, axis)`（默认 true），`Tree::scroll_target` / `scroll_range` / `set_over_scroll` /
+  `pan_scroll` 都多了一个 `Axis` 参数。对 `PointerKind` 做穷尽匹配的代码需补上 `HWheel` 分支。
+
+- **描边与横竖线的线宽取整改为分两档**：≤ 1 逻辑像素的发丝线照旧向下取整（150% / 175% 下仍是 1 物理
+  像素）；更粗的笔画改为取最近整数、`.5` 舍去。以前一律向下取整，125% 下 1.4 逻辑像素（1.75 物理）的
+  图标笔画被削成 1，而同一颗图标里不吸附的折线仍是 1.75，粗细明显不一。通则：逻辑宽 > 1 的笔画，物理宽
+  小数部分 > 0.5 时比以前多 1 像素（100% 下 1.7 → 2；125% 下 3 → 4）。框架内可见的只有 1.5 逻辑像素的边框
+  （CheckBox 未选态、表格全选框）：125% 下由 1 变 2 物理像素、175% 下由 2 变 3。
+- **`draw_polyline` 在 D2D / GPU 后端也不再吸附**：这两个后端用的是 trait 默认实现（逐段转 `draw_line`），
+  横竖段会被吸、斜段不会，同一条折线一段粗一段细，且与软后端（整条路径描边）不一致。现在三个后端一样。
+- **四角不同的圆角描边（`Element::corners(..)` + 边框）线宽也取整**：以前它走折线环带，不经过线宽取整，
+  125% 下 1 逻辑像素的边是 1.25 物理像素、内侧带一道淡边，与四角相同的边框（1 物理像素）粗细不一；GPU 后端
+  拆象限画时又已取整，三个后端也不一致。现在同一规则。
+- **横竖线不再有"略宽于整像素就保留原宽"的特例**：它原本只为多边形逐行扫描的行间缝而设，却对所有横竖线
+  生效（150% 下 1.36 宽的竖线画成 2.04，同宽的边框是 2）。扫描填充改为自己关掉对齐，`draw_line` 一律取整。
+
+### 修复
+
+- **D2D 后端的裁剪区在 `with_pixel_snap(Off)` 里会落到半像素上**：它经由受 `PixelSnap` 控制的对齐函数
+  取整，作用域一关，150% 下奇数逻辑坐标的裁剪边就停在 `n.5` 物理像素，按像素中心判定差出一列，与软 / GPU
+  后端不一致。现在与软后端一样直接按 `Rect::scaled` 取整，不受该策略影响。
+- **表格全选框的半选横杠比对勾细**：横杠走 `draw_line`，线宽被取整，对勾是折线、不取整，125% / 175%
+  下横杠比对勾细半个物理像素，切换全选 / 半选时粗细跳一下。横杠改用折线，与对勾、CheckBox 同一粗细。
+
+## [0.27.1] - 2026-10-22
+
+### 修复
+
+- **`list_signal` 看得见滚动条却滚不动**：它的容器是 `Element::scroll()`，内部却用列表驱动 widget 把
+  `ScrollWidget` 整个换掉了——布局仍是滚动容器（照样裁剪、画滚动条），处理滚轮与拖动滚动条的控件没了。
+  现在列表驱动接管原 widget 并转发事件与交互钩子；另在 `set_widget` 加了调试断言，滚动容器的
+  `ScrollWidget` 被直接顶掉时当场报错——`Element::scroll().clickable()` 以前悄悄滚不动，现在 debug 下会断言失败。
+- **单行省略的 Label 配说明型 tooltip 弹不出来**：`max_lines(1)` + `truncate(..)` 的 Label 在没截断时一律
+  不弹 tooltip，本意是给"看全文"提示去重，却把内容不同的说明（版本详情之类）也压掉了。现在只有提示与
+  正文相同时才按截断状态门控。新增 `Widget::display_text` 供该判断。
+
+## [0.27.0] - 2026-10-22
+
+### 变更
+
+- **标签条放不下时收起文字**：`tabs_icons` / 带图标的 `tabs_items` 在内边距收到下限仍放不下时，从最右一项起
+  逐个把未选中的标签收成只剩图标，收到放得下为止；选中项始终保留文字，收起的标签悬停用 tooltip 显示全文。
+  以前是末项被直接截掉一截。没有图标的标签条维持原行为。
+- **容器与选项型构造器的文案收 `t!`，换语言即跟随**：以下参数由 `impl Into<String>` 改为
+  `impl Into<TextContent>`（选项型由 `Vec<impl Into<String>>` 改为 `Vec<impl Into<TextContent>>`），控件内部存
+  `TextContent`，在测量 / 绘制 / 命中 / tooltip 时现取：
+  `Element::card`、`setting_row`、`setting_row_desc`、`field`、`dialog_panel`、`collapsible`、`accordion`、
+  `accordion_multi`、`chip`、`check_menu`、`dropdown`、`segmented`、`list`、`list_pill`、`list_icons`、`tabs`、
+  `tabs_icons`、`tabs_pill`，以及 `Element::tooltip`。以前这些只能传定格的 `String`，切换语言后不变。
+  传 `String` / `&str` / `Vec<String>` / `Vec<&str>` 的既有调用不用改；`dropdown_signal(Signal<Vec<String>>, ..)`
+  与 `Dropdown::new_reactive` 不变。单行截断缓存本就按文字散列做键，译文一变即重新截断。
+  表单行限行时挂的"看全文" tooltip 不再在构建期定格，与 label 一起跟随语言。
+- **破坏性**：底层控件构造器同步改为 `impl Into<TextContent>`：`TabItem::new`、`ListRow::new`、
+  `CollapsibleHeader::new`、`AccordionHeader::new`（原收 `String`）、`SegmentedControl::new`、`Dropdown::new`
+  （原收 `Vec<String>`）、`CheckMenu::new`。直接传 `String` / `&str` 照常编过，但原先 `TabItem::new("x".into())`
+  这种写法会因类型推断不出而报 E0283，去掉 `.into()` 即可。
+- **破坏性**：公开字段 `TabItem::label` 由 `String` 改为 `TextContent`（读当前文字用 `.resolve()`）；
+  `Node::tooltip` 由 `Option<String>` 改为 `Option<TextContent>`。`TextContent` 新增 `Clone`。
+
+## [0.26.0] - 2026-10-21
+
+### 新增
+
+- **macOS 接收「用本应用打开」的文件**：Finder 双击关联文件、「打开方式」、拖到 Dock 图标发的是 `odoc`
+  Apple Event，不进 argv。开了 `App::single_instance` 时，库装一个实现 `application:openURLs:` 的 app delegate，
+  把文件按 `[exe, 路径…]` 交给 `on_second_instance`（冷启动与已在运行时都走这条），与 URL scheme 同一通路。
+- **`Element::reveal_when(Signal<u64>)`**：计数信号一变就把该元素滚进祖先滚动容器的视口（不动焦点），
+  规则同 `focus_when`（初值不触发、同一次事件里重建的节点照样认这次触发、不可见的等出现再滚）。
+  用于让新加入或被程序选中的列表行可见。
+- **流式容器 `Element::flow()`**（`Layout::Flow`）：子节点从左往右排，一行放不下就折到下一行，行内默认纵向
+  居中；`spacing` 设同行间距，新增 `Element::run_spacing` 设行间距。单个子节点最宽占满一行（长文本据此换行 /
+  截断，不再把容器撑出界）。适合徽章、标签这类数量与宽度都不定的一排。
+- **动效档位 `MotionLevel { Full, Reduced, Off }` 与减弱策略**：`Reduced` 只让位移类补间（`Transition::movement()`
+  标记的：开关滑块、分段胶囊、标签页指示条、拖动排序、富文本卷帘、光标滑行）瞬时到位，颜色与透明度渐变保留。
+  默认随系统：系统要求减弱动效时落到 `App::reduced_motion(level)` 指定的档位（默认 `Reduced`），不要求时 `Full`；
+  `App::motion(level)` 强制档位，`App::animations(bool)` 是它的简写。运行期 `anim::set_motion_level`。
+  `MotionLevel` 进 `prelude`。
+- **弹簧 `anim::Spring { response_ms, damping }`**（预置 `SMOOTH` / `SNAPPY` / `BOUNCY`）与 `Transition::retarget_spring`：
+  解析解、只依赖帧时钟（截图可复现）；中途改向**继承当前速度**，不再有"速度突然归零"的折角。
+- **`Easing::CubicBezier(x1, y1, x2, y2)`**（同 CSS）与预置 `Easing::STANDARD` / `DECELERATE` / `ACCELERATE`。
+- **`Transition::settle(v)`**：瞬时落定且保留 `movement` 标记（用 `Transition::new` 重建会丢标记）。
+- **`Lerp` 扩到 `Point` / `Size` / `Rect` / `Insets`**；新增可选方法 `Lerp::delta_ratio` 供弹簧改向换算速度。
+- **主题动效 token**：`[anim] easing` / `spring`（`AnimTheme::easing()` / `spring()`，回退 `STANDARD` / `SMOOTH`）。
+- **进出场过渡 `Element::transition(Presence)`**：节点显示时淡入/滑入，隐藏时先淡出/滑出再消失
+  （`Presence::fade()` / `.slide(dx, dy)` / `.duration(..)`，预置 `popover()` / `dialog()`）。离场期间继续占位但
+  点不到、拿不到焦点，播完才让出空间；祖先离场时子孙里声明了过渡的节点一起离场。`Presence` 进 `prelude`。
+  内置接入：对话框遮罩淡入 + 面板从 0.96 倍放大、`popup` 浮层默认淡入轻落、下拉 / 右键 / 菜单栏菜单与悬停提示淡入。
+  新增 `Node::layout_visible()`（布局与绘制看它，命中与焦点仍看 `effective_visible()`）。
+- **展开过渡**：`Presence::expand()` / `Presence::reveal()`（淡入 + 展开）让占位高度随进度伸缩、子树裁到
+  当前高度；`collapsible` / `accordion` 的内容默认 `reveal()`，标题头箭头旋转过渡。
+- **`Element::animate_height()`**：内容自然高度变化时占位高度平滑过渡（只管高度）；子树里有展开在进行时
+  直接跟随，不另起过渡。
+- **布局过渡 `Element::animate_layout()`**（FLIP）：布局位置变了就从旧位置滑到新位置，命中与焦点按最终布局。
+  滚动、窗口改尺寸、展开 / 高度过渡推着走的位移不过渡（途中遇到时正在播的那段照常收尾）；父子都声明时子只过渡相对父的部分；中途再变从当前
+  视觉位置接着走、继承速度，不留残余偏移。
+- **`list_signal` 按键复用行节点（keyed diff）** 与 **列表项动效 `Element::animate_item()`**：键在且数据没变的
+  行原样保留节点、按新顺序重排（焦点与控件内部状态都留着），数据变了的行重建，新键建行，消失的键删行；键有重复
+  时退回整批重建。行上挂 `animate_item()`（= `transition(Presence::reveal())` + `animate_layout()`）即得增删
+  淡入淡出、重排滑动；删除的行先留在原处播离场、播完才移除，途中又加回来就地复活。行的构建期信号按行回收。
+- **`Presence::none()`**：不过渡、一帧到位，用来关掉控件默认带的过渡。
+- **内容切换 `Element::switcher(key, build)`**：`key` 变了就重建内容，旧内容淡出、新内容淡入，两者在同一处
+  交叠，旧的播完才回收（连同构建期信号）。按内容取尺寸、不强加撑满；内容自己声明了 `transition` 的照用；
+  `key` 写入相同值不重建。
+- **`Widget::settle_offscreen()`**（默认空实现）：节点不在绘制路径上时，每次结构变化后调用，供控件把跟随
+  状态的补间就地落定——隐藏期间状态被程序改过，露出来时不补播过渡。
+- **样式过渡 `Element::animate_style()`** 与运行期样式 **`Element::bg_when(|| 颜色)` / `opacity_when(|| 值)`**：
+  背景色与不透明度随状态变，变化平滑过渡（对应 CSS `transition`），`ctx.set_bg` 的变化同样过渡。闭包的值进
+  结构签名，读者节点不在事件脏区里也会刷新。颜色与透明度不是位移，减弱档照常过渡。
+- **缩放过渡 `Presence::scale(from)`** 与 **`Canvas::push_layer_scaled(opacity, bounds, scale, pivot)`**：子树先按
+  原大画进离屏层，合成时绕支点缩放（软件后端双线性、GPU 后端按缩放后的 quad 线性采样；D2D 忽略缩放）。
+  只支持缩小进场（`from` 钳到 0.5～1：合成不带祖先裁剪，放大会越出滚动视口）。
+  对话框面板默认从 0.96 倍放大进场（原为自下 12px 升起），`Presence::dialog()` 预置同步改为淡入 + 缩放。
+- **`Canvas::push_layer_in(opacity, bounds)`**：离屏层可只开内容所在范围（默认退回整窗层）。软件后端复用局部
+  重绘的子缓冲 + 原点机制，范围按 4 逻辑像素网格对齐（25% 步进的缩放下原点落在整像素上，合成不重采样；其他
+缩放如 110% 退回整窗层，与直接绘制一致）；D2D 传给
+  `contentBounds`。节点的 `opacity` / 进出场淡入淡出、菜单与悬停提示的淡入改用它：一个小浮层淡入不再每帧分配并
+  合成整窗缓冲（1920×1080@150% 约 18MB）。
+- **调试与截图**：环境变量 `WINDUI_ANIM_SCALE=<倍数>` 把所有补间放慢；截图参数 `--anim-at <ms>` 截"最后一次
+  合成交互之后第 ms 毫秒"那一帧（钉住时钟，结果与机器快慢无关），用于过渡中间帧的视觉回归。
+
+- **`Element::marks(Signal<Vec<TextMark>>)`：输入框按区间挂底色**（Qt `setExtraSelections` 的最小形）。查找替换把
+  整框里所有命中涂黄，画在文字与选区下面，不接事件、不改正文。区间是字符索引（与光标 / `select_range` 同一单位），
+  越界钳制；`bg: None` 取新主题槽 `InputTheme::mark`（`[input] mark`，默认 `palette.warning` 的 40% alpha）。`TextMark` 进 `prelude`。
+- **`Element::select_when(trigger, range)`：运行期设选区**。复用 `focus_when` 的计数器触发，兑现时聚焦并选中
+  `range` 当时的区间——「跳到第 k 处」不必再靠重建元素或「读走即清」的一次性请求。另有不夺焦点版
+  `Element::select_without_focus_when`：焦点留在查询框，Enter 一次跳一处，正文框只亮出当前这一处。
+  `fullshowcase`「表单」页加「查找命中」卡片演示。
+
+- **`PickDialog::last_pick_failed()`：分清「文件选择框没弹出来」与「用户取消」**。两者原先都只回 `None`，
+  应用无从提示。目前仅 Linux 会判出失败：rfd 的门户与 zenity 都不可用时秒回 `None`、多选秒回空列表（耗时 < 300ms 即判失败），
+  auroraui 先试 kdialog（rfd 不支持它），仍不行才置位并记 `warn`。其它平台恒 `false`、行为不变。
+
+### 修复
+
+- **图片释放后渲染缓存随之放掉它的位图 / 纹理**：D2D 位图缓存与 GPU 纹理缓存按图片 id 存，id 永不复用，
+  图片释放后那一条再也不会命中，却要等积满（64 条或 48 / 64 MB）才随整批清空——应用每换一份内容就重建一次
+  图标，关掉的内容的图标一直占着显存 / 内存。缓存条目现在带一个不延长图片寿命的存活探针，D2D 在帧首、
+  GPU 在帧末丢掉已释放图片的条目。
+
+- **文本框失焦即收起选区**：同一时刻只有拿着焦点的文本框显示选区，不再在几个框里同时亮着好几段。
+  新增 `Widget::focus_lost` 钩子（`Tree::set_focused` 移走焦点时调用，不分原因，只做视觉收尾），
+  `TextInput` 借它清掉选区锚点、保留光标位置；窗口失活不算失焦，切回来选区仍在。
+  `select_without_focus_when` 摆出的选区不受影响（那个框本就没有焦点）。
+
+- **Windows 子窗居中落在发起窗口所在的屏**：`centered(true)` 的子窗即便没有 `owned`，也居中在发起开窗的窗口上
+  （并钳进那块显示器的工作区），主窗在副屏时设置 / 安装这类窗口不再跑回主屏；主窗与托盘开的窗口居中在鼠标所在的显示器。
+
+- **离场播完让出空间后每帧仍要一次重排，回不到空闲**：让位那次重排里父容器已不再测量这个节点，"只因离场
+  才占位"的标志没人清，每帧绘制都再请求一次重排。现在请求时即清。
+- **投影外延估算偏小**：软件后端的投影是 3 趟 box-blur、尾巴伸到 3×模糊半径，脏区与剪枝却只按 1×算，
+  投影挪走或淡出后局部帧可能留下一圈极淡的残影。现按 3×算（`render::shadow_reach`）。
+- **只经过一次整窗帧的显隐变化不触发交互态复位**：整窗帧补布局时直接覆盖结构签名、不做比较，于是
+  多窗口下别的窗口写了共享信号（本窗只收到一次整窗失效）这类路径上，被隐藏控件的悬停 / 按下态与补间
+  复位被跳过，重新显示时闪出旧态。现在两条布局路径共用同一处签名比较。
+- **键盘路径上写信号，别的控件不刷新**：按键事件里写信号原先一律只重绘发起者自己。于是 Tab 到按钮按空格、
+  空格切换复选框，回调改的状态文案停在旧值；`text_input` 的 `on_submit` / `on_commit` / `on_nav_key` 回调写的
+  命中计数、另一个框的标记也一样，直到下一次碰巧整窗重画。现在非文本控件的按键写信号按整窗重绘（与鼠标点同一
+  控件同口径），文本框打字仍走局部重绘，它转交给应用的回调里写过信号则升整窗。
+- **同一元素挂两个定向送焦点触发器（`focus_when` / `focus_select_all_when` / `select_when` / `select_without_focus_when` 任意两次）时后挂的
+  静默顶掉先挂的**：现在 debug 构建下断言。
+
+### 变更
+
+- **标签页切换默认带过渡**（可见行为变化）：`tabs` / `tabs_icons` / `tabs_pill` / `tabs_items` 切换时旧页淡出、
+  新页淡入，并按选中下标的增减横向滑动 24px（减弱动效档只淡入淡出），过渡期间两页各开一层离屏层。只在切页时
+  播，外层对话框、手风琴开合时页面跟着外层走、自己不动。页面自己声明了 `transition` 的照用；要关掉就给页面挂
+  `.transition(Presence::none())`。
+
+- **破坏性**：`Element::list_signal` 的约束变为 `T: Clone + PartialEq`、`K: Eq + Hash + Clone + 'static`
+  （按键比对要判断同一个键的数据变没变）。数据类型补 `#[derive(PartialEq)]` 即可。
+  行为也随之变了：数据相等的行原样复用、不再重建，`row_fn` 在构建时读的外部状态不会因为
+  `data.set(data.get())` 而刷新——这类依赖放进 `T`，或在行内绑信号（`bg_when`、`visible_signal` 等）。
+
+- **复选框动效**：勾选时方框先铺底色、对勾随后沿笔画画出（取消勾选倒放），不再是底色与对勾一起淡入；
+  悬停与按下有叠层反馈，按下时方框缩小、松开弹回（减弱动效档下缩放瞬时到位）；勾到一半又取消时只倒放走过的那段。
+  在别处按下、拖到复选框上松开不再切换它。
+- **系统"减弱动效"的默认处理变了**：Windows 关掉「显示动画」以前是全关，现在落到 `Reduced`（颜色渐变照常，
+  只在交互时短暂播放，空闲仍零 CPU）；要旧行为写 `.reduced_motion(MotionLevel::Off)`。macOS 以前不读系统设置
+  （恒全开），现在读「减弱动态效果」；Linux 现在读 GNOME `org.gnome.desktop.interface enable-animations`。
+- **破坏性**：`WindowConfig.animations: Option<bool>` 换成 `motion: Option<MotionLevel>` + `reduced_motion` +
+  `screenshot_anim_at`；`Easing` 因新增带 `f32` 的 `CubicBezier` 不再实现 `Eq`；`Lerp` 的约定放宽为 `t` 可越出
+  `[0,1]`（弹簧与回弹曲线会过冲，整数型四舍五入）。
+- **`Widget::keys_damage_self_only()`（新增，默认 = `accepts_text()`）与 `EventCtx::app_callback`**：自定义控件的
+  按键写信号默认整窗重绘；收字控件可覆盖为 `true` 保留局部帧，并把转交给应用的回调放进 `ctx.app_callback` 里跑。
+  自定义的非文本控件若依赖「按键只重绘自己」的旧行为做性能优化，需覆盖它并自行声明覆盖全部读者的脏区。
+
+## [0.25.0] - 2026-10-19
+
+### 新增
+
+- **焦点查询 `EventCtx::focused_node` / `focus_accepts_text` / `focus_within`，`ShortcutCtx::focused_node` /
+  `focus_accepts_text`**：问「键盘焦点在哪、是不是在输入框里」（网页的 `document.activeElement`）。
+  「焦点在输入框里时全局快捷键让路」从此一行判据，不必在应用里给每个输入框套回调维护焦点镜像。
+  「收字」由新增的 `Widget::accepts_text()` 回答（默认同 `accepts_ime`；`TextInput` 只看 `read_only`，
+  不依赖首帧才有的光标）。
+- **`auroraui::VERSION` 与 `EventCtx::active_renderer()`（`ActiveRenderer`）**：框架版本号，以及窗口实际
+  落成的渲染后端（`Software` / `Direct2D` / `Metal`）——`Renderer::Auto` 回退、运行中设备丢失降级都如实反映，
+  供「关于」页显示。平台层经 `AppHandler::set_active_renderer` 告知宿主。
+- **自由摆放 `Element::place(x, y)` / `place_fn(|avail| Rect)`（`Placement`）**：`stack` 的直接子节点按坐标
+  落位（CSS `position: absolute`）。`place_fn` 的矩形由闭包按父内容区尺寸算出，读信号即可运行期改位置与
+  宽高；不设尺寸的 stack 撑到包住所有子节点，放进滚动容器即得内容总高。`fullshowcase`「布局」页加演示卡片。
+- **四角各自半径 `Corners`、`Element::corners`、`Canvas::fill_round_rect_corners` /
+  `stroke_round_rect_corners`**：CSS `border-radius` 四值形式，节点背景、边框、焦点环按此绘制（投影与图片裁剪
+  按最大半径近似）。四角相同时与统一半径版逐像素一致；不同时软件 / D2D 走 `fill_polygon` 路径光栅化，GPU 按
+  象限裁剪拼接原生圆角矩形（渐变与抗锯齿同统一半径版）。
+- **其余新增公开项**：`Tree::focused_node` / `accepts_text`、`ActiveRenderer::name` / `is_gpu`、`scrollbar::track_w` /
+  `margin` / `hit_w`；`Corners`、`ActiveRenderer` 进 `prelude`。
+- **主题槽 `Theme::modal.scrim`（`Role::Scrim`）、`TooltipTheme::delay_ms`、`ScrollbarTheme::width` /
+  `margin` / `track`**：对话框遮罩色、提示弹出延时、滚动条宽度 / 留白 / 轨道色不再写死，默认值与原先一致。
+
+### 变更
+
+- **`Element::text_input` 与 `Element::tag_field` 的占位提示改收 `impl Into<TextContent>`**：传 `&str` /
+  `String` 照旧；传 `Signal<String>` 则提示随状态变，传 `t!(..)` 则随语言切换。`TextInput::new` 同步改签名。
+- **`Role` 新增 `Scrim` 变体**：对 `Role` 做穷尽 `match` 的代码需补一支。
+- **`Style` 新增公开字段 `corner_radii`、`ScrollbarTheme` / `TooltipTheme` 新增字段、`Theme` 新增 `modal`**：
+  用结构体字面量构造它们的代码需补上新字段（或 `..Default::default()`）。
+- **`Node` 新增 `place` 字段及 crate 私有字段**：外部不能再用结构体字面量构造 `Node`，请经 `Element::build`。
+- **滚动条常量 `VScrollbar::TRACK_W` / `MARGIN` / `HIT_W`、`core::scrollbar::TRACK_W` / `MARGIN` 退为「默认值」**：
+  宽度现可由主题改，据此算让位或命中区的代码请改用 `scrollbar::track_w()` / `margin()` / `hit_w()`。
+  菜单浮层的滚动条暂未接主题。
+
+### 修复
+
+- **在焦点输入框自己的回调里调 `focus_accepts_text` 恒为 false**：回调期间该控件被临时换出，现记下换出前的答案。
+
+## [0.24.0] - 2026-10-17
+
+### 新增
+
+- **`App::ime_inline`：Windows 内联组合串（可选，默认关）**。请输入法别画组合窗，组合串由输入框自己画在框里
+  （跟随控件字体与主题，深色主题下不再是白底浮层），候选窗仍由输入法画。开启后经 TSF 的输入法配置的下划线
+  线型、粗细与颜色照着画（从 CUAS 的临时上下文读 `TF_DISPLAYATTRIBUTE`），读不到时退回细实线 + 选中分句加粗。
+  默认关是因为个别输入法不理会请求，会出现两份组合串。
+- **`Preedit::spans`（`PreeditSpan` / `UnderlineStyle`）**：输入法给的合成串逐段样式，`TextInput` 照着画；
+  空时保持原画法。自绘文本控件可读它跟随输入法的样式。
+- **`App::ime_interrupt`（`ImeInterrupt`）**：输入法组合中（拼音未选词）按下鼠标时，未上屏的串怎么处理。默认
+  `Commit` 先上屏到原位置再处理点击（与 Chrome / Firefox 一致），`Cancel` 丢掉，`Ime` 交给输入法自己决定。
+  各家输入法原本各行其是（微软拼音上屏、有的让组合跟着新光标走），默认值替它们统一。目前只在 Windows 生效；
+  在收到点击之前就自己上屏的输入法（微软拼音）不受 `Cancel` / `Ime` 约束。
+- **`App::window_outline` / `Window::window_outline`（`WindowOutline`）**：无边框窗口自画 1px 外框的取色策略。
+  默认 `Auto` 保持原行为（Win10 仿 Win11 的灰 / 强调色，Linux 取主题边框色）；`Theme` 跟随应用主题、`Color`
+  固定色、`Off` 不画。主题色在绘制期现取，换肤当帧跟上；平台说不画（最大化）时任何策略都不画。
+- **`Canvas::fill_polygon` 多边形填充**：多个闭合轮廓、非零环绕规则（内圈反向即洞），凹形与自交照常。
+  软件后端与 Windows D2D 后端为一次性路径光栅化（双向抗锯齿、支持渐变）；trait 默认实现逐物理行扫描，
+  GPU 后端暂用它兜底（行与行首尾相接、分数缩放下无横纹，渐变退为 `paint.color` 的纯色）。`fullshowcase`「图片」页加演示卡片。
+- **浮点文字测量 `Canvas::text_advance` / `TextEngine::advance`**：单行宽度（逻辑单位、含尾随空白、不取整），
+  与绘制同一次排版。`measure_text` 的整数宽逐字累加会漂，自绘排版建字宽表用这个。DirectWrite / Core Text /
+  Linux 三个引擎与 D2D / GPU / 软件三个画布都已覆盖，附跨引擎契约测试。
+- **`EventCtx::release_focus`**：控件交出自己的焦点（网页的 `blur()`），典型用法是 `on_commit` 里提交后失焦。
+  事件回调与 `on_update` 里都能调；事件回调里交出时失焦通知照发（输入框不会因此提交两遍），`on_update` 里不发。
+- **`Element::focus_when` / `focus_select_all_when`**：计数信号的值每变一次，把焦点送进该元素（可选全选）。
+  给常驻输入框用——它的 `autofocus` 开机时就用掉了。隐藏期间触发的等它显示那一帧兑现；同一次点击里重建了
+  输入框也照样生效。
+- **`Element::cursor(CursorShape)`**：任意元素指定悬停光标，不改变命中；`Arrow` 可压掉祖先给的手型，子控件
+  自己的形状仍优先。框架按钮仍默认箭头（与原生一致），要网页手感自己挂 `Hand`。
+- **`CursorShape::SizeAll`**：四向移动光标（CSS `move`），给浮动面板标题条。Windows `IDC_SIZEALL`、X11
+  `XC_fleur`、Wayland `move`；macOS 没有公开的四向箭头 API，取系统自带的 HIServices `move` 光标资源（读不到时退回张开的手）。
+- **主题槽 `Theme::scrollbar`（`thumb` / `thumb_active`）与 `TooltipTheme::border` / `border_width`**：滚动条
+  滑块色不必再借 `palette.border`（改它会连带改掉输入框描边等）；提示浮层可描边，默认不描、宽度默认 1 物理像素。
+- **`MenuRequest::new` + `EventCtx::show_menu_request`**：按完整请求弹出菜单，覆盖便捷方法给不到的组合。
+  典型用法是把 `click_through` 设为 `false`：右键菜单开着时点别处只收起、不触发底下的控件。
+  按钮弹菜单用 `MenuRequest::below(控件矩形, 项)`：下方放不下时翻到控件顶边以上，不遮住控件。
+- **`Element::menu_bar_tracked`**：同 `menu_bar`，并把菜单栏是否被激活（单击 Alt / F10 待命、Alt+助记键或点击
+  展开）同步进一个 `Signal<bool>`。给平时把菜单栏让给别的内容、需要时才露出来的紧凑标题栏用。
+- **`MenuItem::icon_image`**：菜单项用位图作图标（单色模板，只取 alpha），按本项文字色着色，禁用变灰、悬停随强调色；
+  与字形图标同占图标列。
+- **`SegmentTheme::pill_inset`**：分段控件选中段与外框的留白（默认 2，行为不变）。设为 0 时贴边铺满，只有两端的段
+  带圆角并与外框吻合。
+
+### 变更
+
+- **`Preedit` 新增公开字段 `spans`**：用结构体字面量构造 `Preedit` 的代码需补上 `spans: Vec::new()`（或
+  `..Default::default()`）。
+- **Windows：焦点不接受输入法时关闭输入法**。新增 `Widget::accepts_ime`（默认 = 报了光标 `ime_caret`）；焦点
+  控件不接受（按钮、列表、无焦点、只读文本框）或是密码框时，窗口摘掉输入法上下文，回到普通文本框再挂回——
+  此前中文输入法在按钮上照样能打出无处可去的组合串，密码框会被联想记忆，只读框能组完一串才被吞。
+  **自绘文本控件须覆盖 `ime_caret`，或在没有光标可报时覆盖 `accepts_ime` 返回 `true`**，否则在 Windows 上收不到
+  输入法输入（见 API_GUIDE §9.1）。开关在按键 / 点击分发之后当场同步。组合中焦点换到别的控件、或控件变得不
+  接受输入法时取消这次组合（此前后续按键会继续组合，上屏到新焦点）。
+
+### 修复
+
+- **Windows 输入法上屏改为当场送进控件**：`WM_IME_COMPOSITION` 带上屏结果时直接读出 `GCS_RESULTSTR`、作为
+  `Key::Char` 送给焦点，不再经系统排队的 `WM_IME_CHAR` → `WM_CHAR`——排队的字要等当前消息处理完才到，
+  组合中点击时会插到点击后的新光标处。
+- **Windows 候选窗首次弹出落在上一次的位置**（清风、Rime 等经 TSF 的输入法）：光标位置此前只在组合中上报，
+  这类输入法在组合开始那一刻就按手里的旧位置弹候选窗。现在光标一动就报（位置不变的帧不碰输入法）。
+- **Windows 输入法候选窗定位**：位置改在绘制之后上报（此前报的是上一帧的光标，光标刚滚回可视区时候选窗
+  落到客户区左上角），尺寸变化同步出帧后同样重报；开始组合时把输入框视口拉回光标；候选窗在原有的
+  `CFS_CANDIDATEPOS`（中文 TSF 输入法只认它）之外再设 `CFS_EXCLUDE` 避开光标所在的一段，日韩输入法在下方放
+  不下时不再翻上来盖住正在输入的那一行。
+
+- **分数缩放下局部重绘错位 1 物理像素**：`Rect::scaled` 改用半数一律往 +∞ 的取整。局部帧把坐标减去脏区
+  原点后再物理化，脏区左 / 上方的节点坐标是负数，`f32::round` 在零两侧取整方向相反，于是同一条边在局部帧
+  与整窗帧里差 1 像素，125% / 150% / 175% 下光标旁的字一淡一深。非负坐标的取整结果逐值不变；软件后端画图片
+  的居中落点同样修正。
+- **菜单 `min_width` 被 140 下限压住**：调用方给的宽度现在以它为准，比 140 窄的下拉框弹出的面板与控件
+  同宽；不给（0）时仍兜 140。
+- **设了行距的输入框插入符比字高出一截**：插入符改为字身高，并按画字的同一条基线放（DirectWrite 的
+  UNIFORM 行距把基线放在行高 0.8 处，多出的行距并不上下均分）。未设行距时逐像素不变。
+- **macOS 文字行度量**：Core Text 引擎补上 `line_metrics`，此前走「行高 × 0.8」的近似，与它实际的居中
+  排版不符。`RichText` 同行混字号的基线对齐与上面的插入符定位在 macOS 上随之准确。
+- **Windows 软件渲染局部帧里文字竖直错位**：DirectWrite 软件路径先把文本高度钳到画布高再居中，局部重绘
+  的子画布只有脏区那么高，同一行字在局部帧里会比整窗帧低几个像素（行距大、脏区只罩住光标时）。改为按
+  完整高度定位、只为可见行分配位图。
+- **菜单收起后弹出它的按钮仍亮着悬停态**：菜单开着时指针事件全归浮层，树上的悬停停在开菜单前的
+  节点上；点外面（穿透与否）/ 点中项 / Escape 收起菜单后，现在按当下指针位置重判一次悬停，不再等
+  鼠标再动一下，悬停提示也随之重新计时。
+- **自绘标题栏右键要点两次才出菜单**：菜单打开时原先不请求重绘，靠紧随的抬起 / 移动事件顺带出帧；标题栏的右键是
+  平台合成的单个按下，之后没有客户区事件，菜单开了却不上屏。现在打开菜单时整窗重画。
+- 测试卫生：i18n 测试的临时目录在用例结束时删除，不再每跑一遍就在系统临时目录里留下一撮。
+
+## [0.23.0] - 2026-10-12
+
+### 新增
+
+- **`Theme::font_family` 界面默认字族**：所有没显式设 `font_family` 的文字（含框架自绘的右键菜单、
+  tooltip、toast，以及 Windows 输入法自己画的组合串）用它，`None` 时仍是平台默认。是兜底不是覆盖，
+  显式设过的节点不受影响；经 `ThemeHandle` 运行期更换，下一帧全部重排重绘。三平台均生效。各引擎与
+  `RichText` 的布局缓存改按「实际字族」做键——此前拿 `None` 本身做键，换默认字族后会沿用旧字体的宽度。
+  菜单开着时换字族（如粘滞的「字体」菜单项），各级面板按新字体重新测宽、子菜单重新贴边。
+- **字体查询 `text::family_available` / `text::font_coverage`**（仅 Windows）：本机装没装某个字体、它覆盖
+  哪些 Unicode 码位（全部平面，返回 `FontCoverage`，本地 `contains` / `missing` 查询）。名字解析与
+  `font_family` 绘字同源，带字重后缀的 GDI 名（「思源宋体 SemiBold」）同样认。供应用自建字体回退栈：
+  启动时每款取一次覆盖表，排版时按字选族、分段交给各自的 `font_family`。
+- **示例 `font_switch`**：按钮与粘滞右键菜单两条入口换界面字体，含钉死字族的对照行、输入法组合串与
+  字体查询；`-- --renderer gpu` 走 GPU 后端对照。
+- **`Element::read_only`**（`text_input` 专属，可与 `multiline` / `wrap` 组合）：只读文本框——可聚焦、
+  点选 / 拖选 / 双击选词、Ctrl+A / Ctrl+C、右键菜单只列「复制」「全选」；键入、输入法、退格 / Delete、
+  剪切、粘贴、多行 Enter 换行一律拒绝（多行 Enter 改为交 `on_submit` / 宿主快捷键）。程序改写信号
+  照常刷新、选区钳到新长度。底色取新增的主题项 `InputTheme::bg_readonly`（默认 `surface_alt`），
+  正文保持常规色。与 `disabled`（不可聚焦、不可选）不同，用于日志、诊断信息这类要能局部复制的文本。
+
+### 修复
+
+- **GPU（D2D）后端下图标字体画成方框**。注册了私用区回退字体（`register_private_use_font`）后，
+  软后端会把私用区码位切到图标字体，D2D 后端却从不切——图标落回主字体的方框，而布局是软引擎按
+  图标宽度量的，两边宽度也对不上。现在两后端在窗口创建时各取一份注册表快照、同一套切字体逻辑；
+  文档同时更正：已开窗口不支持运行期更换图标字体（此前说可用 `set_private_use_font`，宿主引擎实际不对外暴露）。
+- **GPU（D2D）后端下带字重后缀的字体名不生效，且斜体一律画成正体**。选字体界面列的是 GDI 名，
+  「思源宋体 SemiBold」「Segoe UI Semibold」这类名字 DirectWrite 不认；软后端早有一层解析把它换成
+  家族名 + 自带字重，D2D 后端却原样交给 DirectWrite，于是静默落回默认字体——同一个字体软后端正常、
+  开 GPU 就失效。D2D 还从不传斜体、缓存键里也没有斜体。现在两后端共用同一份族名解析与字重 / 斜体
+  取舍（`text::dwrite::font_choice`）和同一个默认字族常量。
+- **Win10 无边框窗口没有边框**（部分机器上连阴影也没有）。Win10 普通窗口那条 1px 边是 DWM 画在
+  非客户区里的，无边框窗口把非客户区整个消掉了，于是只剩阴影；而阴影会被「在窗口下显示阴影」
+  （性能选项、远程桌面、部分精简版系统）关掉，窗口就与桌面连成一片。Win11 的 DWM 给所有窗口在
+  客户区之上画一圈边，不受影响。现在 DWM 不画边框（不认 `DWMWA_VISIBLE_FRAME_BORDER_THICKNESS`，
+  即 Win10 及 Server 2022 等）时，未最大化的无边框窗口仿 Win11 自己画 1px 外框：灰色
+  `#AAAAAA`，激活且开了「在标题栏和窗口边框上显示强调色」时用系统强调色，随激活状态与系统设置
+  实时切换；软 / GPU 后端、整窗 / 局部帧都覆盖。新增 `AppHandler::set_window_outline`。
+- **Linux 无边框窗口看不出能缩放**（X11 与 Wayland）。缩放边一直能拖，但指针停在上面不换光标、
+  窗口也没有任何外框——深色窗口在深色桌面上连边界都看不出，用户只能当它不能缩放。现在停在边 / 角
+  上显示对应方向的缩放光标（贴边的按钮等可交互控件上不出，与按下接管同一判据），未最大化时沿四边
+  描 1px 外框（取主题 `palette.border`，半透明照常混合）。Wayland 客户端标题栏（CSD）窗口的
+  内侧缩放边同样有了缩放光标。新增 `AppHandler::frame_outline`（默认 `None`，`UiHost` 给主题
+  边框色），供平台层按窗口自己的主题取色。
+- **Linux 无边框窗口改为圆角**（8 逻辑像素，同 Windows 11；最大化 / 平铺时方角）。Wayland 直接生效；
+  X11 在启动时检测到合成器（GNOME、KDE、Deepin 等都有）时用 32 位 ARGB 视觉建窗，没有合成器时
+  仍为方角（透明的角没人混合会成黑块）；合成器中途退出 / 重新出现时随之切换方角 / 圆角。外框沿
+  圆弧走、抗锯齿。`WINDUI_NO_ARGB=1` 可强制方角。
+- 无边框窗口外框在主题边框色半透明时每帧越叠越深：收尾改为只处理本帧重画过的矩形。
+
+### 变更
+
+- **右键菜单不再罩住指针**。面板错开指针 2px 弹出：误点右键后原地左键即可关掉菜单，这一下照常落到下方控件（此前那一下
+  落在面板上内边距里，既不命中项也不算点外面，必须先挪鼠标）。右侧 / 下方放不下时改为**翻到指针
+  另一侧**（面板的角贴着指针），不再贴窗口边钳制——钳制会把面板推到指针底下，弹出瞬间就有一项
+  被指着。上下都装不下整列时，若横向已在指针旁边则仍按整窗高贴边；窗口窄到横向也让不开，才退到
+  较大一侧滚动。下拉、菜单栏与子菜单的定位不变。`EventCtx::show_menu` / `show_system_menu` 的 `pos`
+  同样按指针处理；要以控件为锚请改用 `show_dropdown_menu`。
+- **`Theme` 新增 `font_family`、`InputTheme` 新增 `bg_readonly`**（破坏性：两者未标 `#[non_exhaustive]`，
+  穷尽字面量构造须补字段；带 `..Default::default()` 的写法与 TOML 加载不受影响）。
+
+## [0.22.0] - 2026-10-09
+
+本版的主线是**窗口与托盘的细节**：窗口可指定位置、可不进任务栏，托盘图标可在运行期更换，
+任意可聚焦控件可挂失焦回调；Windows 上无边框窗的尺寸与边缘命中、高频跨线程消息的重画、
+托盘菜单位置一并修正。部分改动参考了下游项目 CurSeen 的补丁。
+
+可能需要下游跟进的变化：
+
+- `WindowConfig` / `WindowRequest` 新增公开字段 `position`、`skip_taskbar`：用完整结构体
+  字面量构造它们的代码需补上这两项（或改用 `..Default::default()` / `Window` 构建器）。
+- `TrayOp` 新增变体 `SetIcon`：对它做穷尽 `match` 的代码需补一臂。
+- 带系统边框的窗口里，贴右缘的滚动条不再内缩 8px，改为贴边显示。
+
+### 新增
+
+- **`Element::bg_gradient_roles`**：线性渐变的各 stop 取主题角色色（`Brush::RoleLinear`），paint 期
+  解析，换主题自动跟随。此前 `bg_gradient` 的颜色构建期定死，应用换强调色后渐变不变。
+- **`Element::tint_role`**（`ImageContent::set_tint_role`）：图片按主题角色着色，paint 期解析。
+  与 `tint` 互斥、后设的生效。着色缓存改为连同颜色一起作键，颜色随主题变化时自动重着色。
+- **`Element::on_blur`**：用户让节点失焦时的回调，任意能拿焦点的控件可挂（口径同 `on_commit`，
+  框架自己的焦点调度不算）。用于「点一下进入待命、点别处退出」的控件，如快捷键录入框。
+- **`Window::position` / `App::position`**：指定窗口外框左上角的屏幕位置（平台原生屏幕坐标：
+  Windows 物理像素、原点在主屏左上；X11 物理像素、原点在虚拟桌面左上；macOS 点、原点在主屏
+  左上），优先于 `centered`。Wayland 协议不允许应用定位窗口，忽略。
+- **`Window::skip_taskbar` / `App::skip_taskbar`**：不在任务栏占按钮。Windows 走
+  `WS_EX_TOOLWINDOW`（同时退出 Alt+Tab），X11 设 `_NET_WM_STATE_SKIP_TASKBAR` / `SKIP_PAGER`
+  （隐藏后再显示时补回），macOS 退出「窗口」菜单与 ⌘\` 轮换，Wayland 忽略。最小化后无处还原，
+  故未设 `hide_on_minimize` 时不提供最小化。
+- **`TrayHandle::set_icon_rgba`**：运行期换托盘图标（Windows / macOS），Windows 上 shell
+  重启后按新图标恢复。
+- **`platform::drag_files_with`**：文件拖出支持「放下那一刻才生成」——`paths` 先报给接收方，松手落在
+  肯接收的目标上时调 `before_drop`，返回 false 即取消；落空 / Esc 不调。仅 Windows 实现，
+  macOS / Linux 同 `drag_files` 返回 `DragEffect::None`。
+
+### 修复
+
+- **Windows：不可缩放的无边框窗不再有缩放热区**。`WM_NCHITTEST` 原先不看窗口能不能缩放，
+  `resizable(false)` 的无边框窗最外 8px 也被判成缩放边——那一圈收不到指针（贴边起手的框选、
+  小浮窗的整窗拖动与双击在边上失灵），系统也并不真让它缩放。现按 `WS_THICKFRAME` 判，与
+  Linux 后端口径一致。
+- **Windows：无边框窗客户区比请求的大一圈**。建窗按带框窗口反算外框（加进标题栏与边框），
+  而无边框窗的非客户区随后被整个消掉，多出的部分原样变成客户区（100% 下约宽 +16、高 +39），
+  按请求尺寸排的内容右下露出一条底色。现无边框窗外框即客户区。
+- **贴窗口右缘的滚动条只在「无边框且可缩放」的窗口里内缩**。内缩 8px 是给客户区里那圈缩放
+  边框让路的；带框窗口的缩放边在客户区外、不可缩放的窗口没有这一圈，滚动条现贴边显示。
+- **Windows：后台线程高频 `Sender::send` 不再把连续动画中的窗口推到超刷新率整窗重画**。
+  通道唤醒对每个窗口发整窗 `InvalidateRect`，而 `WM_PAINT` 不受帧配速约束；正在连续动画的
+  窗口现交给帧循环按刷新率出帧（通道随那一帧排空），且只失效脏区。软件后端上屏前把本帧
+  实际画过的范围并入失效区——此前帧内新长出的脏区（排空通道时 `on_message` 改了别处）会被
+  `BeginPaint` 的裁剪挡掉。
+- **取色器 HEX 框**：手动输入不再被改写——旧实现在打字的第二帧就拿当前色覆盖半截输入，
+  且 `#2F9` 这类前缀会被当成 3 位简写提前提交（`#2F9E44` 敲到一半变成 `#22FF99`）。现只有
+  6 / 8 位打完才提交，简写与解析不了的输入在回车 / 失焦时补全或退回当前色。按住拖动面板时
+  HEX 框与触发器也实时跟随，不再等松手才跳到位（仍走局部帧）。
+- **Windows：托盘右键菜单朝左上展开**，不再被底部任务栏遮住下半截。
+
+## [0.21.0] - 2026-10-08
+
+本版的主线是 **Linux**：X11 后端达到基本可用并作为默认；原生 Wayland 后端（输入法、客户端
+标题栏、xdg-activation）已完成，须 `WINDUI_BACKEND=wayland` 显式启用。另一条线是**文字不再
+画出控件 bounds**：固定高度下折行溢出按整行裁回，语义单行的控件放不下时截成 `text…`。
+无破坏性 API 变更；行为变化见「修复」中单行控件压平换行符一条。
+
+### 新增
+
+- **Linux（X11）平台后端**，达到基本可用。取「小依赖」路线：窗口走 `x11rb`（纯 Rust 实现
+  X11 协议，编译期不要任何 `-dev` 包），文字走 `ttf-parser` + `ab_glyph_rasterizer` 自带排版
+  光栅、字体查找在运行期 `dlopen` 系统 fontconfig（取不到时退回扫字体目录），输入法走 `xim`
+  （fcitx5 / ibus 的 XIM 前端），文件对话框用 `rfd` 的 `xdg-portal` 特性。已落地：窗口与事件
+  循环（空闲零 CPU）、HiDPI（`Xft.dpi` / `WINDUI_SCALE`）、光标、键盘与快捷键、剪贴板、
+  XIM 合成串内联绘制、无边框窗口（拖动 / 边缘缩放 / 双击最大化 / 右键系统菜单）、多窗口与
+  模态、文件拖入（XDND）、全局热键（`GrabKey`）、单实例转发、`--screenshot`。尚未实现：
+  系统托盘、文件拖出、零窗口常驻、窗口模式 GPU。Wayland 原生后端见下一条（实验性）；默认
+  仍走本条的 X11 后端（Wayland 会话经 XWayland）。详见 `docs/LINUX_PORTING.md`。
+
+  实测关于窗（620×556）私有内存 3.7MB@100% / 8.8MB@200%。
+- **Linux 原生 Wayland 后端（实验性）**：`wayland` feature（默认编入），运行期须
+  `WINDUI_BACKEND=wayland` 显式启用，连不上或未编入时提示后回退 X11；**默认仍走 X11**。
+  依赖 `wayland-client` 0.31（纯 Rust 协议实现，不链 libwayland）+ `wayland-protocols`，
+  libxkbcommon 运行期 `dlopen`。已落地：
+  - 窗口与呈现：`wl_shm` 按脏区上屏、`frame` 回调配速（空闲零 CPU）、多窗口与模态、窗口操作；
+  - 输入：指针（高精度滚轮、双击、捕获）、键盘（xkbcommon、客户端按键重复）、光标
+    （cursor-shape-v1 / XCursor 主题回退）；
+  - HiDPI：fractional-scale-v1 + viewporter 分数缩放，回退整数 buffer_scale，运行期跟随；
+  - 无边框窗口的拖动 / 边缘缩放 / 双击最大化；
+  - 剪贴板（文本，`wl_data_device`；读写不阻塞界面）与文件拖入（`text/uri-list`，异步读取）；
+  - 输入法（text-input-v3）：合成串内联绘制、候选窗跟随光标、换输入框重新启用、密码 / 多行
+    内容提示；
+  - 窗口装饰：有 `xdg-decoration` 时请求服务端装饰，合成器不画（GNOME）时自绘客户端标题栏
+    （标题、最小化 / 最大化 / 关闭、拖动、双击最大化、右键合成器窗口菜单、边缘缩放，视觉走主题、
+    失活转淡），应用看到的尺寸与坐标都按内容区计；有 `xdg-dialog-v1` 时模态子窗登记为对话框。
+  - 把已显示的窗口提到前台（xdg-activation-v1）：单实例二次启动时桌面启动器给的激活令牌随 argv
+    转给运行中的实例（应用的 `on_second` 看不到它），其余场景用最近一次输入的 serial 申请令牌；
+    启动器只给 `DESKTOP_STARTUP_ID`（Ubuntu 22.04 的 GNOME）时拿它当令牌。
+
+  已知限制：全局热键不实现（协议不允许，兜底是桌面快捷键绑到 `应用 --参数` 经单实例转发）；
+  剪贴板仅界面线程可用（其它线程读写当空）；自绘标题栏方角无阴影、缩放边在窗口内侧；文件拖出、
+  primary selection、系统托盘未做；应用不能自定窗口坐标、
+  查询不到最小化（协议所限）。已在 GNOME 42（fcitx5）真桌面验证，并在 Deepin 25 Treeland 上确认服务端装饰下不重复画
+  标题栏；ibus 尚未实测。详见 `docs/LINUX_PORTING.md` §8（含真桌面回归清单）。
+- **`AppHandler::decoration`**（带默认实现，返回 `None`）与 `platform::Decoration`：宿主造一条
+  客户端装饰标题栏交给平台层画（目前 Wayland 后端在合成器不画边框时使用）。
+- **输入法内容类型与焦点身份**（公共 API，均带默认实现）：`Widget::ime_hints()` 返回
+  `ImeHints { multiline, password }`（`TextInput` 按 `.multiline()` / `.password()` 如实报告，
+  密码框恒为单行）；`AppHandler::ime_field()` 返回 `ImeField { id, hints }`，`id` 在焦点换到
+  另一个控件时必变。自绘可编辑控件可覆盖 `ime_hints`。目前 Wayland 后端用它们，其它平台
+  后续可接。
+- CI 增加 `ubuntu-latest`。docs.rs 同时构建 Linux 目标。
+- `TrayHandle::notify(title, body)`：从应用状态变化处弹系统通知，不必先有一次托盘交互
+  （Win32 / macOS；与 `TrayCtx::notify` 同一平台实现）。感谢 @m2selfA（#13）。
+- CI 的 Windows 档增加 `i686-pc-windows-msvc` 的 clippy（默认 / 关闭默认 feature 各一次）。
+- **`App::on_window_activated` / `Window::on_window_activated`**：窗口激活态（是否在前台）
+  变化时回调，参数为新的激活态，用于「切回窗口就刷新」。与 `on_show`（隐藏→可见）互不包含；
+  只在真正变化时触发，不为初始状态触发。
+- `Element::on_commit`：text_input 的「改完即提交」出口，相当于网页 `<input>` 的 `change`。
+  只在用户改过正文（且与编辑前不同）之后、按 Enter 或用户失焦时触发一次，Enter 后紧跟的
+  失焦不会重复提交，也不吞掉 Enter 快捷键；节点被隐藏 / 禁用、对话框接管焦点、`autofocus`
+  夺取都不触发。配套 `Widget::on_blur`，自定义控件可接同一时机。
+
+### 修复
+
+- **tooltip 弹出后移开，两端留下残影**（全平台）。提示画在控件树外，移开那一帧原先走
+  局部重绘，脏区只有控件自身。现在提示消失的那一帧整窗重绘；在不响应按下的节点上按下
+  撤提示也会出帧。等待 500ms 弹出延时期间不再按刷新率连续整窗重绘。
+- **挂了 `on_interval` 后空闲 CPU 不为零**（全平台）。回调没改任何东西的 tick 不再整窗
+  重排、重绘；写了信号、经 ctx 请求了副作用、或调了主题 / 语言 / 热键 / 托盘句柄时照常出帧。
+  经 `ctx.tree_mut()` 直接改树须自行 `ctx.mark_layout_dirty()`。
+- **rect 比文本盒矮的 `draw_text` 在局部重绘帧里整行丢字**。引擎契约允许这种用法（装不下
+  即顶对齐、向下溢出），但软件 / GPU 后端剔除时只看 rect；现在按字形可能落到的范围剔除。
+- **固定高度的 Label 折行后，多出的行画到下方控件上，且时隐时现**（全平台）。不限行的
+  Label 按实际宽度折成多行、排版高度超出自身 bounds 时，现在裁回 bounds，下沿按整行对齐
+  （不露下一行的字头残片）；单行文本不裁，紧凑高度下的下伸部照常画出。此前溢出的行在
+  整窗帧里被后画的兄弟盖住、局部重绘（如展开下拉）时又露出来。想完整显示长文本，别给
+  Label 钉 `height`，让它按内容撑高。
+- **其余画文字的控件同样不再把字画出自身 bounds**（全平台），分两种收口：
+  - 本就允许折行的 Link、Button、CheckBox / Radio 标签：照常折行，折出 bounds 时按
+    Label 同一套规则裁回。带图标的 Button 文字宽另钳到按钮右沿；Link 下划线不再伸出右沿。
+  - 语义上单行、行高写死的控件：列表行、导航行与折叠面板头、Dropdown / CheckMenu
+    触发器、分段控件各段、滑块值标签、取色器触发器的 HEX 文字。放不下时截成 `text…`，
+    不再折行压到下一行或下方控件上。**行为变化**：这些控件文案里的换行符（含 CRLF、
+    U+2028 等）压成空格显示。Dropdown 触发器窄到放不下选中项徽章时不再画徽章。
+    宽度连 `…` 都放不下时截成空串（Label 的 `truncate` 同样如此，此前会画一个比矩形还宽
+    的 `…`）。
+  - RichText 钉了比内容矮的 `height` 时整块裁回 bounds，下沿按整行对齐；被裁掉的部分
+    不再响应悬停、点击与键盘焦点（拖选进行中仍可延伸进去，复制会带上看不见的部分）。
+- **Linux：从桌面启动器（应用菜单、概览）启动时鼠标一直转圈到超时**。X11 下首窗挂上
+  `_NET_STARTUP_ID` 并广播 startup-notification 的 `remove`；Wayland 下启动令牌缺
+  `XDG_ACTIVATION_TOKEN` 时回退 `DESKTOP_STARTUP_ID` 激活首窗。单实例二次启动把第二个进程的
+  启动 id 转给首实例，由它发出完成信号（同一批转来多个时每个都发）；X11 下唤出时用 id 里的
+  `_TIME` 作激活时间戳。Wayland 与 X11 路径均已在 GNOME 42 真桌面验证。
+- **在控件回调里换语言，第一下界面不变**（全平台）。`LocaleHandle::set` / `ThemeHandle::set`
+  靠 `anim::request_repaint` 请求整窗，而 `render` 开头的 `reset_request` 会先清掉它，那一帧
+  只按被点按钮的小脏区局部重画，别处文字停在旧语言上，要再点一次才切过去（换主题碰巧同时
+  写了信号时不显形）。宿主改为每帧比对主题快照与语言目录的指针，变了就整窗重排。
+- `LocaleHandle::reload` 在目录尚未建立时会二次借用同一个 `RefCell` 而 panic（正常流程碰不到）。
+- **32 位 Windows（`i686-pc-windows-msvc`）编译失败**：`SetWindowLongPtrW` 在 x86 上收
+  `i32`；`NOTIFYICONDATAW` 在 x86 上是 `packed(1)`，对其字符数组字段取引用是 E0793。
+  感谢 @0x696c757a696f（#17、#18）。
+- **合成中焦点被移走，旧输入框里的合成串一直挂着**（全平台）。宿主清合成串只作用于当前
+  焦点：合成到一半焦点被程序或 Tab 移到别的框，随后「清合成串」落在新焦点上。宿主改为记住
+  合成串所在节点，清的是原来那个框。
+- **控件 `on_update` 里排的 `defer_blocking` 被静默丢弃**（全平台）：比如排到下一帧弹的系统
+  右键菜单永远不出来。现在与 toast / 焦点 / 开窗等请求一样交给宿主执行。
+- **高精度滚轮 / 触控板慢慢滑时滚不动，菜单一抹到底**（全平台）：一次只报几个 1/120 格的
+  滚动量原先被整除吃掉，菜单则每个小事件滚一整项。现在不足 1 像素的零头留给下一次（换方向
+  作废），整格滚轮的步长不变。
+- **取色器触发器的色块偏一像素、被压窄时越出左边框**：非整数缩放（125% / 150%）下色块两侧
+  边距差 1 物理像素；`trigger_text(false)` 时色块改为水平居中；压窄时色块按宽度收。
+- **滑块值标签在大字号下被截成 `10…`**：标签宽原先钉死 44px，现在字号大到放不下 `100%`
+  时按实测宽度放宽（默认字号下仍是 44px），指针换算与绘制同步跟着变。
+- **Dropdown / CheckMenu 触发器窄到放不下箭头区时，箭头从左沿伸出**：此时不再画箭头。
+- RichText 钉高裁剪按整行对齐时，分隔线也算一行：恰好放得下的分隔线不再随上一行一起被裁掉。
+- 单行截断（`text…`）改为按拼好的整串实测宽度二分：字距调整下不会再多出一两个像素被
+  裁掉；测量次数也从按字数逐个前缀量（N 次）降到 O(log N) 次。
+- **`Slider::show_value` 拖到头还差 44px**：绘制时轨道右侧让出值标签，指针换算却按整宽，
+  旋钮视觉到 100% 后鼠标还要再拖一个标签宽。两处改为共用同一条轨道宽（#11）。
+
+### 变更
+
+- 自绘标题栏的右键系统菜单默认接管扩展到 Linux（Linux 桌面同有此惯例，平台层也推送窗口状态）。
+
+## [0.20.0] - 2026-09-22
+
+本版的主线是**软件光栅的性能**：fullshowcase 在 1920×1080 下整帧 65.5→14.4ms（4.5 倍），
+200% 缩放下 141.6→28.0ms（5.1 倍）。另有一批渲染失效（脏区范围）与托盘/菜单的缺陷修复。
+
+### 性能
+
+- **纯色矩形与圆角矩形走特化快路**（`render::skia`）。通用路径为支持任意贝塞尔路径，把
+  每个像素转 f32 过一遍 raster pipeline，再逐像素采样裁剪 mask；而 UI 上绝大多数填充只是
+  轴对齐的纯色矩形或圆角矩形。一张 1884×412 的不透明圆角卡片原先要 20.2ms（26ns/像素），
+  同尺寸纯色填充只要 0.1ns/像素。
+
+  新增的快路直段整行写，圆角带内按到圆心的距离求覆盖率（4×4 超采样；关抗锯齿时按像素
+  中心硬判定，与通用路径同口径）。裁剪直接用 `Clip.rect` 求交——`clip_rect` 是唯一裁剪
+  入口且只产生轴对齐矩形 mask，无需读 mask。圆角几何锚在**未裁剪**的矩形边界上，否则被
+  滚动容器切掉半截的卡片会在切口处冒出一个本不存在的圆角。
+
+  fill 52.5→3.0ms（@2x 111.0→7.4ms）。与基线逐像素比对，差异 0.007% 像素、最大差 24，
+  全部落在圆角抗锯齿过渡带。
+
+- **图片裁剪不再走整幅 mask 求交**（`Canvas::draw_image`）。原先用 `Mask::intersect_path`
+  与当前裁剪矩形求交，那是**整幅** mask 的操作，成本只跟窗口大小有关、与图片大小无关：
+  1920×1080 下 2.19ms/次，占单张图片绘制的 83%，而真正的像素搬运（含双线性缩放）只要
+  0.36ms。一张 84×63 的小图要为此扫过 200 万像素。
+
+  改为只在 dst 区域内把裁剪矩形之外的像素清零（`fill_path` 之后 mask 只有 dst 那一块非零，
+  0 与任何东西求交还是 0），dst 整个落在裁剪区内时一点都不用动。图片页 image 23.26→3.66ms
+  （6.4 倍），整帧 28.77→9.6ms，渲染结果逐像素完全不变。
+
+  症状最明显的是**拖动窗口**——那时每帧都是整窗帧，17 张图就是 37ms 白付。
+
+- **宿主不再维护后备缓冲**（内部重构，影响内存）。此前每个整窗帧都要把画好的一帧整窗
+  拷进一块持久的后备缓冲，供后续局部帧重建未变区域；这层中转存在的唯一理由是 win32
+  呈现时把 pixmap **原地** R/B 交换成了 BGRA，毁掉了那份 RGBA 画面。
+
+  改为平台侧另持一块 BGRA 上传缓冲，pixmap 本身保持 RGBA 且跨帧持久——它自己就是
+  "上一帧画面"。于是 **macOS 上少一份全屏 RGBA 缓冲**（那边本就不做 R/B 交换，只有
+  "删掉"没有"新增"）；Windows 上由上传缓冲顶替，份数不变。
+
+  **速度上是持平的，不是收益**：Windows 上删掉的整窗拷贝恰好被平台侧新增的拷贝开销
+  抵消。保留的理由是少一层中转。
+
+### 新增
+
+- **`App::hide_on_minimize()`**：最小化后窗口从任务栏消失，只留托盘图标。做成"最小化
+  发生之后再隐藏"而不是拦下最小化请求——最小化的来源不止自绘标题栏那颗按钮，还有系统
+  标题栏、任务栏点击、`Win+Down`、`Alt+Space` 菜单，那些路径根本不经过核心层的 `WindowOp`。
+
+- **`TrayCtx::toggle_window()`**：显隐切换交给平台按窗口此刻**真实**的可见性判。应用自己
+  记一个 `bool` 是不行的——窗口会从应用不经手的地方隐去（上面那条、点任务栏、`Win+D`），
+  状态迟早岔开，症状是"最小化之后点托盘图标没反应，要点两下才出来"。
+
+- **`MenuItem::checkable`**：声明一个菜单项是不是开关项，见下面菜单对勾那条。追加字段，
+  `MenuItem` 本就 `non_exhaustive`，下游不受影响。
+
+### 修复
+
+- **菜单的对勾与快捷键互斥，带快捷键的开关项无勾可画**。对勾原先画在尾随区，与子菜单
+  箭头、快捷键同处一条 `else if` 链上，这条链隐含"三者互斥"的前提；而可开关项几乎都带
+  快捷键，于是最该出现对勾的地方永远轮不到它，开关态只剩靠文字变色表达。
+
+  改法不是调分支顺序（那只会换一个东西被吃掉），而是给对勾一列自己的地：整级一旦有开关
+  项就恒占这一列、未勾的项在那里留白。让不让这一列按 `checkable`（是不是开关）判而不是
+  `checked`（此刻勾没勾）——面板宽度在菜单打开那一刻就定死，按勾选态增删这一列的话，
+  粘滞菜单里点一下开关，标签就会集体右移到面板装不下的地方去。
+
+- **长按数字步进器的 ± 时，中部数字不刷新**，松手那一下才跳到终值。长按的重复步进跑在
+  `paint` 里（非事件期），那条路上 `Signal::set` 走的是 `anim::request_repaint()`，而它把
+  脏区归到"当前绘制节点"——也就是按钮自己；数字显示在**兄弟节点**上。
+
+- **键盘 ↑/↓ 顶到边界时 ± 不置灰**（同族，方向相反：中部改**按钮**的置灰态）。键盘事件的
+  失效升级只到 `DamageReq::Rect(本节点)`，不像指针那样升整窗，于是要等下一次整窗帧才碰巧
+  补齐。两条都改为按整个复合控件报脏。
+
+- **`on_update` 里请求的开窗与菜单被静默丢弃**。响应式相位不经 `DispatchResult`，此前只把
+  toast 与 focus 暂存上交，于是在 `on_update` 里 `ctx.open_window` / `ctx.show_context_menu`
+  **什么都不发生，也没有任何报错**。而"把命令排进队列、下一帧由某个控件的 `on_update`
+  兑现"是应用层很自然的写法（快捷键、系统菜单回调这些拿不到 `EventCtx` 的地方只能这么办），
+  命令十有八九要开个对话框或弹个菜单。
+
+- **macOS 上窗口缩放时画面可能只剩脏区那一小块**。取消宿主后备缓冲那次重构，连带删掉了
+  `decide_repaint` 里一行尺寸比较——那行表面上只判"后备缓冲还能不能用"，实际兼任全框架
+  唯一的"缓冲尺寸变了 → 必须整窗"探测器。win32 侧因为缓冲重建分支碰巧补了整窗请求而
+  没有暴露，macOS 侧没补。触发条件很普通：窗口里有个聚焦的文本框（光标闪烁每帧产生小
+  脏区），拖动窗口边缘缩放。现补成两道防线：宿主记住上一帧物理尺寸，平台在缓冲重建那
+  一帧请求整窗。
+
+- **带动态提示的控件，悬停时有时弹不出来**（`on_pointer`）。悬停节点变化时那次强制重绘的
+  判据只看节点上的**静态** `n.tooltip`，看不见控件自己的 `Widget::tooltip()`。而那段代码
+  自己的注释就写着：不强制重绘的话「移入后要等到别的事件凑巧触发重绘才会出现（不稳定）」
+  ——动态提示正好整个落进这句话里，表现为悬停时灵时不灵。判据改走 `Tree::node_tooltip`，
+  与 `TooltipState::will_show`、与浮层 `paint` 自己的取值同源；这三处本就该是一个出处。
+
+  0.19.0 放开多行提示之前这条路没人走：动态提示此前只有自绘图表在用，它们自带 hover
+  视觉、每帧都在上报重绘，顺带把提示也带出来了。
+
+## [0.19.0] - 2026-09-17
+
+- **`Element::tooltip` 收多行文本**：`\n` 是硬换行，与超宽自动换行叠加生效。此前那句
+  `debug_assert!(!text.contains('\n'))` 拦的不是能力缺口，是"没测过"——两个平台引擎本来
+  就各自处理硬换行（DirectWrite 整段交给 `CreateTextLayout`，CoreText 见 `is_single_line`），
+  且 measure 与 draw 同源，浮层高度一直跟得上行数。现补齐测量契约（`text::hard_break_contract`）
+  再把护栏撤掉。
+
+  连带清掉 `Element::clamp_lines` 的一条特例：被 `max_lines` 限行的说明文本，含换行时
+  **整个跳过 tooltip**。而截断之后悬浮看全文正是它唯一的兜底，于是最需要兜的那一类反而
+  没有。那条特例当初只为躲 `debug_assert`，现在没有理由留着。
+
+- **浮层越界翻转补上"上下都放不下"这一支**（`app::tooltip::place`）。原先是
+  `(pos.y - h - 4).max(0)`：单行浮层比谁都矮、翻到指针上方总是放得下，那个 `.max(0)`
+  永远不会真的生效。放开多行之后它成了常态——浮层被顶到 `y = 0` 并**盖住指针**，也就是
+  盖住用户正悬停的那个控件。现在两边都容不下整个浮层时贴向空间更大的一侧，并把定位
+  抽成纯函数 `place` 以便测试（`paint` 要 `Canvas` 与 `Theme`，判据留在里面只能靠肉眼守）。
+- **多语言（i18n）落地**：`auroraui::i18n` + `t!` / `tr!` 宏 + `App::locales` / `App::locale_handle`。
+  译文是 TOML，既可 `include_str!` 内嵌（小应用零外部文件），也可 `load_dir` 从外部目录
+  **按 key 覆盖**（文案多的应用只交差异，不必重编译）。运行期 `lang.set("en")` 下一帧整树跟随。
+
+  接入点是**已有的那道缝**而不是新控件：`TextContent` 加了 `Msg` 变体，于是所有收
+  `impl Into<TextContent>` 的参数（`label`/`button`/`link`/`badge`/`checkbox`…）一次性全部支持，
+  没有任何控件长出 `_i18n` 孪生构造器。对下游的规则仍是一句话——凡是接受文案的参数，
+  `&str` / `String` / `Signal<String>` / `t!(..)` 四者可互换。
+
+  格式支持命名占位 `{name}`、位置占位 `{0}`（译文调语序不必动代码）、`{{` 转义、复数变体表、
+  select 变体、字符串数组。复数按 CLDR 规则子集选类别（zh/ja 只 other、en one/other、
+  fr/pt 把 0 算 one、ru/pl/cs/lt/ar 的多类别），规则表手写、用 CLDR 官方样例数字做断言。
+
+  数量轴可以直接传 `Signal<i64>`：`t!("file.selected", count = n)` 计数变了自动刷、换语言
+  也自动刷——**动态数字 + 多语言是一条路而不是两条**。反过来，把已翻译的整句塞进
+  `Signal<String>` 是错的用法（换语言不跟随），文档里正面写了这条。
+
+- **框架自带文案改走译文**（`auroraui.*`）：文本框右键菜单的剪切/复制/粘贴/全选、无边框窗口
+  系统菜单的还原/最小化/最大化/关闭，内置中英两份，下游可用同名 key 覆盖或添第三种语言。
+
+  **默认语言恒为 `zh-CN`、不跟随系统**，现有应用行为逐字不变；要跟随系统得显式写
+  `Initial::System`（win32 读 `GetUserPreferredUILanguages`、macOS 读
+  `NSLocale::preferredLanguages`——都是**界面语言**，不是区域格式，后者在「系统英文 +
+  区域中国」的机器上会把用户判错）。
+
+- **`App::title` / `Window::title` 收 `TextContent`**，窗口标题因此能跟随换语言，也能绑
+  `Signal<String>`。标题不经 paint、是一次性交给系统的字符串，走**拉取式**：平台在事件
+  分发后与出帧后各问一次，宿主现算并与上次推送的比对，变了才发。没写标题来源的应用一次
+  多余的系统调用都不会发生。子窗各有一份宿主，故各跟各的。
+
+- **托盘菜单与菜单栏标题跟随换语言（破坏性）**：`TrayMenuItem::item` / `check` 与
+  `MenuBarEntry::new` 从 `impl Into<String>` 改收 `impl Into<TextContent>`。托盘菜单在每次弹出时才构建（win32
+  `build_menu`、macOS `pop_menu`），菜单栏是自绘的、标题每帧现取——两者本来就有重新解析的
+  时机，缺的只是"标签别在构建时定格成 String"。顺带它们也能绑 `Signal<String>` 了（动态
+  托盘项文案此前无法表达）。仍需应用自己改的只剩托盘提示 `TrayHandle::set_tooltip`。
+
+  **破坏面**：`&str` / `String` / `&String` / `Cow<str>` / `Signal<String>` 都照常收；
+  收不了的是 `char`、`Box<str>`，以及下游自己的转发泛型
+  （`fn my_item<S: Into<String>>(s: S) { TrayMenuItem::item(s, ..) }` 会编不过，且报错指向
+  trait bound 而不是这次改动）。补一个 `.to_string()` 即可。
+
+  另有一处**不报错的行为变化**：`impl From<Message> for String` 早就存在，所以
+  `TrayMenuItem::item(t!("tray.quit"), ..)` 此前就能编译，只是在**构建那一刻**定格。
+  已经这么写的代码不会有任何编译信号，但行为从"定格"变成了"跟随"——这正是本次想要的，
+  但它是一次对已编译代码的语义变更。
+
+- **`i18n::lint::check_usage`**：扫一个目录下的 `.rs`，报出用了 `t!("a.b")` 却没有任何语言
+  提供译文的 key，带文件名与行号。扫描器是个小状态机而不是 `contains("t!(")`——后者会把
+  `assert!` / `format!` / `print!` 的名字尾巴、文档注释里的示例、字符串字面量里的 `t!("…")`
+  统统当成调用。只查"用了没翻译"一个方向：反方向（译文没人用）因动态 key 必然误报，
+  而误报的 lint 很快会被加例外、然后被整个关掉。
+
+  库自己另有一条同源测试（`framework_keys_written_in_the_source_all_have_translations`）
+  盯住 `auroraui.*` 写错字：`tr!("auroraui.menu.cutt")` 只会在界面上安静地显示
+  `⟪auroraui.menu.cutt⟫`，没有任何编译期信号。它与那张手写 key 清单是一对——清单查"译文里
+  有没有"，这条查"写出来的对不对"。
+
+- **`Locales::languages_missing_framework_strings`**：库内置的 `auroraui.*` 只有中英两份，
+  应用加了第三种语言却没补那批 key 时，右键菜单会按回退链落到英文——日文界面里冒出一份
+  Cut / Copy / Paste。这不是故障（回退链正按设计工作），但唯一的症状是"截图看着怪"。
+  debug 下库为每个这样的语言 warn 一声，并把判断开放成 API 供写进测试。
+
+- **`i18n::lint::check` 作为公开 API**，把多语言最容易出的三种**静默错**变成测试期的红：
+  某语言漏 key（跑到回退语言，看着像"这句没翻译"）、占位符改名（`en` 写 `{count}`、
+  `zh-CN` 写 `{num}`，代入时那一处变空串）、变体表漏 `other`。下游应用会遇到一模一样的三种，
+  没理由各写一遍。缺译文的显示也是分档的：debug 下 `⟪key⟫` + warn 一次，release 下显示 key
+  本身——**都不是空串**，空串在界面上看着像"这里本来就没字"，能瞒过整轮自测。
+
+- **长列表的整窗帧不再每帧绘制全部内容**（`perf`）。`Canvas::cull_rect` 的契约是"返回可见
+  范围的超集"，而 D2D 后端压根没实现（用的是 trait 默认值 `None`）、GPU 后端在整窗帧上也
+  返回 `None`；调用方把 `None` 读作"拿不到范围，那就整个画"。于是内容远高于视口的节点每帧
+  画满全部内容——而整窗重绘并不罕见。下游实测三万项目录（内容高 60 万 px）：全窗帧
+  **828 ms → 4.75 ms**，进程私有内存峰值 **106 MB → 62 MB**。两个后端现在都据实报出可见
+  范围（D2D 报客户区，GPU 报 scissor 或整个目标），物理→逻辑向外取整并各放一像素——报小
+  了会真的丢内容。
+
+- **圆角图片每帧泄漏一个 COM 引用**（D2D）。`D2D1_LAYER_PARAMETERS1.geometricMask` 的类型是
+  `ManuallyDrop`，结构体析构**不会**帮忙松开那份引用，必须在 `PopLayer` 之后自己还。带圆角
+  图标的工具栏 / 驱动器栏 / 标题栏每帧要走这条分支二十多次，约 5 KB/帧、持续交互每分钟
+  二十余 MB 且永不回落。下游实测 1800 帧跨度：修复前 +7.7 MB，修复后 0。跨度是必要的——
+  头 150 帧 D2D 运行时自身要预热扩张几十 MB，短跨度里泄漏完全被它盖住。
+
+- **图片位图缓存按字节封顶，不只按条数**（D2D）。同一个缓存既装 16×16 的文件图标又装整屏
+  预览，两者差五个数量级：只按 64 条封顶在预览那一侧形同虚设（64 条 4000×3000 就是 3 GB
+  显存，而计数器才刚走到 64）。改成条数与字节双封顶（48 MB），超任一阈值整体清空重建，
+  手法与既有的 `shadow_cache` 一致。
+
+- **交叉轴的 margin 在 Linear / Frame / Scroll 三处补齐**。`measure` 发交叉轴约束时用的是容器
+  完整可用尺寸、没扣子节点自己的 margin，于是 `width_match` + `margin_xy(4, 0)` 的子节点量到
+  整栏宽，`arrange` 再按 `margin.left` 右移——净效果是**朝末端溢出一个 margin**，把紧邻的
+  分隔线压在自己身下。主轴一直是预扣的，交叉轴漏了。`Frame` 只在默认 `Start` 对齐下出现
+  （`Stretch` 那条路一直是对的），格外隐蔽；`Scroll` 则是 measure 不扣、arrange 扣，子树按更宽
+  的宽度算高、按更窄的宽度排版，带换行文本的子会少算一行。新增 `Element::margin_edges`，
+  `padding_edges` 的外侧对应物。
+
+- **连击计数改为 1 / 2 循环，三击由 `event::TripleClick` 认**。平台层原先一直往上数（win32
+  封顶 3、macOS 照搬 AppKit 的 `clickCount`），于是"双击进目录、紧接着再双击往下钻"的第三、
+  四下被读成 3 和 1，一次都匹配不上双击——连续钻目录断在第二层。第三下究竟是三击的尾巴
+  还是新一轮双击的头，在消息层面分不出来，Win32 的 `WM_LBUTTONDBLCLK` 与 Qt 都判成后者。
+  要三击选段 / 选行的控件改用 `event::TripleClick` 自己认（`TextInput` 与 `RichText` 已接上），
+  它的时限与漂移阈值取**系统值**而非写死的 500ms/4px——写死会让把双击速度调慢的用户遇到
+  "双击好使、三击不灵"。
+
+- **`TextContent` 加了 `#[non_exhaustive]`**（破坏性，随 `Msg` 变体一起）：下游若对它做过
+  穷尽 `match`，需补一个 `_` 兜底分支。这类变更一次性做掉，日后再加变体不再破坏下游。
+
+- 新增示例 `examples/i18n.rs`（换语言、复数、位置占位、数组、外部覆盖），新增
+  `docs/API_GUIDE.md` §12 与 `docs/i18n-design.md`。**不支持 RTL 排版**已写进 §11 已知约束。
+
+## [0.18.0] - 2026-09-16
+
+- **`TextInput` 把 Escape 转发给 `on_nav_key`**。此前 Escape 既不在它的处理表里、也不算
+  被消费，于是径直走到宿主的关窗兜底：应用写了取消回调却永远不触发，表现是「按 Esc 退不出
+  就地编辑框」，而代码看着完全正确、没有任何报错可查。转发口径与 Tab 一致（默认不消费，
+  回调返回 false 就继续走兜底），故没声明 `on_nav_key` 的输入框行为完全不变——输入框自己
+  不用 Escape，而「取消」该怎么做只有应用知道。
+
+- **`autofocus` 的「已兑现」改记在节点上**，夺取档每次出现都生效。此前那个标志是 `UiHost`
+  级的全局一次性开关，一经置位就不复位（只有窗口隐藏→唤起才 rearm），于是同一个窗口生命
+  周期里**第二个**要求自动聚焦的控件永远拿不到焦点——就地编辑框第一次 F2 好使、第二次起
+  光标在框里闪却一个字打不进去。同一段代码时灵时不灵、且第一次总是对的，是最难查的那类。
+  兜底档（`Focus` / `FocusSelectAll`）仍守着全局标志、行为一字不变；夺取档只看节点自己的
+  标志，符合它「每次出现都夺取」的语义。
+
+- **重排帧也刷新焦点**，`autofocus` 才有兑现的机会。上一条只做了一半：`refresh_focus` 此前
+  只在全窗帧调用，而「结构变了、布局签名却恰好没变」（就地编辑框收起又弹出、同尺寸控件
+  互换）走的是局部重绘路径，那条路上 `honor_autofocus` 根本没机会被调用。两处叠在一起，
+  表现才是完整的那句「第一次 F2 好使，之后打不进字」。
+
+
+- **托盘 / 热键的开窗请求补上批内去重**（`take_callback_windows`）。`Window::single` 的
+  去重此前只查平台的窗口登记表，而本批第一个窗口要等真正建出来才登记——同一批里的两个
+  同键请求于是都被判成「没开着」，各自建出一个窗口：**两个同键窗口各持一棵树、抢同一批
+  `Signal`，且不报任何错**。窗口路径（`UiHost::take_new_windows`）本就有这份 batch 去重，
+  回调路径漏了，现在对齐。
+
+  可达路径很具体：`App::channel` 的 pump 一次排空全部消息、排空后才统一落地开窗请求，
+  故常驻应用里「双击图标没反应、再双击一次」的两条消息会落进同一批。
+
+
+- **常驻模式补齐四样，托盘应用才真能靠它减背景占用**（`Window::on_shortcut`、
+  `close_window`、`App::screenshot_window`、`App::start_window`）。零窗口常驻（0.17.0 后加入）省下的是那份按
+  物理像素挂着的后备缓冲，但迁过去要交出的东西此前太多，实际拦住了下游：
+
+  - **`Window::on_shortcut`**：窗口级快捷键此前只有 `App::on_shortcut` 一处，明确不给
+    回调建出来的窗口（`build_new_window` 传的是 `None`）。常驻模式没有主窗，界面全由
+    `Window` 建出，于是**界面上所有 Ctrl+X 一律失灵**——而界面看着完全正常，无从查起。
+    应用那一份仍然不给：它面向主窗的控件树与焦点环，`focus_main_input` 找的是本窗的
+    autofocus 控件，套过去只会张冠李戴。
+
+  - **`HotkeyCtx::close_window(key)` / `TrayCtx::close_window(key)` + `window_open(key)`**：
+    「按一下出来、再按一下收回」是常驻托盘工具热键的通常语义，而常驻下 `hide_window`
+    没有作用对象（显隐意图指向主窗，那时它不存在），`window_state().visible` 又恒为
+    `UNKNOWN` 的 `true`——照搬按可见性分支的写法会恒走隐藏一侧、**按下去毫无反应**。
+    窗口在那个模式里是「开着或不存在」两态，故查询给的是 `window_open`（读平台的窗口
+    登记表，任何时机都成立），收起即关掉（投 `WM_CLOSE`，走完整关闭决策链），渲染资源
+    随之归还——「收起来」与「省内存」因此是同一个动作。
+
+    两条路的载荷形状不同：`TrayAction::CloseWindow(String)` 把键带在意图里（`String`
+    不碍 `Debug`/`Clone`/`PartialEq`，下游对着 `Vec<TrayAction>` 断言即可），热键那条走
+    旁路队列（`HotkeyCtx` 是 `Copy`，放不下 `String`）——与 `OpenWindow` 当初只能留位置
+    标记是同一套判据的两个结论。次序也因此不同：**热键**那批关窗统一排在开窗之前，
+    **托盘**的意图则一律按声明顺序执行。
+
+    **同一个回调里对同一个键既关又开是不支持的**，两条路都一样：关窗是投递 `WM_CLOSE`
+    （下一轮才处理）、开窗是即时的，那一刻旧窗口仍在窗口登记表里，于是开窗命中
+    `Window::single` 的去重、退化成"激活那个正在关闭的窗口"，随后它被关掉——净结果是
+    一个窗口都没有。要重开请分两次回调，或用不同的键；撞上时 `close_single_window`
+    会打一行说明，因为这个错法的表现（"按了一下，窗口没了"）离起因太远。
+
+  - **`App::screenshot_window(req)`**：截屏走的是主窗那份配置与控件树，常驻应用两样都
+    没有（`0×0` 加一个空 handler），**截出来是一张空图**。而离屏截图恰恰是这类应用最
+    依赖的验证手段——它平时藏在托盘里，界面是热键唤出来的，自动化里没有"主窗"可截。
+    传的就是托盘 / 热键 `open_window` 用的那一份 `Window`，两处请出自同一个工厂函数，
+    否则截图验的就不是用户看到的那个界面。`--scale` / `--click` / `--key` 照常，`--size`
+    仍压过窗口尺寸并放开 `min_size`（语义与非常驻路径一致）。
+
+  - **`App::start_window(req)`**：常驻的语义是「启动后桌面上什么都没有」，而这对**开机
+    自启**才成立——用户刚**双击了图标**却什么也不出现则是故障，且除非他知道去按热键或翻
+    托盘，否则这个程序看起来就是坏的。判据在应用手里（通常是命令行开关），故给的是一个
+    按需调用的构建项而不是又一个模式。请求走托盘 / 热键那条同样的旁路队列，平台层在进
+    消息循环之前取走建出来——那个窗口与热键开出来的本就该是同一个东西。
+
+  macOS 侧：`window_open` 恒 `false`（窗口登记表还没接上常驻模式），`close_window` 与
+  `open_window` 一样打一行提示并忽略，与 `run_resident` 在该平台的现状一致。
+
+- **win32 开始分发鼠标中键**（`WM_MBUTTONDOWN` / `WM_MBUTTONUP`）。此前这两条消息根本
+  没接，`MouseButton::Middle` 永远到不了控件——而「中键关掉这一项」是浏览器与文件管理器
+  的标准手势，下游照着写完全无效且查不出原因。连续点击计数一并接上。
+
+- **新增 `Element::autofocus_take()` / `autofocus_take_select_all()`**：出现即夺取焦点，
+  即使别处已有焦点。既有的 `autofocus` 家族对已有焦点主动让位（"没人要焦点时给个归宿"
+  的兜底语义），但**就地编辑**的语义相反：输入框是被用户按键唤出来的，唤出它的那个控件
+  此刻正持有焦点，让位就成了「光标在框里闪，字却打进了别处」。
+
+- **打开菜单栏不再清掉别处的焦点**（新增 `Widget::preserves_focus`，菜单栏返回 true）。
+  此前按下菜单栏是一次"点在焦点控件之外"，宿主按 blur 语义把焦点清成 `None`，而
+  `Tree::dispatch_key` 的目标是 `Option<NodeId>`——没有焦点时整个按键事件被丢弃。表现是
+  **点开过一次菜单，此后窗口里所有快捷键全部失灵**，且界面毫无异常，无从查起。
+  原生菜单栏同样保留焦点（菜单开着时编辑框的光标还在闪）。
+
+- **助记字母的下划线只在键盘触达菜单栏之后才画**（`MenuBarLink::mnemonics` 共享单元格）。
+  按下 Alt / F10 / Alt+助记键亮起，鼠标按下或窗口失活后灭掉，与 Windows 一致；此前恒亮，
+  一排下划线把标题栏搅得很花，而纯鼠标用户永远用不上它们。
+
+## [0.17.0] - 2026-09-15
+
+- **`Element::text_input(..).select_range(start, end)` 预置选区**：重命名框只选主名不选
+  扩展名（资源管理器 / TC 的 F2 语义）。此前只有 `autofocus_select_all` 一档，应用层拿不到
+  `TextInput` 的光标 / 锚点，"改名不动扩展名"无从实现。与 `autofocus()` 搭配、与
+  `autofocus_select_all` 互斥；节点隐藏再显示时按同一区间重新兑现。
+
+- **右键 / 下拉菜单只在放不下时才滚动**。此前它们受 `MENU_MAX_H`（320 px）与窗口高 3/4 的
+  硬上限约束，十几项的右键菜单在大窗口里也要滚，操作很不便；现在右键菜单受整窗高限制，
+  下拉受锚点上下较大一侧限制（面板永远不盖住控件自己），放不下才滚（离屏 / 无窗口尺寸时
+  仍退回 320 px）。
+
+- **分隔条激活态不再把整条 `thickness` 染成粗块**：静态 1 px、拖动 / 悬停 2 px 强调色，与
+  界面里其他分隔线同一量级；可命中区宽度不变。
+
+- **macOS 的 GPU 后端默认编入，不再藏在 `gpu` feature 后面**（破坏性：macOS 目标无条件
+  多编一棵 wgpu 依赖树，编译 +1~2 分钟、二进制 +2~4MB，`--no-default-features` 也关不掉）。
+  运行期**默认档不变**，仍是 `Renderer::Software`——改的是"编不编进来"，不是"用不用它"。
+
+  起因是口径而非能力：macOS 没有第二条硬件加速路径（Windows 有 D2D），把唯一那条藏在一个
+  默认关的 feature 后面，等于默认没有硬件加速、而下游还得先读 Cargo.toml 才知道有这回事；
+  README 里"可选 GPU 加速"那条也一直只写着 Windows。
+
+  实现上绕了一个 Cargo 的坑：**没有按 target 生效的默认 feature**，`default` 是全局的，把
+  `gpu` 写进去 Windows 会跟着编一棵 wgpu 树。故依赖分 target 段声明（macOS 非 optional、
+  其余 optional 挂 `gpu` feature），源码侧的门控从 `feature = "gpu"` 换成 build.rs 发的
+  `cfg(gpu_backend)`（判据：`target_os = "macos"` 或开了那个 feature）。`gpu` feature 保留，
+  但此后只对非 macOS 目标有意义——Windows 上用它跑 GPU 后端的离屏测试（DX12/WARP）。
+
+- **GPU 设备丢失不再让窗口停住**（macOS）。此前 `FrameError::Lost` 只在 stderr 提示一行
+  「请以软渲染重启」，窗口内容就此冻结——外接显示器热插拔、GPU 驱动复位、eGPU 拔出都是
+  这个形状。现在照 Windows 的 D2D 降级同一套语义：先重建设备与 surface（最多 3 次），仍
+  不行就把**这个窗口**切回软渲染继续出帧。
+
+  三处不按直觉走的地方：① 重建必须连**共享设备**一起换代（只重建 surface 的话，设备本身
+  已经没了时每帧立刻再丢、白白走完三次就降级），故 `SharedGpu` 加了代际与
+  `invalidate_shared_gpu(generation)`，多窗口同时发现丢失时只有第一个真正作废、其余取到
+  新的那一份；② 计数必须**每帧成功就归零**，否则相隔几小时的两次零星丢失会累加成降级；
+  ③ 降级时的顺序是先摘 `CAMetalLayer` 再 `setWantsLayer(false)`——反过来 AppKit 会连同
+  backing layer 把子层丢掉，而那张子层正被尚未析构的 surface 用裸指针指着；且光靠
+  `wantsUpdateLayer` 返回 false 不够，视图仍是 layer-backed 时 AppKit 继续走 `updateLayer`，
+  而软路径要的是 `drawRect:` 才有的绘图上下文，拿不到就静默 return——症状会是「降级了，
+  但窗口再也不更新」。
+
+  「试几次才放弃」这条策略抽成不含任何 GPU 对象的 `LossRecovery`，因此能在没有窗口的地方
+  被测到（真机上要复现一次真实的设备丢失几乎不可能）；端到端则用注入式故障在真机上走完
+  了整条链路：40 帧正常 → 注入丢失 → 重建 ×2 → 降级 → 软路径持续出帧。
+
+- **本地 `pre-push` 钩子补齐 CI 的三档 feature**（`.githooks/pre-push`）。此前只跑默认档的
+  clippy + 测试，而 `--no-default-features` 与 `--features gpu` 两档**只在 CI 上编译**——
+  0.11.0 的门控疏漏、以及 `italic` 漏进 GPU 文字缓存键（`32cd096`）都是这么溜过去的。
+  不做"按改了哪些文件决定跑不跑"的变更感知：那两次的改动本身都在别的模块，变更感知恰好
+  会放过它们。
+
+- **零窗口常驻模式 `App::resident(..)` + `run_resident()`**：不建主窗直接进消息循环，
+  托盘与全局热键挂在 `AppHost` 上照常存活，窗口由 `TrayCtx` / `HotkeyCtx` 的 `open_window`
+  按需创建、关闭即销毁，渲染资源随 `WindowState` 的 drop 归还。此前常驻托盘应用只能靠
+  `hide_on_close` 把窗口留着不销毁，那块按物理像素分配的 pixmap 于是一直挂着——根因不是
+  缺少释放机制，而是最后一个窗口 `WM_DESTROY` 时无条件 `PostQuitMessage`，窗口根本关不掉。
+  实测零窗口 1.80MB、开窗 4.42MB、关窗回落到 2.25MB（对照组 `hide_on_close` 停在 4.62MB
+  一分不还），空闲 CPU 低于时钟滴答精度。
+
+  常驻模式下 `AppHost` 从 message-only 改为隐藏的顶层工具窗：`TrackPopupMenu` 之前必须
+  `SetForegroundWindow`，而 `HWND_MESSAGE` 下的窗口不参与前台激活，托盘菜单会点了别处
+  不消失。代价是它开始收到广播消息，故新增 `WM_CLOSE` 臂——任务管理器「结束任务」投的
+  就是它，不接会留下「托盘图标消失、进程却还在」且杀不掉的僵尸。
+
+  零窗口下没有宿主可用，应用级设施因此各自需要落点：跨线程通道就地排空、`on_interval`
+  的定时器挂到宿主窗、托盘与热键句柄的意图队列在应用级派发点统一 drain、主题与窗口状态
+  由 `enter_app_scope` 注入。开窗请求走线程局部旁路队列而非放进 `TrayAction`：
+  `WindowRequest` 带闭包，塞进去会砸掉 `Vec<TrayAction>` 的 `PartialEq`，而那是
+  `testing::run_with_tray_ctx` 承诺给下游的测试入口。
+
+  顺带修掉一处既有 UB：`WM_SETTINGCHANGE` 此前挂在 `app_host_proc` 里并对宿主窗口调
+  `state_from`，把 `*mut AppHost` 当 `*mut WindowState` 解引用。它至今是死代码
+  （message-only 窗口收不到广播），但宿主改成顶层窗后就会真的执行，已移到 `wnd_proc`。
+  macOS 侧只做 TODO 降级：`run` 对 resident 明确拒绝而非退化成开窗，这些改动未在 macOS
+  目标上编译过。
+
+- **修复：shell 重启后托盘图标永久消失**（Windows）。图标是登记在 shell 的托盘窗口里的，
+  不是内核资源，随旧 `explorer.exe` 一起蒸发；进程还活着，却再没有任何可见入口。Win32
+  不做自动恢复：新 shell 会广播 `TaskbarCreated`，每个托盘程序必须自己接住并重新登记。
+
+  广播只送达顶层窗口，而托盘挂着的 App 级宿主在有主窗时是 `HWND_MESSAGE` 下的
+  message-only 窗口，根本收不到它——所以主窗的 `wnd_proc` 也接一条，两处转到同一个
+  `readd_tray`。只在宿主上接的话，托盘类应用里最常见的那一种（有主窗 + 启动即隐藏）
+  恰恰修不好。
+
+  重新登记走「`NIM_MODIFY` 探路、失败才 `NIM_ADD`」：广播每个顶层窗口各收一次，必须
+  幂等。不能先删后加——那在第二次广播时删掉的是一个正在正常工作的图标，之后能否加回来
+  全押在 `NIM_ADD` 上，而它恰恰是这条路上最会失败的一步：`TaskbarCreated` 是新 shell
+  刚起来时广播的，那一刻 explorer 往往还不能响应跨线程调用，返回 FALSE 是常态。故失败
+  后挂定时器退避重试 1s/2s/5s，用完仍失败才认输并留一行日志。
+
+  另有两处配套：提权运行时 UIPI 会拦下 explorer（中完整性）发来的广播，两处窗口创建时
+  显式放行，否则表现为「只有管理员身份跑的时候恢复不了」这种极难查的形态；`TrayState`
+  单独缓存当前 tooltip，`set_tooltip` 原先只改 shell 里那份，恢复时会退回启动初值——对
+  把当前热键写进提示的应用，那就是显示一个早已改掉的快捷键。实机验证（`examples/tray`，
+  重启 explorer 后查 `Shell_NotifyIconGetRect`）：未修复版图标登记为 False，修复版连续
+  两次重启均恢复。
+
+- **修复：macOS 状态栏图标随位图分辨率一起放大**。`NSImage` 的 `size` 是**点**而非像素，
+  此前直接拿调用方传入的位图像素尺寸当点尺寸，等于让状态栏图标按位图分辨率决定显示
+  大小——下游为了在 Windows 托盘上清晰而传的 32×32，在这里就以 32pt 显示，比菜单栏其余
+  图标（系统惯例约 18pt 高）大出将近一倍。改为固定按 18pt 高显示、按比例算宽，位图
+  分辨率此后只影响 Retina 屏下够不够清晰，不再决定显示大小。
+
+## [0.16.1] - 2026-09-10
+
+- **修复：CheckBox / RadioButton 的长标签折行后压住下一个元素。** 这两个控件的
+  `measure` 恒按**单行**量文字（`text.measure(.., None)`，`avail` 参数被整个忽略），
+  而 `paint` 却在受限的 `text_rect`（容器宽扣掉方框与间距）里绘制、超宽自然折行。
+  于是布局只分到一行的高度、实际画了两行，控件直接叠在下一个兄弟节点上。
+
+  没有任何报错，只在「窄容器 + 长标签」时显形，因此下游极难归因——同一页里 `Label`
+  一直是按 `avail.w` 折行量的，说明文字排得好好的，只有勾选行在压人（下游卸载向导里
+  带完整用户数据路径的那个勾选，压住了下面解释「还会删哪些文件」的说明）。
+
+  改为与 `Label` 同一口径：按可用宽度扣掉方框与间距后折行测量。两条退化路径保持原样
+  ——`avail.w` 为 0（宽度未知，Wrap 语义下常见）或窄到放不下方框时，仍按单行量，不会
+  把文字挤成每行一个字。
+
+## [0.16.0] - 2026-09-09
+
+- **修复：阴影的位图缓存吃掉上百 MB**（Direct2D 后端）。每个阴影原本烘焙一张与元素
+  **等大**的位图：150% DPI 下一张长卡片（977×2312）就要 8.84MB；缓存又按条数（128）
+  封顶而非字节，一页几十张尺寸各异的卡片各占一张，切页时逐页累加。下游设置页实测
+  启动 177MB、切几个 Tab 涨到 200MB+，其中 76MB 是阴影。
+
+  改为烘一张**与元素尺寸无关**的代理图，绘制时 9-slice（四角原样搬、四边单向拉伸、
+  中心整块拉伸）。缓存键因此不再含尺寸——同圆角 + 同模糊 + 同色的阴影全窗共用一条，
+  几十张全尺寸位图变成一张几十 KB 的小图；缓存改按**字节**封顶 16MB。同一场景降到
+  启动 95MB、切一轮 119MB，阴影一项只剩 2.9MB。窄到放不下两个圆角的元素（细分隔条、
+  小圆点）退回整张烘焙。视觉不变——软硬 parity 测试逐像素守着，另加三条测试锁住切片
+  特有的失败模式（切分算术、角落不随元素宽度变形、拉伸段无接缝）。
+
+- **修复：拖入文件的回调里 `ctx.open_window` 不建窗**。宿主 `on_drop_files` 曾手写消费
+  分发结果，只接了 toast / dialog / close，开窗请求（以及 focus / menu / window_op）静默
+  丢掉；Windows 的 `WM_DROPFILES` 收尾也没走 `apply_window_op`。现在与指针 / 键盘路径
+  同一套 `apply_dispatch_effects` + 同一套平台收尾。症状是"拖进来没反应"而日志里回调
+  跑到了。
+
+- **点标题栏 / 窗口失活时收起菜单**（`AppHandler::on_dismiss_overlays`）。非客户区的
+  按下（标题栏、边框、系统按钮）压根不进 `on_pointer`，系统拿去拖窗，客户区里开着的
+  菜单就一直挂着；Alt+Tab 切走亦然。Windows 在 `WM_NCLBUTTONDOWN` 等三条消息与失活时
+  让宿主收浮层，macOS 经 `windowDidResignKey:` 的失活通知走同一条路。失活同时作废
+  "单击 Alt"的判定——Alt+Tab 那次按下不算单击，否则切回来松开 Alt 会把菜单栏激活。
+
+- **接入 `log` 门面**。库只发不收（应用不装后端就是空操作）：平台层的按键（trace）、
+  `WM_DROPFILES`（debug）、拖放没落到任何 `on_drop_files` 控件（warn）、菜单开合与菜单栏
+  激活（trace / debug）。下游排"点了没反应"的问题靠它对时间线，WindFM 的文件日志即由此
+  收集。
+
+- **右键菜单 / 菜单栏点在浮层外的那一下穿透给下面的控件**（`MenuRequest::click_through`，
+  破坏性：字面量构造须补该字段）。此前点外只负责收起菜单：右键菜单开着时点另一行，
+  得再点一次那一行才选中；Windows 的做法是收起的同时那一下就落到下面——右键别处则直接
+  换成那里的菜单。下拉 / 复选菜单**不**穿透：点别处是"放弃这次选择"，且点回下拉控件自己
+  会立刻再展开一次。穿透收起的那一帧强制重绘，哪怕下面的控件对这次按下毫无反应。
+
+- **Windows：提权进程也能收到拖入的文件**。以管理员身份运行时 UIPI 拦下来自普通权限
+  进程（资源管理器、桌面）的 `WM_DROPFILES` / `WM_COPYDATA` / `WM_COPYGLOBALDATA`，
+  `on_drop_files` 永远收不到；建窗时 `ChangeWindowMessageFilterEx` 放行这三条。
+  非提权进程不受影响。
+
+- **新增菜单栏 `Element::menu_bar(Vec<MenuBarEntry>)`，手感对齐原生菜单栏**。此前应用
+  只能用一排按钮各自 `show_dropdown_menu`：点开一个之后想看旁边的得先点掉再点开、
+  ←→ 到不了相邻菜单、键盘无从激活、没有助记键——每一条都是桌面用户的肌肉记忆。
+  现在：按下标题即展开，展开期间指针**滑到**相邻标题就切过去、点当前标题收起；
+  ←→ 在根级跨菜单（高亮项有子菜单时 → 仍是进子菜单、子菜单里 ← 仍是退一级）；
+  **F10 或单击 Alt** 进入键盘激活态（标题高亮、无面板，←→ 换标题、↓ / Enter 展开、
+  Esc 退出）；**Alt+助记字母**直接展开对应菜单，菜单里按助记字母激活项（有子菜单则
+  展开）。助记字母不从标题解析（中文标题没有可下划线的字母），显式 `.mnemonic('F')`
+  配 `"文件(F)"` 这种写法，括号里的字母画下划线；`MenuItem::mnemonic` 同理。
+  控件只画标题、收第一下点击，联动全在宿主：展开后指针与键盘归浮层独占，控件收不到
+  事件，"滑到相邻标题切换"只能由知道其它标题在哪的宿主做——控件经新增的
+  `MenuBarLink`（`EventCtx::show_menu_bar`、`Widget::menu_bar_link`）把各标题矩形与
+  项生成器交出去。项每次展开现建，启用 / 勾选态总是最新的。
+  随之两处底层变化：`Key` 新增 **`Alt`** 变体（Alt 键本身，且是唯一带 `pressed: false`
+  上报的键——单击 Alt 的判定要看到松开那一下；宿主在分发前截下，控件永远收不到；
+  `match` 穷举 `Key` 的下游要补一个分支），`MenuRequest` 新增 `bar` 字段（字面量构造须
+  补 `bar: None`）。Windows 侧顺带接下 Alt 的抬起消息且不交默认处理——此前单击 Alt 会
+  让系统进入看不见的"键盘菜单模式"，下一个按键被它吞掉。macOS 侧 Option 单独按下
+  不产生键事件，单击 Alt 激活暂不可用，F10 与 Alt+字母照常。示例 `examples/menubar.rs`。
+
+- **子窗可归属与模态：`Window::owned(true)` / `Window::modal(true)`**。此前 `ctx.open_window`
+  开出的都是独立顶层窗口——会被主窗盖住、在任务栏另占一格、主窗最小化它还留着，做对话框
+  只能继续挤在主窗里当浮层，拖不出窗口。归属窗口的 owner 就是发起开窗的那个窗口：始终浮在
+  它上方、随它最小化 / 隐藏、不占任务栏、它关掉时一并关掉（Windows 去掉最小化按钮）；
+  `centered(true)` 改为居中在 owner 上并钳进其所在显示器的工作区。模态隐含归属，打开期间
+  owner 不接受输入（点它只会把对话框拉到前面），关闭后焦点回到 owner——Windows 走
+  owner HWND + `EnableWindow`，且在 `DestroyWindow` **之前**恢复，否则销毁过程中系统会把
+  激活给别的应用；macOS 走 `addChildWindow:ordered:` + 阻断表（AppKit 没有"禁用窗口"，
+  `runModalForWindow:` 是嵌套 run loop 与帧模型不合），owner 关闭时连带关掉 child。
+  返回值走共享 `Signal`，没有"阻塞到关闭"的形式。macOS 侧只做了交叉编译检查、未经真机验证。
+
+- **新增 `platform::native_window_handle()`**：当前活跃窗口的原生句柄（Windows 为 HWND，
+  其它平台暂返回 `None`）。Shell 上下文菜单、属性对话框、缩略图提取这类系统 API 都要一个
+  父窗口，此前句柄只在库内给文件对话框注入父窗用，下游拿不到。只在 UI 线程的事件分发期间
+  或 `ctx.defer_blocking` 闭包里有效。
+
+- **新增拖出到外部程序 `platform::drag_files(paths, allow_move) -> DragEffect`**。此前只有
+  `on_drop_files` 这半边——能接别人拖进来的文件，自己的条目却拖不出去，文件管理器把文件
+  拖到资源管理器、桌面、别的程序上这条最常用的路走不通。Windows 侧走 OLE `DoDragDrop` +
+  `CF_HDROP`：自实现 `IDataObject`（只供 HDROP 一种格式）与 `IDropSource`（Esc 取消、松开
+  落下），接收方看到的与从资源管理器拖出的一模一样，复制 / 移动由接收方自己完成。
+  它自带消息泵、阻塞到松开为止，**须经 `ctx.defer_blocking` 排到事件分发返回之后**再调，
+  在回调栈里直接调就是窗口状态的 `&mut` 别名。macOS 侧暂为占位（返回 `DragEffect::None`），
+  API 形状一致，下游不必按平台分支。
+
+- **`PointerEvent` 带上修饰键 `mods: Mods`**（破坏性：结构体字面量须补该字段，`single()`
+  构造器不受影响，另有 `single_with(.., mods)` 供测试）。列表控件的 Ctrl+点击切换选中、
+  Shift+点击范围选中是桌面软件最基本的选择手势，此前平台层收得到修饰键状态却没送上来，
+  文件管理器只能退而用键盘与右键做标记。Windows 读 `GetKeyState`，macOS 读
+  `NSEvent.modifierFlags`，口径与键盘事件一致（macOS 的 Command 同时置 `ctrl` 与 `meta`）。
+
+- **新增可拖动分栏 `Element::split(axis, first, second, ratio)`**（`ratio: Signal<f32>` 为第一栏
+  占比；`split_opts` 可改分隔条厚度与比例上下限）。分隔条拖动时改写信号并请求重排，
+  两栏经新增的 `Element::weight_when(f)` 读同一个信号——**拖动只重排、不重建子树**。
+  权重此前在构建期烘进 `Dimension`，改一次就得重建整棵子树，拖动分隔条每帧重建两个
+  文件面板不可接受；`weight_when` 把它变成与 `visible_when` 同契约的运行期求值。
+  新增 `SplitTheme`（`Theme::split`），showcase「布局」页有嵌套三栏的演示卡。
+
+- **`KeyEvent` 补上 `alt` / `meta` 两个修饰键**（破坏性：结构体字面量须补两个字段，或改用
+  新增的 `KeyEvent::pressed(key)`）。平台层此前收得到 Alt/Win/Option/Command 的状态，却在
+  这里丢掉，应用侧看到的 `Alt+Enter` 与裸 `Enter` 一模一样——文件管理器一类键盘优先的
+  应用，`Alt+F1` 切驱动器、`Alt+Enter` 看属性这批常规快捷键无从表达。macOS 上 Command
+  仍同时落到 `ctrl`（「跨平台写一次」不变），另置 `meta` 供确需区分 Command 与 Control
+  的应用。`KeyEvent::mods()` 给出与全局热键同形的 `Mods`，键位表可按 `(Key, Mods)` 查找。
+  - Windows 侧接上 `WM_SYSKEYDOWN`：Alt 组合键走的是这条系统键消息而非 `WM_KEYDOWN`，
+    此前根本到不了应用。分发后仍交默认处理，Alt+F4 关窗、Alt+Space 系统菜单照旧；随后的
+    `WM_SYSCHAR` 被吞掉（Alt+字母不是文本，默认处理只会为找不到菜单助记符而蜂鸣），
+    只放行 Alt+Space。
+  - macOS 侧 Option+字母不再送进输入法（那会变成 ¬ Ω 一类符号），改与 Command 同走
+    `Key::Other(大写 ASCII)` 快捷键通路，`alt` 置位、`ctrl` 不置位。
+- **`Key` 新增具名键 `F(1..=12)` / `Insert` / `NumpadAdd` / `NumpadSubtract` /
+  `NumpadMultiply` / `NumpadDivide` / `ContextMenu`**。此前 F 键只能写 `Key::Other(0x74)`
+  （Windows 虚拟键码，macOS 侧为此对齐了一张 VK 表）——既不可读，也把平台键码泄漏进
+  应用代码；macOS 上无修饰键的 F 键更是直接进了输入法、应用收不到。两平台的输入映射与
+  全局热键反向映射各自补齐，互逆测试一并扩到新键。老代码里 `Other(0x70)` 写的 F1 仍能
+  注册热键，不受影响。`--key` 截图参数同步认 `F5` / `alt+F1` / `insert` / `numpad+` 等。
+- **`CursorShape::SizeNS`**（↕）：横向分栏的分隔条要它，与 `SizeWE` 对称。
+
+- **多行输入框让出 `Ctrl+Enter` 作为应用级「提交」通道**（行为变更）。`TextInput` 多行模式
+  此前对 Enter 一律插入换行、**不看修饰键**，于是多行表单没有任何键盘交卷的办法——挂
+  `on_submit` 收不到（那条臂排在多行守卫之后，永远走不到），挂到外层容器上更收不到
+  （`dispatch_key` 只派给焦点节点，不冒泡）。现在裸 Enter 仍是换行，`Ctrl+Enter` 交给
+  `on_submit`；未声明 `on_submit` 的多行框上它不被消费，于是能上达 `App::on_shortcut`。
+  - 同一条不变量下，**按钮类与下拉类控件不再吃带 `Ctrl` 的 Enter**：`Button`、`IconButton`、
+    `Clickable`、`TabBar`、`Dropdown`、`CheckMenu` 的激活键收窄为**裸** Enter / 空格
+    （下拉另有 ↓）。表单里焦点常停在某个按钮上（Tab 过去的、点过「粘贴」的），它们若
+    照吃不误，用户按 `Ctrl+Enter` 提交得到的会是「触发了焦点所在的取消按钮」——表单没交，
+    反倒关掉了。
+  - 影响面：此前靠 `Ctrl+Enter` / `Ctrl+Space` 触发按钮、靠 `Ctrl+↓` 展开下拉的写法会失效。
+    这两类都不是激活语义，属于旧行为漏放的修饰键组合。
+
+- **新增颜色选择器 `Element::color_picker(color)`**（`color: Signal<Color>`）。色块触发器 +
+  点开的取色面板：SV 方块（饱和度 × 明度）、色相条、透明度条、HEX 输入框、一排预设色，
+  全部双向绑同一个信号。`Element::color_picker_opts(color, ColorPickerOpts::default()…)`
+  可裁剪面板组成（`alpha` / `hex` / `presets` / `panel_width` / `trigger_text` / `open`）。
+  - **HSVA 存在控件内部，不是每帧从 RGB 反算**。RGB→HSV 不是单射：饱和度归零时色相消失、
+    明度归零时色相与饱和度一起消失。若每帧反算，把明度拖到底再拖回来色相会跳成红色——
+    用户明明只动了明度。外部改动才触发一次回算，且在退化处沿用旧值
+    （`Hsva::from_color_keeping`）。这条经两个方向的端到端测试各守一次：SV 拖拽走
+    `commit`（HSVA 直接落库），预设/HEX 走 `commit_color`（保留式反算），两套代码各自会坏。
+  - 面板的三层渐变（纯色相底 + 横向白色渐隐 + 纵向黑色渐入）与色相条的七色标彩虹都交给
+    `Paint::gradient` 一次提交，不逐像素算 HSV→RGB。
+  - 新增 `ColorPickerTheme` 覆盖层。棋盘格两色是它独有的槽：透明度要靠「底下透出什么」
+    表达，而调色板里没有一个 token 是为「表示无内容」而设的，借 `surface`/`surface_alt`
+    会让棋盘格在深色主题里跟面板底融成一片；但也不能钉死成一对浅灰——深色面板里一块纯白
+    棋盘格会成为整个面板最亮的东西。默认值因此按 `surface` 的明暗分两套，并用亮度差断言
+    锁住三条关系（两格分得出、至少一格与面板底分得开、不比面板底亮太多）。
+
+- **新增锚定浮层 `Element::popup(open, content)`**（核心层 `Node::overlay`）。取色器面板的
+  地基，也可独立用于任何「浮在内容之上、点外面就收起」的临时界面。
+  - 此前框架只有两种「浮起」：`Node::raised` 只在**同级兄弟**间提升绘制序，逃不出祖先的
+    裁剪与绘制序；宿主浮层层（`show_dropdown_menu`）只吃 `MenuItem`，装不下自绘图形。
+    浮层节点补上了第三种：**脱离父容器布局流**（不占位、不撑大父容器）、**在整棵树之后
+    绘制且不受祖先 `clip_children` 裁剪**、**命中先于整棵树**。
+  - 定位与下拉菜单同口径：贴在锚点正下方，下方装不下就翻到上方，两边都装不下则钳到窗口内。
+    `bounds` 存的是**相对锚点**的坐标，故浮层自动跟着锚点走（滚动、拖拽让位都不必重排它），
+    `abs_bounds` 也无需特判。
+  - **轻量关闭**由核心负责：在浮层与锚点之外按下、或按 ESC（排在关闭对话框之前——浮层常
+    从对话框内部展开，先关对话框会把它一起吞掉），都会把 `open` 置 false。点在**锚点自身**
+    上时核心不插手，那一下归触发器自己的 toggle，否则会「先被关掉、再被打开」，点了等于没点。
+  - **轻量关闭**由核心负责：在浮层与锚点之外按下、或按 ESC（排在关闭对话框之前——浮层常
+    从对话框内部展开，先关对话框会把它一起吞掉），都会把 `open` 置 false。点在**锚点自身**
+    上时核心不插手，那一下归触发器自己的 toggle，否则会「先被关掉、再被打开」，点了等于没点。
+  - 另两条边界也由核心兜住：**模态遮罩之外的浮层不参与绘制与命中**（焦点侧早已按模态
+    作用域裁过，命中与绘制不跟上，三者对「模态期间谁可交互」的判断就不一致；指针路径能
+    自愈，快捷键/定时器弹出的对话框不能），以及**锚点被滚出视口后自动收起**（浮层刻意
+    不受祖先裁剪，锚点滚没了它还浮着，位置又被钳在窗口边缘，就成了与任何东西都无关的浮块；
+    滚轮不触发轻量关闭，只能在布局阶段兜）。
+  - `ColorPickerOpts` / `Hsva` / `default_presets` 已加进 `prelude`（构造器在 prelude 里、
+    参数类型却要写深路径 import，那条路就没人走）。
+
+- **`Element::tabs_items(selected, pages, style)`**：`TabItem::enabled`（v0.15.0 加的逐项
+  禁用）此前**没有公开可达路径**——`tabs` / `tabs_icons` / `tabs_pill` 都在内部自己造标签项，
+  而收 `Vec<TabItem>` 的 `tabs_frame` 是私有的，仓库里唯一用到 `.enabled(..)` 的地方是直接
+  `TabBar::new(..)` 的单元测试。这类缺口单测抓不到：测试在 crate 内部，`pub(crate)` 与 `pub`
+  对它一视同仁，只有从外部视角问「用户怎么写出这一行」才看得见。新构造器收
+  `Vec<(TabItem, Element)>` 与 `TabStyle`，同时覆盖下划线与胶囊两种风格，并把
+  `TabItem` / `TabStyle` 加进 `prelude`（构造器在 prelude 里、参数类型却要写深路径 import，
+  那条路就没人走）。补了一条经完整分发链路的契约测试，用两棵树对照——只断言「禁用项点不动」
+  的话，一条彻底断掉的路径也会照样通过。
+- **修复 `SpanStyle::italic` 的文档挂错**：`italic` 插进 `underline` 的文档注释与函数签名
+  之间，于是 `italic` 的 rustdoc 头一行写着「下划线。」，而 `underline` 变成无文档。
+- **`docs/API_GUIDE.md` 补齐 v0.15.0 的公开 API**：跨控件选择域与字符级选区、标签逐项禁用、
+  托盘提示运行期可改、斜体、窗口级快捷键、跟随系统亮暗、一个热键切换显隐、对话框可拖动与
+  `dialog_closable`、`padding_edges` / `align_xy`。
+
+- **修复 GPU 后端的斜体与正体共用同一张文字纹理**（`feature = "gpu"`）。`italic` 加进
+  `TextStyle` 时同步了 DirectWrite 侧的三处缓存键，却漏了 GPU 后端的第四处——`RunKey`
+  是整段文字的排版/光栅缓存键，不含 `italic` 就意味着同字族同字号的正体与斜体互相顶替，
+  先进缓存的那套被后者复用，表现为斜体时灵时不灵。同一处的 `key_covers_every_layout_input`
+  测试本是**唯一能在改动当场抓住它**的守卫，但它用穷尽式结构体字面量构造 `TextStyle`，
+  于是新字段先让它编译不过、而这一档只在 `--features gpu` 下编译，本地默认门禁跑不到。
+  已给该测试补上 `italic` 一档，并经注入验证确认能变红。
+
+
+## [0.15.0] - 2026-09-02
+
+- **数字步进 `Element::stepper` 的中部换成了真正的文本输入框**。此前那里是一份自绘文本，
+  只会逐字符增删和左右移光标——选不中、复制不了、粘不进去、没有右键菜单，
+  一个"看起来像输入框"的东西却缺了输入框的绝大部分能力。
+  - 控件由单节点自绘改为**复合**：行容器（画底/边框/分隔线）+ ± 按钮 + 中部 `TextInput`。
+    拖选、双击选词、Ctrl+A/C/X/V、右键菜单、输入法（含合成串）全部直接继承，不再重造。
+  - 数值语义不变并补齐：↑↓ 步进、Enter 提交并全选、Escape 撤销**本轮键入**
+    （± 与 ↑↓ 的步进是当场落地的动作，不会被一起撤销）、失焦自动提交
+    （越界钳回范围、按步长推断的小数位规整）；非数字的**键入与粘贴用同一把尺子**拒绝，
+    但放行 `""` / `-` / `1.` 这些编辑途中的半成品（用 `parse` 当门禁会让删光重打直接卡死）。
+  - 对 Tab 仍只占**一个**焦点位（± 按钮不可聚焦）。点 ± **只调值、不夺焦点**——
+    光标是个很强的信号，只想微调一下数字却看见框里开始闪光标，既像误入编辑态、
+    也容易被后续误触改坏；想编辑直接点中间那格。`Element::stepper(..)` 签名、
+    `.width()` / `.disabled()` 用法不变，默认宽仍是 120。
+  - `TextInput` 相应长出三项通用能力：`TextConfig::frameless`（外框交给容器画，
+    避免双线）、`TextConfig::align`（单行居中/右对齐，**放不下时自动让位给水平滚动**，
+    否则会和"滚动跟随光标"打架）、以及输入准入过滤 `TextInput::set_filter`
+    （对**改动后的完整正文**表态，键入与粘贴共用）。`TextInput::select_all` 转为公开。
+  - 顺带修好一处**通用**缺口：`Tree::node_tooltip` 此前只看命中节点自身，凡是内部由
+    多个节点拼成的复合控件，挂在控件本身上的 `.tooltip(..)` 都读不到（链上去不报错也
+    不生效）。现改为沿祖先链回溯，与 `cursor_at` 同一心智。
+  - **破坏性**两处：移除 `auroraui::ui::Stepper` 类型导出（控件已无单一 widget；
+    该类型此前只能靠 `Element::stepper(..)` 间接使用，调用方通常无需改动）；
+    `TextConfig` 新增两个 pub 字段，用穷尽式结构体字面量构造它的代码需要补字段
+    （`..Default::default()` 或 `TextInput::config_mut()` 不受影响）。
+  - 另三处行为差异，配置过主题、右键菜单或依赖左右方向键的调用方请留意：
+    - `←` / `→` 不再步进，改为在数值里移动光标（旧实现非编辑态等价 ∓1）。
+      步进请用 `↑` / `↓` 或两侧按钮。
+    - `StepperTheme::text` 不再生效——中部数值已与 `text_input` 同源，正文色走节点
+      `Style` 的 `.fg(..)` / `.fg_role(..)`（`InputTheme::text` 一直如此）。字段保留，
+      只为不破坏既有 TOML 的解析。
+    - `.on_context_menu(..)` 在 ± 按钮区照旧弹出，落在**数值区**时让位给输入框自带的
+      复制/粘贴菜单。
+
+- **macOS 输入法合成串现在能看见了**（修复用户反馈的「打拼音看不到编码」）。
+  根因是平台模型差异：Windows 的 IMM32 允许应用只用 `ImmSetCompositionWindow` 说
+  「画在哪」，合成串由系统 IME 自己画；AppKit 的 `NSTextInputClient` **只有内联一档**
+  ——实现了协议就等于承诺自己画，系统绝不代画。此前 macOS 后端在 `setMarkedText:` 里
+  只取了「字符串是否非空」这一个布尔，串本身被丢弃，而那个布尔的唯一用途是**藏起光标**
+  ——于是合成期间文本框里既没有拼音也没有光标，看着像打字没反应。
+  - 新增 `Preedit { text, caret, sel }` 与一条通路：`setMarkedText:` →
+    `AppHandler::set_ime_preedit` → `Widget::set_preedit` → `TextInput` 内联绘制
+    （下划线 + 合成内光标 + 参与换行测量）。这与 winit / Qt / Chromium / Flutter / SDL
+    的做法同构——它们都是把 preedit 整串抛给上层由控件渲染，没有哪个平台能让系统代画。
+  - **两平台分工互斥**：win32 继续走 `set_ime_composing` 用系统内联，`TextInput::preedit`
+    在那边恒空。两边同时自绘会出现**双份合成串**，这是本设计唯一的致命回归形态，
+    已加守卫测试。
+  - 索引单位在平台边界收口：`NSRange` 以 UTF-16 码元计，`Preedit` 以字符计。BMP 内的
+    汉字两者恰好一致，所以这个换算**用中文怎么测都测不出问题**，只有 emoji（代理对，
+    2 码元）会暴露——契约测试专门覆盖了这一档。
+  - 补齐四处 `NSTextInputClient` 协议 stub：`markedRange` 此前长度恒 0（与
+    `hasMarkedText` 自相矛盾，会让部分第三方输入法走降级路径）、`selectedRange` 恒
+    `{0,0}`、`attributedSubstringForProposedRange:` 恒 `None`（影响重转换与联想）。
+    新增 `AppHandler::ime_selection` / `ime_text` 供其取值；密码框不把内容交给输入法。
+  - 合成中点击文本框别处会先收掉合成串（`mouseDown:` → `abort_composition`），
+    不再留下悬空的拼音。
+  - 主题新增 `InputTheme::preedit_underline`（默认正文色 60% alpha）。
+  - 真机三个输入法验证带出的修正：合成期间 `selectedRange` 此前返回的是合成串在文档中的
+    插入点——合成串不属于正文，控件的 cursor 停在插入位置不动，于是这个值恒等于合成串起点，
+    与 `markedRange` 不在同一坐标系，依赖它定位的输入法会一直拿到「编辑点在合成串开头」；
+    改为返回 `markedRange.location + caret`，有选中分句时返回分句范围。编辑点越界时的兜底
+    方向定为**末尾**而非开头（`NSNotFound` 会以极大的 `NSUInteger` 传进来，也有输入法报出
+    超过合成串长度的位置；合成时的编辑点几乎总在末尾）。这类偏差只在换输入法时才暴露——
+    宽容的输入法不读这个值，于是一个错误的实现能在多数输入法下看起来正常。
+  - 新增诊断开关 `WINDUI_IME`（同 `WINDUI_HITS` / `WINDUI_PROF` 惯例），打印输入法报来的
+    原始 `selectedRange` 与换算结果。不同输入法对 `NSTextInputClient` 的用法差别很大，
+    而差别的后果（光标画错、候选窗跑偏）在界面上长得都一样，报错的一方又不在本仓库里，
+    只有把原始值打出来才划得清边界。
+- **富文本选区改成字符级，并新增跨控件选择域 `Element::selection_scope(..)`**。
+  - 此前选区以「碎片」为单位，而碎片的切法是 Latin 按空格断、CJK 逐字断，且延伸点必须与
+    锚点不在同一碎片——于是 `standby` 这样的词头、`[ˈstændbaɪ]` 这样的音标怎么拖都选不出
+    东西（它们各自只有一个碎片，那个条件永远不成立），中文因为逐字成片碰巧可拖，看着像
+    「英文那块坏了」。现在 `Frag` 记下每个字符边界的横向偏移，逐前缀测量，与 `TextInput`
+    的 prefix 是同一套做法——同一件事用两种算法，会让同一段文字在两个控件里落点不同，
+    而那种差异只有拿尺子量才看得出来。单字符碎片直接给 `[0, w]` 跳过测量；chip 不参与
+    字符切分，落到就近的一端整个进或整个不进。双击选词、三击选段、Ctrl+A 仍取整碎片范围。
+  - 一个 `RichText` 自己是一个独立的选择域，而一屏内容常被拆成好几个控件（词头要与星标
+    按钮并排，而富文本里放不进按钮），选区跨不过去，用户只能一段一段地复制。
+    `selection_scope` 把若干成员并成一个域：成员在 paint 时把自己的布局（`Rc<RichLayout>`，
+    零拷贝）连同 content 的绝对矩形交给域，拖拽时指针被起始控件捕获、事件全送给它，
+    它拿全局坐标去问域「这落在谁的第几个字上」，不必访问别的控件。成员按**视觉序**（上、左）
+    而非注册序——注册序取决于首次 paint 的次序，而那个次序在滚动、重建之后并不稳定。
+    控件持 `Rc`、域持 `Weak`，控件销毁后域这边自然失效。域内 Ctrl+A 的意思是「这一屏」
+    而不是「我碰巧聚焦的那一段」。**不挂域的富文本一字不变**，仍是各管各的选区。
+
+- **标签可逐项禁用 `TabItem::enabled(Signal<bool>)`**。禁用项文字走 `text_disabled`、
+  悬停不亮、点击与键盘都跳过它。**禁用不是隐藏**：一个「本次没内容」的标签留在原位置灰着，
+  位置就是稳定的，用户「总是点第三个」这条肌肉记忆才成立；把它摘掉则每次数据一变，
+  后面所有标签整体左移一格，看着像换了一条标签条。**收信号而非布尔**（与
+  `TrayMenuItem::enabled` 一致）：收布尔就意味着「哪一项能点」一改就得重建整条标签条，
+  重建会丢掉悬停态、并让选中滑块从头落定而不是滑过去。方向键**跳过**禁用项而不是停在
+  上面——停在上面时按键看着「没反应」，用户分不清是键坏了还是标签坏了。
+
+- **托盘提示可在运行期改 `TrayHandle::set_tooltip(..)`**。`Tray` 是构造器，`App::tray`
+  之后就被消费掉了，而提示文字往往要随应用状态变（「Ctrl+Alt+D 查询」——用户改了热键，
+  这句话就成了假话）；没有这条路子时唯一的出路是让提示不提任何会变的东西，那是拿信息量
+  换正确性。与 `ThemeHandle` / `HotkeyHandle` 同一条路子：句柄只排队意图，平台层在事件
+  分发之后落地（`Shell_NotifyIcon` 会跨线程发消息并泵入站消息，在借用里直接调是老问题）。
+  队列是**线程局部**而非穿过各层构造器——托盘是应用级单例，不属于任何窗口，把它的队列挂进
+  每个窗口的 handler 等于把「哪个窗口的托盘」这个不存在的问题引进来。排完队要踢一帧，
+  否则这条意图要等到下一次有人动鼠标才被消费。macOS 侧按同一形状实现（状态栏按钮的
+  `toolTip`）。
+
+- **`Element::text_input(..).on_click(..)` 接上了**。`TextInput` 一直没实现
+  `Widget::take_click`，于是这条链是**静默无效**的——链上去不报错、也不生效。宿主因此收不到
+  「用户又点了一次输入框」，而这件事在别处收不到：焦点没变（框本来就有焦点），文本也没变
+  （只是点了一下）。直接的需求是带结果浮层的搜索框：用户按 Escape 收起浮层后再点输入框，
+  浮层该回来——浮层的开合只有宿主知道，框自己不该管。语义是**旁路通知**而非激活（与 Button
+  的同名回调不同）：输入框照常聚焦、定位光标、起拖选，回调只是搭个便车。**仅左键触发**，
+  拖滚动条与右键都不触发（那两种再触发宿主的点击反应会打架）；双击选词、三击选段在其后，
+  故一样会通知——用户双击输入框时，那个被收起的浮层一样该回来。
+
+- **文字支持斜体，与字重正交**：`Element::italic()` 与 `SpanStyle::italic()` 两条路都通，
+  `TextStyle` / `Style` / `SpanStyle` 各加一个 `italic`。与字重分开而不是合成一个「字形变体」
+  枚举——字体里这是正交的两个轴，DirectWrite 的 weight 与 style 也是分开的参数；合成枚举
+  就表达不了粗斜体，而那恰是正文里的常见组合（粗体词性 + 斜体例句）。三处缓存键
+  （`format()` 的键、measure 的哈希、`line_metrics` 的哈希）同步带上 `italic`：漏任何一处，
+  同字族同字号的正体与斜体会互相顶替——先进缓存的那套被后者复用，表现为斜体时灵时不灵。
+  `SpanStyle::over` 里 `italic` 按「或」合并而非覆盖，与 `underline` / `strike` 一致：
+  它们是开关不是取值，命名样式开了斜体、内联样式不该把它关掉。
+
+- **对话框面板可拖动，并可选右上角小关闭按钮**。此前弹出即钉死在正中，盖住的内容看不了
+  也挪不开；现在按住面板顶部约 52px（通常正是标题行）就能把它拖开。拖动写 `Node::offset`
+  （视觉位移、布局不变），故居中排布原样保留、任何一次 relayout 都不会冲掉位置；也正因为
+  不进布局，它只对当次生效，由 `ModalScrim` 在 `on_update` 里识别「重新弹出」并复位。
+  判定挂在遮罩上而不是另标一根拖动条：指针事件谁先消费谁优先，落在标题行按钮上的按下根本
+  冒泡不到遮罩，与 `window_drag` 的「落在子交互控件上不拖窗」是同一套裁决，调用点一行未改。
+  **不要求面板整体留在窗口内**——大对话框正要能拖开去看它盖住的内容，硬钳在窗口内等于把
+  拖动这件事作废；只堵拖动带整条出界那一种（那时既抓不回来也拖不动）。顺带给 `stack` 补
+  `align_xy(h, v)`：原先一个 `align` 同时管两轴、`End` 只能是右下角，表达不了关闭按钮
+  要的右上。
+
+- **补齐常驻工具类应用要的四项能力**：窗口级快捷键、唤起时收回焦点、窗口可见性、系统亮暗。
+  - **`App::on_shortcut(..)`**：键盘事件只发给焦点节点，而「Ctrl+L 回搜索框」「F5 刷新」
+    在焦点落在哪都该生效；没有这个入口，应用只能把同一段处理抄进每个可聚焦控件的
+    `on_nav_key`，漏一个那控件上的快捷键就哑了。定位是**兜底而非抢先**（焦点控件要了就轮
+    不到），但排在 Tab / Escape 之前——设置页的 Escape 该退回上一页，不该把整个窗口关掉。
+    `ShortcutCtx` 只收集意图（`focus_main_input` / `request_close`），由宿主在回调返回后
+    落地，理由同 `HotkeyCtx`。处理过的键**必须**请求重排与重绘，否则界面停在旧样子、
+    要等下次鼠标移动才刷出来。
+  - **唤起时把焦点收回来**：`rearm_autofocus` 此前只清标志，而 `honor_autofocus` 有一步
+    「不抢已有焦点」——用户上次把焦点留在了列表或某个按钮上，再按热键唤起就当场让位，
+    `autofocus_select_all` 的全选也从第二次唤起起再没发生过，而那正是它存在的理由。
+    一并补 `Tree::pending_focus`：`on_update` 相位丢弃整个 `EventOutcome`，控件在那里
+    `request_focus` 设的位也随之消失，roving tabindex 的列表（整块占一个焦点位、点击由行
+    消费）没有这条通道就接不上键盘。
+  - **`WindowState::visible`**：常驻工具的热键语义是**切换**——露着就收起、藏着就唤起，
+    而应用侧跟不住这个状态（隐藏可能发生在框架内部：ESC 关窗、`hide_on_close`），自建标志
+    迟早对不上。热键派发前先刷一次快照：它是唯一能在窗口隐藏、毫无消息往来时抵达的输入，
+    其余路径都以窗口可见为前提。
+  - **系统亮暗偏好**：`event::system_prefers_dark()` 答「此刻是什么」（win32 读
+    `AppsUseLightTheme`，macOS 读 `AppleInterfaceStyle`），`App::on_system_theme_changed(..)`
+    负责之后的跟随——一次会话可能横跨日出日落而进程一直不重启，只在启动时读一次的话得重开
+    应用才生效。`WM_SETTINGCHANGE` 只认 `ImmersiveColorSet`：字体、区域、鼠标速度都走同一条
+    消息，不筛就会在用户改任何系统设置时白重建一次界面。
+  - 附带 `CursorShape::SizeWE`（分隔条要说的是「能左右拖」，手型说的是「能点」）与
+    `Element::padding_edges`（只在滚动条那一侧留空间，对称 padding 表达不了）。
+
+- **修复 `TextInput` 判空看正文而非显示串**：正文为空但正在输入合成串时会走进
+  placeholder 分支，合成串一个字都画不出来——正是「只看到占位符」的那个现象。
+- **修复 macOS 上 `CursorShape::SizeWE` 未接**：该变体加进枚举时只在 Windows 上跑了门禁，
+  macOS 侧 `apply_cursor` 的 `match` 没跟上，**macOS 直接编译失败**（E0004 非穷尽匹配）。
+  枚举加变体是跨平台改动，每个平台都有一处 `match` 要跟着长。
+
+- **修复图标在跨 DPI 拖窗后有概率画成另一个图标**（Direct2D 与 GPU 两个后端同修）。
+  图片的缓存键取的是底层 `Rc<Pixmap>` 的指针值，而指针只在对象活着时唯一：DPI 感知的 SVG
+  图标（`image_svg(svg, None)`）在 DPI 变化时会逐个重光栅，图标 A 释放旧 `Pixmap`、图标 B
+  随即分配新的，两者尺寸相同（同一个分配器 size class），B 拿到 A 刚腾出的地址是常态而非
+  偶然，于是 B 撞上缓存里 A 的那条纹理，画出来的是 A 的图标；强制刷一次界面又好了，也是
+  同一个原因。改成构造期分配的单调递增 id：`Clone` 复制该字段，故同一张图的克隆仍共享身份、
+  纹理复用不受影响；`tinted()` 则必须取新 id——它产生的是另一份像素，沿用会让后端把
+  **未着色**的那张当成着色后的画出来。
+- **修复圆角在非整数 DPI 下边框与底色错开半个物理像素**。`stroke_round_rect` 早就把矩形吸到
+  物理像素整数边界，`fill_round_rect` 却没有——单独对齐一侧比两侧都不对齐更糟：后者是「都糊」，
+  前者是「错开」，而错开才显眼（设置页的风格色卡上一眼就看得出来）。修法不是给填充也抄一遍
+  那四行，而是抽出 `align_to_device`，让四个调用点（tiny-skia 与 wgpu 两个后端 × 填充/描边）
+  共用一份公式——四行分散写正是它会再次漂移的地方。
+
+## [0.14.0] - 2026-08-26
+
+- **窗口/应用图标** `App::icon(..)` / `Window::icon(..)`，配内置品牌图标
+  `brand_icon()`（天蓝 `#1E90FF` 底 + 白色对称 W）。全部 36 个示例统一接入。
+  几处值得记下来的：
+  - **尺寸由平台决定，不由调用方定死**。`App::icon` 收的是 `IconSource` 而非位图：
+    系统在不同场合要不同像素数（`GetSystemMetricsForDpi` 实测 100% 要 16/32，
+    150% 要 24/48，200% 要 32/64），而**任务栏取的是大的那档**。收位图的话平台层就只能
+    交给系统缩放，而没有哪个固定尺寸能同时对上 40/48/56/64——选哪个都只是把模糊从一个
+    DPI 挪到另一个。`IconSource::Sized` 把光栅化推迟到平台层知道要多大之后，
+    ICON_SMALL 与 ICON_BIG 各画各的。实测过渡像素占比（越低越锐）：150% 屏上把 32 拉到
+    48 是 19.2%，直接画 48 是 6.7%；200% 屏上 20.1% 对 5.1%。
+  - **DPI 变化时重画**：窗口从 150% 屏拖到 200% 屏，`WM_DPICHANGED` 里按新尺寸重建。
+    双屏不同缩放比下这是刚需，已在 150%+200% 的真机上来回拖动验证（24/48 ↔ 32/64）。
+  - **两平台同一行，落点不同**：Windows 走 `WM_SETICON`（标题栏取 ICON_SMALL，任务栏与
+    Alt-Tab 取 ICON_BIG），macOS 没有窗口级图标这个概念，落到**应用级** Dock 图标上
+    ——那边只要一张 512px 的，Dock 自己缩小，缩小不糊。**子窗不继承主窗的图标**
+    ——`WM_SETICON` 设在具体 HWND 上，不在窗口类上。
+  - **图标不走 `ImageContent`**，另立 `WindowIcon`（裸的非预乘 RGBA8）。那一层是面向
+    绘制的（tint / fit / 状态换图），而两边平台最终要的都是原始像素：Win32
+    `CreateIconIndirect` 与 macOS `NSImage`。让平台层直接收 RGBA，省一层剥壳，也不必
+    把 UI 概念泄漏到平台边界。顺带给 `Image` 加了 `to_rgba()`（反预乘导出）。
+  - **W 是几何构造的原创路径，不取自任何字体**：字形轮廓受字体版权保护，随本 crate 的
+    MIT/Apache 双许可分发有风险。做法是给一条 5 点中心折线做逐段变厚的偏移求交得到轮廓，
+    再用两条水平半平面把顶端与底端切平——"中峰到顶"与"底部平台"因此是同一套裁剪的两个
+    参数，没有分支。造型参数与 SVG/ICO 的唯一真相源是 `scripts/gen_icon.py`。
+  - **左右对称有断言守着**，不是靠眼睛。生成器早期版本的末端外延是从**段起点**算的，
+    走完外延量还没出那一段，右上笔画就伸不出顶边、少切了一刀——渲染不报错，只是"看着
+    有点怪"，16px 下根本看不出来。顶点固化进 `src/icon.rs` 后由镜像配对测试钉住。
+  - **`.ico` 的档位是各缩放比的并集**（16/20/24/28/32/40/48/56/64/80 + 128/256），
+    不是随手挑的整数：少一档，那个缩放比下系统就得拉伸最近的一档。
+  - **exe 资源是另一条互补的路**：`build.rs` 把多尺寸 `assets/auroraui.ico` 嵌进 examples，
+    窗口类的 `LoadIconW` 取到的每一档都是原生分辨率，比运行时单尺寸位图交给系统缩放锐利。
+    用 `cargo:rustc-link-arg` 而非 `-bin`：它只作用于本 package 里经过链接器的 target，
+    而库产出的 rlib 不经链接器，**下游应用不会被烙上 auroraui 的图标**。
+  - 托盘图标同源：`Tray::icon_rgba(32, 32, brand_icon(32).rgba())`，三个用托盘的示例
+    据此换掉了各自的纯色占位图标。
+
+- **分页操作栏** `Element::pager(page, total_items, page_size, on_page)`：条目总数 +
+  当前页 + 首/上/下/末页 + 跳到第几页。**独立控件，不绑定任何表格**——只读写两个信号并在
+  翻页时回调一次，谁来渲染那一页是调用方的事，配 `table_sortable_server`、客户端切片、
+  甚至卡片列表都行。
+  几处值得记下来的：
+  - **`total_items` 变小时自动把越界的页码钳到末页并触发一次 `on_page`**。换了筛选条件
+    之后停在一个不存在的页上，界面会显示"第 100 / 4 页"配一张空表，而且怎么点都回不来。
+  - **边界上按钮置灰而非隐藏**：位置不跳，也看得出"已经在第一页了"。契约测试同时验
+    "是灰的"与"点不动"——只验后者会被 `goto` 里那道"目标页没变就什么都不做"的兜底挡住，
+    把禁用条件整个删掉也全绿，而按钮却亮着。
+  - **页码 0 基**（`offset = page * page_size` 直接可用），界面与跳转框里都是 1 基的人类
+    页码，只在显示层换算。`page_count` 至少返回 1——返回 0 的话界面上会出现"第 1 / 0 页"，
+    末页按钮还要跳到第 −1 页。
+  - **跳转框解析失败时原样留着不动**，成功后才清空。把用户打错的字悄悄清掉，他就不知道
+    自己错在哪了。回车与点「跳转」等效。
+  - 页码栏是响应式的，但**稳态下一个信号都不写**（信号一写就是一次重绘请求）。文案要
+    同时跟着页码与总数两个信号走，`Signal::map` 只跟一个源，故用了个小 widget 而不是
+    派生信号。
+  与虚拟滚动是**并列**的两套 UX，不是替代关系，别叠着用：虚拟滚动没有"页"的概念，滚一下
+  页码就变。新增 `examples/table_pager.rs`；文档见 `docs/API_GUIDE.md` §6.8。
+
+- **服务端分页表格**：`Element::table_virtual_server(columns, source, row_height, on_need)`
+  配 `RowSource`。整份数据留在后端，前端只握着「总行数 + 已到货的分段 + 当前排序」：
+  滚动条按**总行数**撑高（第一帧就是对的，不随数据到货跳来跳去），视口进到还没到货的段
+  就发一次请求，未到的行画骨架灰条。二十万行的表格，前端常驻的是三千多行。
+  与 `table_virtual` 的分界不在"数据从哪来"——接口一次性拉回来放进信号照样用那个——
+  而在**整份数据在不在本地内存**。
+  几处值得记下来的：
+  - **按固定分段拉取，不按视口的实际区间**。区间随滚动位置漂移，滚 3 像素就是一个新
+    区间，既没法去重也没法缓存；对齐到分段边界之后，后端拿到的就是 `LIMIT n OFFSET m×n`，
+    同一段滚过去再滚回来不重复请求。默认 100 行/段，`RowSource::chunk` 可改。
+  - **缓存有上限并按 LRU 淘汰**（默认 32 段）。不淘汰的话，把十万行滚一遍就等于把整份
+    数据搬进了内存——那正是这套东西要避开的事，也正好打在「约 3.6MB 常驻」这个立身
+    指标上。淘汰**绕开当前视口覆盖的段**：否则会把正在看的那一段淘汰掉，画面当场闪成
+    骨架、重拉、再闪回来，滚动时无限循环。
+  - **台账与数据分成两个信号**。信号一写就请求重绘（`signal::notify_changed`），而在途
+    请求、LRU、当前窗口这些字段每帧都要翻看——混在数据信号里的话，光是翻看就会把
+    「空闲零 CPU」写死，且没有任何视觉表现能暴露它。规矩是"只有真的变了才写信号"，
+    由 `idle_never_writes_the_signals` 直接钉住。
+  - **回填要带上收到的 `RowRequest`**，而不只是起始下标：它同时带着代次，排序在请求发出
+    之后变过的话这次写入会被丢弃。异步取数最经典的一个 bug 就是慢响应盖掉新排序的
+    数据——表现是"排了序内容却是旧的"，且只在网络慢时偶发。
+  - **排序变化自动作废整份缓存**并按新排序重新请求，不交给应用。忘了这一步的表现是
+    "行还在原位、内容按新序错位"，看着像数据错乱，查不到排序头上。
+  - **"总数还不知道"与"确实一行都没有"分开记**（`Rows::known`）。两者混为一谈的话，
+    要么空结果集永远画着一屏骨架，要么慢后端下的首屏是一张空表——而空表与"查询结果为空"
+    无从区分，正是选骨架而不是留白要避开的事。总数未确认时先按引导请求那一段撑着。
+  - 取数失败调 `RowSource::retry(&req)` 重新武装那一段；它顺带推一格数据版本，重试因此
+    立刻生效，而不是等用户滚动一次——失败时用户多半正盯着那几行骨架不动。
+  新增 `examples/virtual_table_server.rs`（二十万行 + 模拟慢后端 + 失败重试 + 排序 +
+  行内按钮）；文档见 `docs/API_GUIDE.md` §6.7。
+
+- **虚拟滚动的窗口计算抽成 `VirtualWindow`**，由三种正文共用（通用列表、本地虚拟表格、
+  服务端虚拟表格）。占位高度按 `first × 行高` 算而行的位置由同一个 `first` 决定，两处
+  一旦分头演化，滚动条与内容就会渐行渐远——而且是滚很远才看得出来的偏移。抽出来之后
+  只有一份。
+
+- **虚拟滚动列表与表格**：`Element::virtual_list(data, row_height, row_fn)` 与
+  `Element::table_virtual(columns, rows, TABLE_ROW_H)`。只构建**视口内**的行，两端各插一个
+  空占位节点撑出未渲染部分的高度——十万行与一百行的每帧成本相同。
+  实测（Windows / release / 3 列表格 / DirectWrite 真实排版）：`table_custom` 在 10 000 行
+  滚动时每帧重排 90ms、建树 31ms、节点数 6 万；换成 `table_virtual` 后同样 10 000 行是
+  每帧 0.083ms、建树 0.009ms、节点数 230，且 100 000 行的三项数字与 10 000 行**没有差别**。
+  三处值得记下来的：
+  - **占位撑高换来核心层零改动**。内容总高照常由 `measure_scroll` 算出（占位节点的高度
+    自然计入），于是滚动钳制、滚动条滑块的尺寸与位置、`scroll_into_view` 全部自动正确，
+    没有一处需要知道"这个列表是虚拟的"。相比之下，若在 `Layout::Scroll` 里原生跳过视口外
+    子节点，内容总高就得由外部喂进来，还要同步改绘制剪枝、焦点顺序、命中测试四处。
+  - **行高被强制设为 `row_height`**，即便调用方传的值与行内容的自然高度不符。占位高度与
+    实际布局因此**永远**一致——"滚动条与内容渐行渐远"这类故障没有发生的余地，代价是内容
+    更高时会被裁掉。契约测试直接拿绝对几何对账（`索引×行高 − 滚动量`），而不是从占位高度
+    反推期望值：反推等于拿被测量自己当标尺，占位一旦算错，期望值会跟着一起错。
+  - **正文 widget 挂在滚动容器内部的列上，不是滚动节点自己身上**。挂自己身上能直接用
+    现成的 `EventCtx::scroll_metrics()`，但 `Element::scroll()` 自带的 `ScrollWidget` 才是
+    滚轮与滚动条拖拽的实现，`set_widget` 会把它替换掉。这与 `table_sortable` 的接法同源。
+  - **渲染量按本帧窗口高算，不读滚动容器的实测视口高**。决定渲染量的响应式相位跑在
+    `measure` 之前，那时任何节点的几何都还停在上一帧，而这个滞后有两个方向的失真、各自
+    对应一个可见故障：窗口最大化时偏小（新视口铺不满，底部留白，且 resize 只触发一次
+    布局，那"下一帧"不会来），放进无限高父容器时偏大（"视口"收敛成整个内容高，十万行
+    全部建出来、静默卡死）。窗口高在 `layout_root` 入口就已知，且视口再大也不会超过窗口，
+    一个信源同时解掉两头——顺带让首帧不必猜、也不必为补几何而请求续帧（「空闲零 CPU」
+    因此不受影响，有测试钉着"一次都不请求"）。为此 `Tree` 新增公开字段 `layout_size`
+    （本帧根尺寸），供任何需要在响应式相位知道窗口多大的控件读取。
+  - **行内修饰符与非虚拟表格通用**：`actions` / `cell_render` / `cell_lines` /
+    `on_row_activate` / `on_row_context_menu` 直接作用在 `table_virtual` 上，行由同一个
+    `body_row` 产出，接线也是同一条。回调拿到的是数据里的**真实行下标**，不是它在渲染
+    窗口里的位置——这条是虚拟滚动特有的错法，首屏还看不出来（窗口起点是 0，两者恰好
+    相等），滚下去之后每个按钮都绑到错误的行上，故拿单元格文本与下标对账钉死它。
+    实现上把表格特有的那几项收进新的 `VirtualTableBody`（与另外三种正文并列），
+    通用的 `VirtualList` 保持与表格无关。`actions` 的定位顺序随之调整为**先认正文**：
+    三种响应式表格的表头自己会重建出操作列表头，而虚拟表格的表头是静态行、永不重建，
+    得当场把表头单元格塞进去。唯一不支持的是 `sort_indicator`（同理，表头不重建就画
+    不出箭头）。
+  已知限制（见 `docs/API_GUIDE.md` §6.6 的限制表）：行高必须固定、Tab 焦点环只覆盖已
+  渲染的行、行的内部临时状态随重建重置、与拖拽重排互斥、不做内部排序。行高那条要留神：
+  行会被强制设成 `row_height`，而 `TABLE_ROW_H` 是按纯文本行给的，行里放按钮或用
+  `cell_lines(2)` 时得自己按 `控件高 + 9×2 + 1` 调大，短了内容会溢出到邻行。
+  **几百行以内用 `list_signal` 就好**——它没有上面任何一条限制。
+  新增 `examples/virtual_list.rs`（十万行列表 + 一万行表格，演示末列按钮 / 状态徽章 /
+  双击整行 / 右键菜单）；`fullshowcase` 的控件页与表格页各加一张卡片。
+
+- **自绘标题栏右键弹出窗口系统菜单**（Windows）：还原 / 最小化 / 最大化 / 关闭，按窗口
+  当前状态与能力自动置灰——已最大化时「最大化」灰而「还原」亮，`resizable(false)` 的
+  对话框式窗口两者皆灰。`frameless` 窗口**默认接管、零代码**；`App::system_menu(false)`
+  关掉；拖动区节点上写 `on_context_menu` 则用户菜单优先，要保留系统项就把
+  `auroraui::event::system_menu_items()` 拼进去。
+  三处值得记下来的：
+  - **win32 上标题栏右键此前是个黑洞**。拖动区在 `WM_NCHITTEST` 里答 `HTCAPTION`，
+    那块区域的鼠标消息因此全部走非客户区，客户区**永远收不到** `WM_RBUTTONDOWN`——
+    `on_context_menu` 挂在自绘标题栏上是天然失效的。现在拦 `WM_NCRBUTTONDOWN/UP`
+    转成客户区右键补进控件树，并**吞掉**这两条消息（不转 `DefWindowProcW`），
+    否则系统的灰色原生菜单会与自绘菜单一起冒出来。
+  - **框架此前问不出窗口状态**。新增 `WindowState`（是否最大化/最小化、能否最大化/
+    最小化），平台经 `AppHandler::on_window_state` 单向推送，`EventCtx::window_state()`
+    与自由函数 `auroraui::event::window_state()` 两条读法（后者供 `on_context_menu` 这类
+    拿不到 `ctx` 的构建器）。初始值**从建窗配置推导**而不是 `Default`：不可缩放的窗口在
+    平台推来真值之前就得报告"不可最大化"，取"看着合理"的 `true` 会画出一个可点却没反应
+    的菜单项，且不报错。
+  - **`WindowOp::{Maximize,Restore}`**：按钮是能翻转的开关（`ToggleMaximize` 正合适），
+    而菜单里「最大化」与「还原」是两个并列项、其中一个恒为禁用，toggle 表达不了。
+    macOS 侧顺带把 `WindowOp` 的两处重复 `match` 收成一个 `apply_window_op`——它们本就
+    写着"实现必须一致"却已走偏过（有一份漏了 `deminiaturize`）。
+  仅 Windows：macOS 无此惯例，且其平台层尚未推送窗口状态，弹出来禁用态会说谎，故不接管。
+
+- **单实例二次唤起真正把主窗带到前台**（Windows）。此前已有的
+  `AllowSetForegroundWindow` 授权并不够：那个授权是**一次性**的，且在调用方失去前台、
+  或期间发生用户输入时失效。实测「窗口开着时双击关联文件」正落在这一档——argv 送达、
+  回调执行，窗口却停在后台，用户以为程序没反应。
+  `activate` 改为**两档**：先直接 `SetForegroundWindow`，成功即返回；只有被前台锁定挡下
+  才做输入队列附着（`AttachThreadInput`）——把本线程临时挂到当前前台窗口的线程上，
+  共享输入状态后本线程被系统视作前台线程，`SetForegroundWindow` 得以通过。
+  之所以不无条件附着：附着对象是**任意第三方进程**的线程，附着期内两者输入队列相连、
+  对方卡死会连累本线程，且必须成对解挂，漏一次就是永久绑死。降为兜底后风险窗口从
+  「每次唤起」缩到「常规路径确实失败时」。附着失败（前台属高完整性进程时 UIPI 会拒）
+  直接作罢——没附上就不解挂，更不接着 `SetActiveWindow`，那会把焦点动到一个没有前台权
+  的窗口上。顺带：先验 `IsWindow` 再操作（主窗已关、进程靠别的窗口活着时句柄是野的），
+  窗口不可见时补 `SW_SHOW`。
+
+- **修复 macOS 上富文本划选后高亮立刻消失、Ctrl+C 复制到全文**，顺带去掉 Retina 下
+  「每帧重排整篇文档」的开销。根因是 Core Text 引擎实现了 `set_scale` 却漏了 `scale()`
+  ——`TextEngine::scale` 的默认实现恒返回 1.0，于是**测量路径**（读引擎）看到 1.0、
+  **绘制路径**（读画布 `dpi_scale`）看到真实的 2.0。富文本把 scale 计入布局缓存键，
+  两条路径就此逐帧互相顶掉缓存，而重排会清空选区（碎片下标不再稳定）。
+  这类"漏实现可选 trait 方法"不会报错、只会静默说谎，故两个真实引擎各补了一条
+  「set_scale 之后 scale() 必须回同一个值」的契约测试。Windows 的 DirectWrite 引擎
+  两个方法都实现了，故只有 macOS 中招（Retina 上必现，1× 显示器上碰不到）。
+
+- **macOS 帧驱动只失效脏区，不再每帧整窗标脏**（同一界面每帧 4.75ms → 3.60ms，60fps
+  连续动画 28.5% → **21.7%** 单核）。此前 `frameTick:` 一律 `setNeedsDisplay(true)`，闪烁
+  光标每帧只脏十几像素宽的一条却按整窗付账。改用 `setNeedsDisplayInRect:`（对照 win32 的
+  `InvalidateRect(hwnd, rc)`）后，AppKit 把 `drawRect:` 的上下文裁到那一块，
+  `CGContextDrawImage` 只搬这几行。
+  **要害是对账**：宿主可能把这一帧临时升级成整帧（重排、浮层、后备缓冲失效），或因
+  抗锯齿余量与 4 像素网格对齐而画得比预告略大——跑出失效区的那部分会被 AppKit 裁掉、
+  留成上一帧的残影，而这类残影不报错、只在特定操作后偶现。故绘制后拿宿主实际更新的范围
+  与本次失效区比对（`damage_escapes`，判据"宁可误报"，带单测），一旦跑出就补一次整窗
+  失效：多一帧，换绝不留陈旧像素。实测 923/924 帧走局部，兜底没有反过来退化成整窗。
+  事件路径仍整窗标脏，故"tick 与 drawRect 之间来了输入"不会漏画。
+
+- **macOS 的连续动画不再以约一半的目标帧率在跑**（实测 34.5fps → **60.1fps**，正好是显示器
+  刷新率）。`schedule_next_frame` 在 `do_draw` 末尾按"1/刷新率"续约一次性定时器，于是周期是
+  `帧耗时 + 间隔` 而不是 `max(帧耗时, 间隔)`。这个偏差不报错、只是"看着有点顿"，滚动惯性、
+  hover 过渡、开关补间、toast 淡入全都受影响。
+  改法不是补偿帧耗时——那只能到 35.7fps，补一半也只有 52.5fps。**真正的配速器是
+  CoreAnimation 的 vsync**：`setNeedsDisplay` 之后 CA 至多每个 vsync 出一帧，天然封顶在刷新率，
+  所以要满帧的那一档定时器应尽早响（延时取 1ms，实测正好 60.1fps，且一帧仍只有一次定时器
+  回调、CPU 与帧数成正比）。按帧末量到的耗时补偿之所以不管用：真正的像素工作发生在
+  `drawRect:` 返回**之后**的 `CABackingStoreUpdate_` 里，量到的远小于一帧的真实耗时，
+  定时器总在 vsync 截止之后才响。
+  控件自报的截止大于刷新周期时（方波光标 530ms）仍由定时器按截止睡，并减去本帧已花掉的
+  时间以免周期累加——闲置闪烁光标不受影响，实测仍是 23 帧/12s、1.8% 单核。
+  `Smooth` 光标落在 47.5fps 是对的：淡变段 60fps，两端各 129ms 的保持段按截止睡过去。
+
+- **macOS 每帧少了一次整窗色彩管理转换**（同一界面每帧 12.9ms → 8.3ms；闲置闪烁光标
+  6.3% → **1.8%** 单核，连续动画 43.8% → 28.5%）。交出去的 `CGImage` 标的是 `DeviceRGB`，
+  与窗口后备缓冲的色彩空间对不上，于是 CoreGraphics 每帧在 `CABackingStoreUpdate_` 里跑一遍
+  CMS（`CGColorTransformConvertUsingCMSConverter` → vImage `AnyToAny`：8 位查表升 16 位 →
+  过色调响应曲线 → 转回）。`sample` 采样显示它占主线程有效工作的 **61%**——比绘制本身贵一个
+  量级（渲染器自报只有 0.2–1.2ms/帧）。现在图像与窗口后备缓冲（`NSWindow::setColorSpace`）
+  都用 sRGB，两边对上即直通，改后采样里该路径归零。
+  选 sRGB 而不是"标成显示器的色彩空间"：后者同样能直通，但那是把 sRGB 像素值当显示器原生值
+  解释，广色域屏上颜色会整体变艳。声明 sRGB 是陈述事实（tiny-skia 画的就是 sRGB 值），系统
+  随后在合成器里转一次，与其他应用同路。原先的 `DeviceRGB` 是"设备相关"、没有 ICC 数据——
+  已实测它与 sRGB 经 Display P3 落地**逐字节相同**（五个颜色，含 `200,60,30 → 185,71,44`
+  这类大幅转换），故这次换标不改变任何颜色。
+
+- **帧驱动学会了"下一帧什么时候才要"，方波光标的开销降到接近静态**（实测同一界面前台
+  闪烁 2.2% → **0.3%** 单核）。此前续帧请求只是一个布尔量——控件唯一能说的是"我要下一帧"，
+  于是每 530ms 才翻一次面的方波光标和每帧都在变的渐变光标付一模一样的账：一个半周期里
+  三十几帧被唤醒、遍历、光栅、上传，画出来的像素与上一帧完全相同。
+  新增 `anim::request_repaint_in_after(rect, delay_ms)` 让控件报出**截止时间**，宿主取本帧
+  所有请求里最早的那个（`AppHandler::next_frame_delay_ms`），平台把唤醒推迟到
+  `max(刷新率间隔, 截止)`：前者是上界不超刷新率，后者是下界不早于画面真会变的那一刻。
+  取**最小值**是要害——只要窗口里还有一个控件在连续动画，整条循环就回到满帧配速，
+  单个控件无法把整窗睡过去。事件（按键、鼠标）走各自的立即重绘路径，不受此节流。
+  光标侧新增与 `alpha_at` 配对的纯函数 `caret::next_change_ms`（一个答"现在多亮"，一个答
+  "下次变化在什么时候"），两者由一条覆盖全相位的对拍测试钉死：报晚了光标会卡在旧画面上，
+  报早了只是白付几帧。顺带：截止在 32ms 开外时不再提升系统定时器分辨率到 1ms——那是
+  **进程级**开销，为一个半秒才动一次的光标提着它是白付整机功耗。
+  真窗口连拍验证两版闪烁波形与周期一致（半周期 ≈530ms，两个取值），只是 CPU 差一个数量级。
+
+- **窗口失活时光标转静态，不再按刷新率出帧**。切到别的应用后，后台窗口里那个还留着
+  焦点的输入框会一直闪——插入符在两个系统上本就不该在失活窗口里闪，更没理由为它出帧。
+  平台经新增的 `AppHandler::on_window_activated` 通知（win32 `WM_ACTIVATE`、macOS
+  `windowDidBecomeKey/ResignKey`），宿主每帧注入给 `ui::caret`；多窗口下各注各的。
+  实测：复杂界面前台闪烁 1.5% 单核，失焦后 **0%**。
+
+- **局部帧不再重画整棵树，也不再整窗呈现**——闪烁光标的每帧成本降到约 1/5。
+  没有它时错在哪：120 个控件的界面里，光标每帧只脏 4×32 像素，局部帧却照样提交
+  61 次描边、63 次填充、122 次文字（它们随后被光栅器逐像素丢弃，但构造与排版的开销
+  已经付掉了），再加上三次与脏区无关的**整窗**操作——清底、R/B 交换、上传到设备。
+  实测 0.83ms/帧 ≈ 5% 单核，与界面复杂度成正比而与"实际变了多少"无关。
+  三处改动：`Canvas::cull_rect` 让绘制遍历跳过落在画布外的节点自绘（只跳自绘、子树
+  照常递归——`offset` 能把子节点搬到父矩形之外，按父矩形剪整棵子树会真的丢内容）；
+  局部帧只把脏区那几行拷回平台缓冲；win32 只对这几行做 R/B 交换与 `SetDIBitsToDevice`。
+  上传范围必须并上**系统的失效区**（`ps.rcPaint`）——窗口被盖住再暴露时系统只发一条
+  `WM_PAINT` 就认为我们会重传那块，只传自己的脏区会留下花屏。清底责任随之从平台
+  移到宿主的全窗路径：每帧清底与局部重绘是对立的，会把上一帧的内容抹成纯色。
+  实测同一界面 5.47% → 1.56% 单核；25 个 example 的整页截图逐像素比对无差异。
+
+- **文本光标会闪了：四种风格（Smooth / Blink / Phase / Solid）+ 同行平滑移动 + 2px 圆角条**。
+  默认 `Blink`——亮/灭各半周期硬切换，与各系统文本框几十年的样子一致，且只有两个状态，
+  绝大多数帧画面不变（实测比 `Smooth` 渐变省三分之一 CPU：2.34% → 1.56% 单核）；
+  宽度由 1px 改为 2px 并加圆角端。
+  全套走主题：`theme.input.caret_style / caret_width / caret_rounded / caret_smooth_move`，
+  `TextInput`（单行/多行/密码）与 `Stepper` 编辑态共用同一实现与同一份配置——插入符的观感
+  不该因为它长在哪个控件里而变样。新增 `examples/caret.rs` 可逐项对比。
+  **打字期间不闪**：任何位置变化（键入、移动光标、点击定位、滚动）都重置相位并保持实心
+  500ms，之后才起闪。这一判定放在 paint 里比对「本帧光标目标位置 vs 上一帧」，而不是在
+  控件的十几条事件分支里逐个插桩：那样迟早漏一条（尤其程序化改文本这种不经过按键的路径），
+  症状是打着字光标却在闪，很难归因。
+  **闪烁不该让整个输入框每帧重绘**。为此新增 `anim::request_repaint_in(rect)`：控件自报脏区，
+  局部帧管线以该矩形裁剪重绘整树，于是 60fps 的闪烁只碰光标那一条（约 4×20 逻辑像素）。
+  脏区取「上一帧 ∪ 本帧」的并集——平滑移动时光标每帧位移，只报本帧位置会在身后留一串残影。
+  **闪烁跟随系统的「插入符」设置，而不是「客户区动画」开关**：周期取
+  `GetCaretBlinkTime()` / `NSTextInsertionPointBlinkPeriod*`（用户调快系统闪烁，应用里的
+  光标同步变快；在辅助功能里关掉则恒实心、不续帧）。两者一开始被我绑在了一起，后果是
+  ——把 Windows 视觉效果设成「最佳性能」（`SPI_GETCLIENTAREAANIMATION=false`）的机器上，
+  系统自带输入框的插入符照闪，我们的却成了一根死杠。这两个设置在两个系统里本就是分开的。
+  应用显式 `App::animations(false)` 时连闪烁一起关（那是"我要完全静止的界面"）；
+  平滑移动是过渡动画，仍归 `anim::enabled()` 管。截图路径（`--screenshot`）另有
+  `ui::caret::set_animated(false)`，否则同一界面每次截出的光标忽有忽无，视觉回归对不上。
+
+- **光标在非整数 DPI 下不再发虚：绘制时吸附到整数物理像素网格**，宽度单位改用 `Len`
+  （`caret_width = 2.0` 或 `{ px = 2 }`，与 `border_width` 同一套语义）。
+  没有它时错在哪：125% 缩放下 2 逻辑 px 映射成 2.5 物理 px，抗锯齿把它铺成「中间 2 列实、
+  两侧各半列淡」的 3 列——既模糊又比实际更肿，而这恰恰是全界面对亚像素最敏感的图元。
+  宽度**向下**取整（至少 1 物理像素）：向上取整会让 125% 变成 3 列，比 100% 还粗，
+  "高 DPI 才该更粗"的直觉反倒失效。顺带两处：圆角在窄于 3 物理像素时自动退回直角
+  （1~2 像素宽的条画半圆端，圆弧没有像素可落，只会把两端削成半透明——看着是"短了一截
+  还发虚"）；光标竖直内缩由上下各 2px 收到各 1px，此前明显短于字身。
+
+- **窗口隐藏/最小化时不再驱动动画帧**（win32 消息循环 + macOS 帧定时器两侧）。
+  没有它时错在哪：托盘常驻应用「关窗即隐藏」后进程还活着，窗口里若留着一个聚焦的输入框，
+  光标闪烁会一直请求续帧——不可见的窗口按刷新率白烧 CPU，用户只看得到风扇转。此前只挡了
+  最小化（`IsIconic`），隐藏窗口照画不误；光标闪烁把这个既有缺口变成了常态。
+  可见性只有平台知道，宿主推不出来，故判定放在两边的帧驱动处。macOS 的帧链是一次性定时器
+  续约，停了没人再起，所以 `show_and_activate` 里补了一次起链。
+
+- **窗口唤起钩子：`App::on_show(|ctx| ..)`，并让 `autofocus` 每次唤起重新兑现一次**。
+  触发条件是隐藏→可见的**跃迁**（托盘点击 / 全局热键 / `WindowOp::Show`）；已经可见时再按
+  热键不算唤起，否则常驻工具每按一次就把界面重置一遍。
+  没有它时错在哪：`autofocus` 是一次性的，于是进程起来后的**第一次**唤起一切正常，
+  **第二次**唤起时焦点还停在上次离开的地方、`autofocus_select_all` 的全选也不再发生——
+  上次查的词还在框里、光标在末尾，用户得先手动删。这条只在真机反复唤起时才暴露。
+  通知必须由平台发起：三个唤起入口里只有「控件请求」经过宿主（`take_window_op`），
+  托盘与热键都是平台层直接执行的，宿主自己推不出来。为此 `AppHandler` 加了带默认实现的
+  `on_window_shown()`。
+
+### Fixed
+- **无边框窗口：拖动区里的 `clickable()` 容器点不动**——「只有文字周围的空隙能点」。
+  判定两侧此前不对称：「是不是交互控件」只看命中落定的那个节点，「是不是拖动区」却沿父链找。
+  于是「容器可点、里面还套着子控件」必然失守——`Label` 不可聚焦却 `hit_opaque`，命中在它
+  那里就落定，轮不到外层的 `Clickable`。`WM_NCHITTEST` 因此答 `HTCAPTION`，系统接管这次
+  按下，客户区连 `WM_LBUTTONDOWN` 都收不到：事件分发认得这次点击，可它压根到不了客户区。
+  现在两侧共用一次父链遍历（`Tree::hit_role`），**自内向外先遇到谁听谁**：可聚焦判交互、
+  `window_drag` 判拖动区。取最近的裁决者而非「链上有没有」——可聚焦容器里再嵌拖动区时，
+  内层的声明更具体，该赢。
+  顺带修好：`interactive_hit_at` 同样沿父链后，可点容器的**整个**区域都优先判 HTCLIENT，
+  贴着窗口顶边的入口不会再被 8px 缩放带从上面咬掉一条（此前只有 `window_button` 这类叶子
+  控件享受得到）。反过来说，无边框窗口里若有可聚焦容器贴着窗口边缘，那一段边缘让不出缩放带
+  ——此前只是「裸露部分让不出、文字上让得出」的斑马纹，一致化并未新增受影响区域；真要留出
+  缩放带得让容器躲开边缘（参照 `core::scrollbar::WINDOW_EDGE_INSET`）。
+  旧测试盖不住这条：`window_drag_hits_caption_not_button` 用的是 `window_button`，一个
+  **没有子节点**的叶子控件，命中永远落在它自己身上。
+  由下游 wind-dict 报告并给出复现。
+
+- **macOS：最小化状态下从控件请求唤起，窗口不会还原**。三个唤起入口此前各写一份实现，
+  注释也写着「实现必须一致」，但已经走偏——`run_window_op_on_main` 会先 `deminiaturize`，
+  `after_event` 那份不会。三处收口到 `show_and_activate` 之后该缺陷消失，唤起通知也只需
+  挂一个点。真机验证：第一次 show 触发通知、第二次（已可见）不触发。
+
+### Changed
+- **`App::channel` 的通道改挂 App 级，不再随主窗一起死**。此前 pump 存在主窗的 `UiHost`
+  上，主窗一关，`App::channel` 注册的所有通道就静默失效——消息照常入队、永远没人消费。
+  多窗口应用里这是条真实的断裂：主窗关掉之后应用还活着（关掉**最后一个**窗口才退出），
+  别的窗口还开着、还要继续收后台数据，通道却已经没了。
+  理由与托盘 / 全局热键 / 跨线程唤醒挪进 `AppHost` 时完全相同：后台线程发来的消息是给
+  **这个应用**的，不是给某个窗口的。唤醒早已是 App 级（标脏所有窗口），消费却还留在窗口级
+  ——被唤醒之后要消费的东西随窗口死了，这本身就不自洽。
+  排空由**一个代表窗口**负责，不是每个窗口都来一遍：pump 借的是调用方的树，`toast`/
+  `focus`/`menu` 会落到那棵树所属的窗口上；谁先出帧谁消费的话，同一条消息的提示会随渲染
+  次序在窗口之间跳。消费权先来先得（主窗序号最小，故天然是它），持有者析构时交还，
+  下一个出帧的窗口就地接管——"还在出帧"恰好就是"还活着"的证据，核心层因此不必知道
+  平台上还有哪些窗口。
+  各窗口**共用同一份** pump 而非各持副本，故同一条消息仍只被处理一次。
+- **通道回调里的 `close` / `close_forced` / `window_op` 一律丢弃**（语义收紧）。一条后台
+  消息不该决定"关掉/最小化**哪个**窗口"——而这条路径上恰好借了哪棵树是实现细节（主窗关掉
+  后就换了一个），目标本就不确定。窗口的开关请由那个窗口自己的交互或 `on_interval` 触发。
+  `open_windows` 反而保留：开窗是应用级动作，由宿主排队后统一建窗，与发起方是哪棵树无关
+  ——主窗关闭后仍能从通道里开出新窗口，正是本次改动要换来的能力。
+
+### Added
+- **主窗可登记单例键 `App::single_window(key)`**。键送进 `WindowConfig.single`，与
+  `Window::single` 同一个键空间；平台两侧的登记与激活逻辑本就现成，缺的只是主窗从来
+  没登记过——它一直是个匿名窗口。匿名的代价只在多窗应用里显形：子窗上有个动作、其界面
+  却在主窗里（「回到主界面」、只挂在主窗根上的对话框），此时想把主窗拉到前台**无路可走**
+  ——`EventCtx` 没有「激活某个窗口」的原语，激活只能由平台层在单例判定命中时代做，而子窗
+  照常 `open_window` 的结果不是激活、是**再建一个主窗**：两棵树抢同一批 `Signal`，
+  且这一路不会有任何报错。与 `App::single_instance`（管「同一个可执行文件只跑一个进程」）
+  不是一回事，这个管「同一个进程里只有一个这样的窗口」。默认仍是 `None`——单窗应用没有
+  「第二个自己」可谈，让它白白参与一次键比对没有意义。
+
+- **派生信号 `Signal::map(f) -> Signal<U>`**。同一份状态以另一种形态喂给控件——应用只维护
+  一个语气信号，颜色（`fg_role_signal`）与文案（`label_signal`）都从它派生，改一处两处
+  同时跟上。没有它时只能在每个写入点同时维护两个信号（漏一处就静默不同步），或者建两个
+  节点各自 `visible_when` 互斥。
+  **读时现算、不缓存**：这是刻意的取舍。缓存要在读路径上判过期并写回，而写回需要 `RT` 的
+  **可变**借用；现在的读一律是共享借用，`a.with(|_| b.get())` 这类嵌套读因此合法。一旦
+  读路径改成可变借用，既有的嵌套读会在运行期当场 panic——那是比"每次重算"大得多的代价。
+  故映射闭包须廉价，且**只能读不能写**信号。
+  派生信号**只读**（`set`/`update` 空操作 + debug panic：真写下去会把派生槽位的占位值换成
+  真值，此后每次读都因类型不符而 panic，症状离写入点很远）。`version()` **转问源**，源变
+  即报变——保守方向，变更检测宁可多重建一次也不能漏；派生信号自己记版本的话它永远是 0，
+  绑它的响应式宿主就永远不重建。
+  **链式 `map` 扁平化**：`a.map(f).map(g)` 组合闭包成单层而非两层嵌套，否则在会重建的子树
+  里槽位成倍累积，看起来像信号泄漏。派生槽位走同一条 `insert` 路径，故随 `SignalScope`
+  一并回收。
+
+- **跨平台 GPU 渲染后端（wgpu，feature `gpu`，默认关）**。macOS 窗口可用 GPU 呈现，
+  `Canvas` 图元集在该后端**全部落地、无空实现**；Windows 的 Direct2D 后端不动，两者共用
+  同一个 `Renderer` 三档开关（`Auto` / `Software`（默认）/ `Gpu`）。默认关的理由是依赖树、
+  编译时间与体积代价，不是能力未完成。
+  `SharedGpu` 是进程级单例（对标 `d2d::SharedDevice`：`Arc` 句柄分发、显式释放钩子、
+  失败记忆免刷屏）。像素格式钉死 `Rgba8Unorm` 直通字节语义与预乘 RGBA——sRGB 格式会把
+  128 编成 188，与软后端逐像素比对全盘对不上。模块内**禁 `#[cfg(target_os)]`**：平台差异
+  只从 surface 创建与 `GlyphSource` 两个注入点进入，为 Linux 复用铺路。
+  图元走**单管线 + 单 instanced draw**：圆角矩形/圆/描边/线段用解析 SDF，阴影用 Evan
+  Wallace 高斯近似（σ=√(b²+b) 对齐软后端三趟 box-blur 的方差，免烘焙免缓存），渐变走
+  uniform 数组插值（downlevel 档无 storage buffer 保证），裁剪矩形做成实例字段逐像素裁
+  （免 scissor 分批，且对齐软后端的整数 mask 语义）。双后端量化比对 15 场景（含 1.5×
+  缩放）：内部区域逐像素通道差全 0，差异只在 AA 边缘带（墨量相对差最大 0.745%，阈值 3%）。
+- **macOS GPU 窗口呈现接线（`CAMetalLayer` + wgpu surface）**。平台无关的 `WindowGpu`
+  收口非 sRGB 格式选择（Metal 上 `Bgra8Unorm`）、`begin_frame`/`present` 的借用时序、
+  `FrameError` 三档（`Occluded` 等唤回 / `Skipped` 须补重绘 / `Lost` 交调用方降级），
+  `Suboptimal` 延迟到下帧再重配以避开活 `SurfaceTexture` 的 panic。
+  两处结论是真机撞出来的，都会导致"窗口永远空白"这类无声故障：其一，视图 backing layer
+  一旦被顶替，AppKit 会把重绘策略置 `Never` 且再不回调——`CAMetalLayer` 只能挂成 backing
+  layer 的**子层**，与软路径共用 `setNeedsDisplay`→`updateLayer` 失效链路；其二，wgpu 依
+  `NSWindow.occlusionState` 判可见，首帧常落在 visible 置位**之前**，必须接
+  `windowDidChangeOcclusionState:` 唤回。
+  `WINDUI_GPU` 三档（未设 / `0` 显式关 / 其他强制试）；`Renderer::Auto` 失败静默回退软路径，
+  `Renderer::Gpu` 报错终止（静默换一条路会让基于它的验证失去意义）。
+- **GPU 后端的文字与图片**。文字经 `GlyphSource` 窄接口：整段由**平台引擎**光栅成 A8
+  覆盖度位图，GPU 只做上传与颜色调制合成——观感仍由系统文字栈决定。Core Text 侧铺白底画
+  黑字取 `255-R` 作覆盖度：透明底会让 CG 的字形加重量取到错误档位（实测墨量差 13~17%），
+  白底方案 5/6 场景墨量逐字节相同。`AlphaMask` 携带未取整排版尺寸与 ascent，因为 CG 把
+  基线 floor 吸附到整数行，定位须按基线行反解，否则整段文字会随容器高的奇偶上移 1px。
+  文字 run-cache 的键含文本/样式/宽/缩放/对齐（**颜色不进键**，换色复用位图），512 条 +
+  16MiB 双限 LRU，统计接 `WINDUI_PROF`；文字与几何按提交顺序交错分批，叠放次序恒等于
+  `Canvas` 调用次序。
+  图片侧 `place_image` 抽成纯函数逐行对齐软后端，1:1 走 nearest 精确 blit、其余 linear +
+  `ClampToEdge`，圆角遮罩复用 `sd_round_box`；纹理缓存与文字 run-cache 共用泛型 LRU
+  （64 条 + 64MiB 双预算，替代 d2d 的超水位全清）。`push/pop_layer` 用层栈重定向绘制目标、
+  池化纹理按尺寸复用，`pop` 先把三批 flush 进层再合成回父目标，`opacity` 同乘 rgb 与 a
+  以保持预乘；分配失败压 `None` 占位保栈平衡——宁可 opacity 失效，也不让子树整个消失。
+- **GPU 后端进 CI，并留下量化基准**。CI 增加 `gpu` feature 的 clippy + test（Windows WARP /
+  macOS Metal）；无适配器时用例打印跳过，**绿灯不等于跑了**。release 基准：全窗重绘 GPU
+  约 12×（2.6ms vs 30.7ms @ M4 2x），但**小面积更新软后端的 damage 快路仍占优**；GPU 稳态
+  的大头是每条文字一次提交，P5 的 glyph atlas 可收口。设计与分期见
+  `docs/gpu-cross-platform-design.md`。
+- **声明式初始焦点：`Element::autofocus()` / `autofocus_select_all()`**。布局稳定后宿主把
+  键盘焦点交给该节点，一次性（语义同 HTML `autofocus`）；`_select_all` 额外全选已有内容。
+  必需的原因是应用层此前**无从表达**这件事：`EventCtx::request_focus` 写的是
+  `self.out.focus = Some(self.self_id)`——只能把焦点给**自己**，且只在该控件自己的事件回调
+  里可用，没有「让某个别的节点获得焦点」的说法。而 `focus == None` 时 `Tree::dispatch_key`
+  会**丢弃整个按键事件**（它的目标是 `Option<NodeId>`，没有派给根节点的兜底）。于是
+  `start_hidden()` 的常驻工具在热键唤起后第一次按键完全无响应——不是打错了地方，是消失了。
+  兑现时机与 `focusable_order` 取交集，故对话框弹着的那一帧不会把焦点送到遮罩后面去；
+  「出现即算兑现」而不是「每帧见到 `focus == None` 就补」，否则点空白清焦点会在下一帧被
+  撤销，焦点粘死在输入框上。焦点环**不点亮**：程序性移交沿用 `:focus-visible` 的判据
+  （看用户最近一次交互用的什么设备），理由同对话框的模态移交。
+  全选走**合成 Ctrl+A 回送控件**，与右键菜单的复制/粘贴同一条既有通路，故不必为此新增
+  `Widget` trait 方法，且对不处理 Ctrl+A 的控件天然退化为纯聚焦。
+- **单行输入的键盘出口：`Element::on_submit()` / `on_nav_key()`**。前者接 Enter（提交查询、
+  确认命令面板选中项），后者接本控件未处理的方向键（候选列表游标）。多行输入不触发——
+  那里 Enter 是换行、上下是移行，编辑器的固有语义不该被应用截走。
+  这不是便捷糖而是**唯一出口**：`Tree::dispatch_key` 的全部实现是一次
+  `call_on_event(focus, ..)`，**没有** `ancestor_chain` 循环（对比同文件的 `dispatch_files`，
+  那个是真冒泡）。所以控件「不消费」某个键的后果不是「传给外层容器」而是**事件就地消失**。
+  `on_nav_key` 送 `Key::Up` / `Key::Down`（仅单行）与 `Key::Tab`（两种模式都送，见下方
+  「Changed」）。PageUp/PageDown 尚不在 `Key` 枚举里（要加得动两个平台的键码映射）。
+- **运行期句柄的测试构造口：`ThemeHandle::detached(theme)` / `HotkeyHandle::detached()`**，
+  配 `HotkeyHandle::pending_ops()` 供断言。真句柄只能从 `App` 取，而 `App` 在测试里建不起来
+  （要开窗口）。后果不是「换肤那部分测不了」，而是**整个持有句柄的应用状态结构测不了**——
+  造不出实例，它所有的方法都跟着一起测不了，使用方只能把逻辑一个个抽成不依赖状态结构的
+  自由函数、测抽出来的那一半。这正是 `src/testing.rs` 想消灭的那类盲区，只是它当时只看到了
+  `EventCtx`。
+  `detached` 与真句柄**共用同一份实现**，不分叉行为：`ThemeHandle::set` 的两个重绘标记都是
+  线程局部的，无宿主时没人消费，是无害空转。`pending_ops()` **只读不取走**，故对真句柄调用
+  也安全——若像 `take_hotkey_ops` 那样清空队列，下游在真句柄上断言一次就把宿主本该执行的
+  改绑偷走了：测试通过，真机上热键静默不改。
+- **示例 `examples/palette.rs`**：唤起 → 打字 → 上下选候选 → Enter 确认的完整键盘通路
+  （命令面板 / 查词 / 快速打开 / 地址栏共用同一条路）。上面三条合起来才成立，分开看每条都
+  像已经能用了，故留一个整体的例子。选中态由应用自己画（`Signal<usize>` 存游标 + 一个
+  `bg_role_alpha` 的高亮兄弟节点靠 `visible_when` 跟随），框架只负责把键送到。
+- **托盘收口为平台无关的声明层**：`Tray` / `TrayMenuItem` / `TrayCtx` / `TrayAction` 移到
+  `auroraui::platform::tray`，两个后端只保留执行半边（消费 `TrayAction`）。
+  此前它在 win32 与 macOS 各有一份**完整副本**（各约 150 行雷同构建器），`platform/mod.rs`
+  按 `cfg` 分别 re-export。于是下游的跨平台性只是「两边方法名恰好一样」的巧合：类型其实
+  是两个，语义还不同——win32 的 `TrayCtx` 累积意图（`wnd_proc` 持有 `&mut WindowState`
+  期间碰 OS 就是别名 UB），macOS 的持有 `NSWindow` 并**立即**调 OS。同一段回调在两个平台
+  上行为不一致，而 macOS 那份因为要真 `NSWindow`，托盘回调在下游根本没法测。
+  macOS 侧因此改为「跑回调收意图 → 释放 `RefCell` 借用 → 执行」，与 win32 的
+  「释放 `&mut WindowState` 之后再跑意图」成为同一条铁律的两个面：`TrayAction::Show` 会
+  激活应用、可能同步回调进来，此时若还持着 `borrow_mut` 就是 `already borrowed` panic。
+  `Quit` 之后截断其余意图的语义也随之两平台一致。
+  连带收益：`Tray` 必须 `!Send` 那条编译期护栏此前两份、各只在自己平台编译，现在一份、
+  两平台都跑。win32 的 `tray.rs` 从 545 行降到 327 行。
+- **`testing::run_with_tray_ctx` / `run_with_tray_ctx_fn` / `run_with_hotkey_ctx`**：借一个
+  受控的 ctx 跑托盘菜单项 / 托盘闭包 / 热键回调，把它请求的意图交回来。这是上一条抽象的
+  正收益——托盘是常驻工具**唯一的退出途径**，`|ctx| ctx.quit()` 此前一行测试都写不了。
+  三者与平台层走**同一条** `invoke` 路径，测的是生产路径而非形似的复制品。
+- **截图路径合成键盘：`--type <text>` / `--key <name>`**。与 `--click` 一样可重复，且
+  **按写的顺序混合回放**（`--type ab --key Enter --type c` 严格按此序——两者各扫一遍参数
+  分别入列会静默变成「ab、c、Enter」，回车跑在最后一段文本之前）。走 `handler.on_key`，
+  与真实按键同一条通路：焦点裁决、Tab 兜底、控件回调都照常，不是旁路。
+  没有它时缺什么：任何「输入中」的界面状态都截不到图——补全浮层、候选高亮、焦点落在哪，
+  只能靠人眼在真机上看。上面那条键盘通路尤其需要它，否则它是唯一没有视觉回归覆盖的
+  核心交互。
+  `--key` 认具名键与单个字符，可加 `ctrl+` / `shift+` 前缀（`--key ctrl+a` 全选）；认不出
+  会打提示并跳过，不猜——猜错的症状是「截图跟没按一样」，无声无息。`--type` 逐字符发
+  `Key::Char`，不经平台键码映射，故中文也能直接打。
+- **截图路径覆盖窗口尺寸：`--size W H`**，并把 `min_size` 的下限**一并放开**——要测的正是
+  下限处的表现，还受钳制就永远截不到那张图（`--size` 看着生效了，截出来的却还是下限）。
+  此前尺寸由 `App::new` 在代码里定死，「最小尺寸下布局是否还成立」只能改代码重编译，
+  进不了 CI。
+  顺带把 `screenshot_from_args` 的解析抽成收 `&[String]` 的私有方法：直接读
+  `std::env::args()` 时，上面这些断言只能靠真起进程传参才验得了。
+- **按状态换色：`Element::fg_role_signal(Signal<Role>)`**。`fg_role` 收的是 `Role` 值、
+  构建期就定死了，而「同一份文案，成功回执绿、失败红」要到运行期才知道用哪个角色。
+  此前只能建两个绑同一份文本的 label 各自 `visible_when`，外加包住它们的容器也要带同样
+  的判定（否则父容器仍为那个高度为 0 的容器计入 spacing）——三个节点、两处判定，表达的
+  是「这行字有两种颜色」。
+  优先级 `fg_role_signal` > `fg_role` > `fg`（`.fg(c)` 会清掉信号版，否则它继续赢，表现
+  为 `.fg(c)` 静默不生效）；信号失效时回落而不是 panic——绘制期读到刚被回收的句柄是可能
+  的（响应式重建与本帧绘制的竞态），画上一档颜色远好过崩掉。色板本就齐备：`Role::Success`
+  / `Warning` / `Danger` 同源于 `palette`，故换主题依然跟随。
+  换色的重绘沿用 `own_enabled`（置灰同属「布局不变但像素变了」）的既有范式：把生效角色
+  折进布局签名，重排后签名不等即自动升整窗。这一步是必需的且只在键盘路径上体现——
+  `call_on_event` 对事件期内的信号写入按类型分级，指针 Down/Up 升 `DamageReq::Layout`
+  （直接置 needs_full），但 Key 刻意只给 `Rect` 以「避免打字时整窗卡顿」。于是
+  `on_submit` 里改回执颜色那一帧只重画输入框，回执那行字保持旧色不动。
+  残留约束：指针 `Move` 不置 `needs_relayout`（hover 高频），故自定义 `Widget` 的 Move
+  分支里改别的节点的颜色信号需自行 `ctx.mark_dirty()`。已写进 rustdoc 与开发指南。
+- **`Signal<T>` 实现 `Debug`**，打印句柄标识（slot + 代际）而非值——`T` 未必 `Debug`，
+  且调试时想知道的通常是「这两处引用的是不是同一个信号」。
+
+- **合成点击的命中诊断**：`--click` 落空时**总会打印一行**——未命中任何节点，或命中了
+  但无人消费（点在了非交互区域上）。没有它时落空是完全无声的：不报错、不 panic，截出来
+  的图和没点一样，于是「坐标写错了」与「框架丢了这次点击」在现象上无法区分，只能靠反复
+  猜坐标。`WINDUI_HITS=1` 额外打印成功命中的节点与矩形，用于确认「内容重建改变布局后，
+  旧坐标现在指向谁」。
+  顺带把 `NodeId` 的 `Debug` 改成紧凑格式 `#12`（复用过的槽位带代际 `#12g2`）——派生格式
+  `NodeId { index: 12, generation: 0 }` 一行里塞三五个就没法读了，而 id 正是诊断输出里最
+  常出现的东西。代际非 0 必须显示，否则「旧 id 指向新节点」这类问题在输出里看不出来。
+
+- **`Key::PageUp` / `Key::PageDown`**，两平台键码映射与全局热键注册一并接上
+  （win32 `VK_PRIOR`/`VK_NEXT`，macOS `0x74`/`0x79`——那边是物理键位编号，与字符值无关）。
+  单行与多行 `TextInput` **都**把它们转发给 `Element::on_nav_key`：本控件不做翻页，
+  多行的上下移行只按视觉行走。截图路径的 `--key PageUp` / `pgdn` 同步可用。
+  **这是破坏性变更**：`Key` 没有 `#[non_exhaustive]`，下游对它的穷尽 `match` 需要补臂。
+  是否给 `Key` 加 `#[non_exhaustive]`（让日后加键不再破坏下游）留待决定——那本身也是一次
+  破坏性变更，宜与本次合并而非各来一遍。
+  补上 Windows 侧「两张键码表互逆」的测试（macOS 侧本就有，Windows 缺）：`vk_of`（Key→VK，
+  热键注册）与 `map_vk`（VK→Key，输入路径）必须互为反函数。走偏的症状是「注册的是 Home、
+  按下去却当 End 处理」——两处各自看都自洽，只有对着看才发现，而加翻页键正是同时动这两张表。
+  为此把 win32 输入路径里内联的 VK 翻译抽成 `map_vk`。Backspace 刻意不在互逆用例里：
+  `vk_of` 对它返回 `None`（作全局热键无实际用途），输入路径照常识别，两表在这一项上有意不对称。
+
+### Changed
+- **Tab 键从「宿主抢先」改为「宿主兜底」**。此前 `UiHost::on_key` 里 Tab 是唯一在
+  `dispatch_key` **之前**处理的键，控件根本收不到——于是「输入框想自己用 Tab」在应用层
+  无从表达，而 Tab 在查询框里是常规语义（接受补全、切换候选：词典、命令面板、地址栏
+  都要它）。现在键一律先给焦点控件，只有它不消费时才轮到焦点导航，与同一函数里 Escape
+  关窗兜底同形，也与网页里 input `preventDefault()` 掉 Tab 的机制一致。
+  **对现有行为零影响**：当前没有任何内置控件消费 Tab，故未声明 `on_nav_key` 的界面上
+  Tab 照旧走焦点导航（`tab_navigation_is_a_fallback_after_the_focused_control` 钉住这一条
+  ——少了它，这个改动会静默废掉整个焦点导航而不产生任何编译错误）。
+- **`Element::on_nav_key` 的回调签名**改为 `FnMut(&mut EventCtx, KeyEvent) -> bool`
+  （原 `FnMut(&mut EventCtx, Key)`）。两处都是 Tab 逼出来的：返回值表示「我消费了吗」，
+  宿主的焦点导航只在返回 `false` 时才发生；收整个 `KeyEvent` 是为了能读 `shift`——应用把
+  Tab 用作接受补全时若连 Shift+Tab 一起吞掉，用户就没有任何键盘途径离开该输入框了。
+  本 API 尚未随版本发布，故直接改签名而非留弃用别名。
+
+### Fixed
+- **折线拐点不再留缺口，对勾在高 DPI 下不再裂开**。复选框的对勾是两次独立的 `draw_line`
+  拼的、共享 V 底那个拐点，而 `draw_line` 用 `LineCap::Butt`——每段线的端面垂直于**自己**
+  的方向，两段方向不同（+45° 与 −53°）端面就不重合，夹角外侧留一块楔形谁也没盖到。
+  缺口的**逻辑**尺寸固定（≈ 笔宽 × tan(半夹角)），但占多少**物理**像素随 DPI 放大：
+  100% 下不足一个像素、被抗锯齿抹成一点灰，150% 以上就是实心豁口——所以它只在高分屏上
+  显形，低 DPI 截图比对会完全放过，这正是它一直留到现在的原因（18px 方框内对勾从 276
+  像素补到 286 像素，多出的正是那块楔形）。
+  Canvas 新增 `draw_polyline`：**默认实现就是正确答案**而非占位——逐段描边后在每个内部
+  拐点补一个直径等于笔宽的圆点，几何上恰好等于 round join，故 D2D 与 wgpu 后端不覆盖
+  也画不错；只补内部拐点，两端不补，否则就成了 round cap、改变既有图形的观感。skia
+  后端覆盖成一次性路径描边（少两次提交，接缝的抗锯齿也不会两遍叠加）。接缝统一取
+  **round** 而非 tiny-skia 默认的 miter，让软件路径与 D2D/wgpu 画出同一个形状——否则开
+  `--accelerated` 图标会微妙变形。同一缺陷的其他现场一并改：nav 的两个 chevron、
+  dropdown 的下拉箭头、表头全选的对勾。
+
+- **控件被禁用时复位交互态，不再残留悬停高亮**。`hit_node` 不看启用态（禁用节点照样当得成
+  hover target），而 `call_on_event` 对禁用节点直接丢弃事件——按钮在 hover 态被禁用后，
+  指针移开时那记 Leave 被丢掉，state 冻结在 Hover；等它重新启用，就带着一个指针早已不在
+  的高亮显示出来，非得再移进移出一次才消得掉。「被隐藏」与「被禁用」是同一个冻结的两种
+  形态，故 `reset_hidden_rec` 的判据从「祖先链累积可见」扩到「累积可见 ∧ 累积启用」；
+  触发链路本就是通的（`layout_signature` 早已含 `own_enabled`），只差判据。分页条的
+  「上一页/下一页」是典型现场：翻到首末页即禁用，而指针多半就停在刚点过的那枚按钮上。
+
+- **`src/ui/inputs.rs` 两处失实注释**。原文写的是「多行：Enter 插入换行。单行不处理
+  （冒泡，留给默认行为）」与「单行不消费（冒泡）」——**冒泡这件事不存在**，按键分发没有
+  沿父链的循环。这比缺口本身更危险：它描述的是作者以为的架构，下游照它去写「外层容器挂
+  `Widget` 接 Enter」会得到一份编译通过、逻辑正确、永远不触发的实现。现在两处都改成说明
+  「未消费 = 就地消失」并指向 `on_submit` / `on_nav_key`，另加一条测试
+  （`unconsumed_key_does_not_bubble_to_outer_container`）把真实行为钉住：注释若再退回去，
+  那条测试会当场变红。
+
+- **GPU 档（feature `gpu`，默认关）从全面劣于软件路径翻到全面优于**（macOS/M4 @2x、
+  release、160 控件 + 1 输入框：连续动画 CPU 89.8% → **16.2%**，软件路径同场景 30.1%；
+  闲置 7.8% → **0.8%**，软件 1.3%；稳态整窗帧绘制 8.2ms → **3.0ms**，软件 5.8ms）。
+  三个结构性原因依次解掉——
+
+  **一、每批一次 command buffer 提交。** 几何/文字/图片按 `Canvas` 调用次序交错 flush，
+  而交错次数与控件数同阶（控件是"背景→文字→背景→文字"画的），探针界面 ~120 条文字即
+  ~240 次提交 × 实测 ~90µs ≈ 10.8ms，与改前每帧 16.3ms 吻合。挡在合并前面的是
+  「`queue.write_buffer` 相对**提交**定序，不是相对录制定序」：各批都写偏移 0 时，后一批
+  的数据会在前一批执行前把缓冲覆盖掉。解法不需要 dynamic offset——实例缓冲加帧内游标，
+  各批依次往后占一段；渐变表帧内累积、只写新增的那一段。交错次数没变，也不该变，那是
+  叠放次序的语义本身。层清屏也必须录进同一个 encoder：自己提交会插到整帧最前面执行，
+  而层纹理是池化复用的，`push A → pop A（合成时采样 A）→ push B（取回同一张）`这条路径
+  下会漏清或错清。
+
+  **二、恒全窗。** GPU 的像素读不回宿主，于是此前一律走整窗重绘——而光标闪烁这类"脏区
+  极小"的动画正是局部重绘最划算的场景。GPU 侧「保留上一帧」没有现成落点：surface 的纹理
+  是轮转的（Metal 通常两三张），这一帧拿到的那张留着的是两三帧之前的画面。现在
+  `WindowGpu` 自持一张窗口尺寸的常驻色纹理，所有绘制打在它上面，帧末整张拷进 drawable
+  （整张拷而不是只拷脏区，原因同上）。`RenderTarget` 新增 `supports_partial()` 与
+  `begin_damage(damage, bg)`：清底从开帧挪到**宿主宣告之后**——这一帧是局部还是整窗，要
+  等宿主看过脏区/浮层/结构签名才知道，留在开帧就得靠平台层预测，而预测错一次的代价是
+  整窗内容丢失。收益分两头：scissor 省片元，`Canvas::cull_rect` 省 CPU（绘制遍历跳过框外
+  节点的自绘，那些图元的构造与排版开销在到达 scissor 之前已经付掉了）。软后端与 d2d 的
+  行为逐字不变。
+
+  **三、每条文字一个 draw call。** 单行文字降到字形粒度，共享一张 2048² 的覆盖度 atlas，
+  整帧共用一组绑定 ⇒ 一次 instanced draw（163 条文字从 163 次绑定切换 + 163 个 draw call
+  压成 1 次）。折行段落仍走整段光栅。`WINDUI_GPU_NOATLAS=1` 可关掉复现对照。
+  atlas 的风险不在性能而在观感——「文字与系统一致」是这个项目的卖点，拆成单字形最容易丢
+  的是水平亚像素相位与基线取整，故判据先行：拆开再按排版位置拼回去，与整段光栅比墨量，
+  10 个用例（含 kerning 对、下伸、标点、中文字体回退、两档 DPI）最坏差 **0.09%**；真窗口
+  下 atlas 开/关两帧的墨量相对差 **0.0003%**。两条量出来的规则都反直觉：相位取 4 档不是
+  "够用就好"而是 CG 自己的粒度（调到 8 档反而更差，多出的半档会被它舍回 1/4）；拆相位用
+  `round` 而非 `floor`（后者有 7/10 用例逐字节相等，但最坏值差七倍——观感问题是局部的，
+  一段文字里一个字画歪就够显眼）。
+
+  顺带修了一处一直存在的偏差：文字基线的吸附方向是 `ceil(块顶 + ascent)` 而不是 `floor`
+  ——CG 的 `set_text_position` 收的是「距底」，它把距底 floor 到整数设备行，距顶那一侧于是
+  恰好是 ceil。此前两边同为 floor，差值在多数情况下与 ceil 一致，只在某一侧的小数部分恰为
+  0 时差 1 像素。
+
+## [0.13.0] - 2026-08-18
+
+### Added
+- **全局热键（macOS）**：Carbon `RegisterEventHotKey` + 应用级事件处理器，与 Windows 侧
+  `RegisterHotKey` 语义一致（全局生效、组合被占用则该热键静默失效、`HotkeyHandle` 运行期
+  改绑与启停、改绑失败回滚旧组合）。至此 `AppHandler` 的缝合面在两平台全部对齐。
+  选 Carbon 是因为它是 macOS 上**唯一免授权**的全局热键途径：`CGEventTap` 与
+  `NSEvent::addGlobalMonitorForEvents` 都要用户在「辅助功能」里手动授权，且后者只能监听
+  不能拦截（按键仍会落到前台应用）。Carbon Event Manager 整体虽被标记弃用，这一条至今
+  仍是系统自带快捷键面板走的路径。
+  键码映射是这里的主要风险：macOS 的虚拟键码是**物理键位编号**，与字符值无关（win32 那边
+  `VK_A == b'A'` 的巧合不成立），且数字区 `5`/`6` 反序、F 键完全乱序。映射表与 `window.rs`
+  输入路径的 `map_special` 是同一套键码，已用单测钉住两张表互逆——走偏的症状是"注册的是
+  Home、按下去却当 End 处理"，两处各自看都对。
+- **单例窗口：`Window::single(key)`**。同一个键同时只存在一个窗口——已经开着就不再新建，
+  那个窗口被激活到前台（最小化的会还原）。设置页、关于框这类"再点一次应该跳到已开的那个"
+  的窗口用它；不设就是原来的行为，点几次开几个。
+  判定放在框架而不是让应用层自己拿 `Signal` 记标记：应用层挡得住重复开窗，却没法把已有
+  窗口拉到前台（再点一次什么都不发生，看着像按钮坏了）；而键随窗口登记表自动释放，
+  `ctx.request_close()` 这类绕过 `on_close_request` 的关闭路径也不会漏复位。
+  判定发生在**内容构建之前**：`AppHandler::take_new_windows` 因此改收一个平台提供的
+  `is_open` 谓词、返回 `NewWindow::{Create, Focus}`。晚于构建的话每点一次都要白搭一整棵
+  控件树，`content` 闭包里的副作用也会跟着重复执行。同一次分发里连开两个同键窗口由宿主
+  的批内去重挡下——只查平台登记表会失手，那时第一个窗口还没建出来。
+  离屏截图路径同样只出一张：出几张图与真跑开几个窗口一致，否则视觉回归比对的不是实际界面。
+- **截图管线覆盖子窗**：合成交互（`--click X Y`）期间经 `ctx.open_window` 开出的子窗各自再出
+  一张，文件名在主图基础上加序号（`out.png` → `out-1.png`、`out-2.png`，标题打印在日志里）。
+  此前 `run_offscreen` 是单 handler 单 pixmap，多窗口界面的视觉回归只看得到主窗。只跟一层。
+- **子窗可设自己的 `on_close_request` 与 `on_interval`**。关闭拦截器必须是每个窗口自己的——
+  平台在 `WM_CLOSE` / `windowShouldClose:` 里同步等这个 `bool`，问的是"**这个**窗口能不能关"，
+  主窗那份不会代管子窗，跨窗共享的 `Signal` 也表达不了它。定时器则是随窗口生灭更干净：
+  在主窗挂一个定时器刷新子窗内容，子窗关掉之后它还会一直跑。
+  子窗**不设** `channel`（跨窗数据流走 `Signal`：主窗 `App::channel` 的回调写信号、子窗读同一
+  句柄，复制一份 pump 只会让同一条消息处理两次）与 `hide_on_close`（隐藏后没有唤起途径，
+  只会留下一个关不掉也看不见的窗口）。
+- **多窗口：`EventCtx::open_window` + `Window` 构建器**（Windows + macOS）。
+  在任意控件回调里 `ctx.open_window(Window::new("设置", 560, 420).content(ui))` 即可开出
+  独立窗口——设置页、关于框这类子窗不必再挤进主窗做成对话框。
+  请求经宿主排队、由平台在事件分发**完全返回**后才真正建窗：在回调里直接建窗会同步派发
+  `WM_NCCREATE`/`WM_SIZE` 重入窗口过程，那里再取一次窗口状态就是 `&mut` 别名（铁律 6）。
+  与 `WindowOp`、`DialogRequest` 走同一条延后通道。
+  子窗只有对自己有意义的配置（标题/尺寸/可缩放/居中/无边框/最小尺寸/背景）：托盘、全局
+  热键、单实例、渲染后端都是**应用级**的，由 `App` 那次配置决定，子窗自动跟随（渲染后端
+  由平台按主窗当初的选择填，避免"主窗跑 GPU、子窗悄悄退回软件"）。
+  子窗与主窗**共享同一个 `ThemeHandle`**，运行期换肤所有窗口一起变；`Signal` 是 `Copy`
+  句柄，直接传进子窗即可跨窗共享状态，不需要额外的窗口间通信机制。
+  新增 `examples/multi_window.rs` 演示以上四点。
+  **macOS 侧同语义实现**，经真机验证（开窗、独立关闭、子窗自己的拦截器与定时器、信号
+  整批回收、跨窗广播、跨线程唤醒）。主窗与子窗共用抽出来的 `create_window`；窗口登记表
+  `WINDOWS` 同时是子窗 `NSWindow` 的**所有者**——`NSWindow` 是引用计数对象，从代码创建的
+  默认 `releasedWhenClosed = true` 会在 `close` 时抵消掉我们手上那份 `Retained`，故一律
+  置 `false` 由框架记账（win32 那边 `HWND` 由 OS 拥有，登记表只是名册）。
+  三处**只有真机才暴露**的差异：`NSTimer` 持 target 的强引用，不在 `windowWillClose:` 里
+  废止就与视图构成循环，子窗关掉后 `on_interval` 仍继续跑；`NSApplication::terminate` 会
+  **同步重入**发起它的那个窗口的 `windowWillClose:`（win32 的 `PostQuitMessage` 只是入队
+  一条 WM_QUIT，不会回头再触发 WM_DESTROY），故需要一道退出中标志；窗口 `close` 之后
+  AppKit 内部仍持有多份引用（实测 `retainCount` 是我们那份的九倍、何时归零无承诺），故
+  上层 `UiHost` 由 `windowWillClose:` **就地**析构而不等 `NSWindow` 释放——与 win32 在
+  `WM_DESTROY` 里显式回收 `WindowState` 是同一个原则：上层状态由框架自己收。
+- **跨线程唤醒（macOS）改为 App 级**：`MacWake` 不再绑主窗那个 `NSView`，改为标脏所有
+  窗口。唤醒的目标是**应用**而不是某个窗口，绑在窗口上那个窗口一关唤醒就静默丢失
+  （win32 已先一步改投 App 级 message-only 宿主）。
+
+### Fixed
+- **win32 窗口图标优先按 `MAINICON` 名字加载，找不到才回退数字资源 1**。此前固定按数字序号
+  1 加载（`.rc` 里 `1 ICON "..."` 编译期烙入的占位图），而下游打包工具（如 wind-installer 的
+  `wind-packer`，基于 `editpe`）注入正式图标时是新增一个名为 `MAINICON` 的图标组、插到资源
+  表最前面，并不覆盖数字序号 1。两条路径各按各的标识符找图标，互不相关：Explorer 取资源表
+  最前一项，命中 `MAINICON` 显示正确；窗口/任务栏图标按数字 1 硬查，命中的还是那份占位图，
+  于是"资源管理器图标对、任务栏图标错"。开发态直接 `cargo run`（未过打包工具）时只有数字
+  序号 1 那份占位图，按名字取不到，回退保持原行为不变。
+- **子窗内容构建期创建的 `Signal` 随窗口关闭整批回收**。此前反复开关设置窗会让它们在全局
+  arena 里一直累积——单窗口时代无所谓（内容活到进程结束），多窗口下才成为真的泄漏。
+  为此 `Window::content` 收**闭包**而非建好的树：信号要归到新窗口名下，只能在构建**发生时**
+  收集；收一棵建好的树就太晚了，那些信号在调用方写下 `Element::col()…` 的那一刻就已经进了
+  arena。附带好处是内容构建推迟到窗口真正创建时，与 `open_window` 的排队语义对齐。
+  只管构建期的信号；控件内部的那些本就由控件自己的 `SignalScope` 管，随 widget 析构回收。
+- **运行期换主题后窗口底色现在跟着变**。此前切暗色的结果是：控件前景转暗、窗口底色仍停在
+  亮色，浅色文字画在浅灰底上几乎看不见。根因是清屏色在**窗口创建时**从 `WindowConfig::bg`
+  抄了一份定格在平台层，而 `AppHandler` 上没有任何查询当前底色的方法，平台无从得知主题换了
+  底色。构建期的 `App::theme` 那条路一直是好的（它当场同步了 `WindowConfig::bg`），坏的只有
+  运行期 `ThemeHandle::set` 这条。
+  修法是给 `AppHandler` 补一个 `bg()`，win32 / macOS / 离屏截图三处清屏点改为**每帧查询**。
+  宿主的实现当场从主题源取值而**不读自己那个 `bg` 字段**——该字段在 `begin_frame` 里刷新，
+  而平台是在 `render` 之前清屏的，读它就永远慢一帧（换主题后那一帧仍按旧底色清屏，而控件
+  已用新主题画好，恰好停在最难看的状态）。经 `App::bg` 显式固定过的底色仍不跟随主题。
+- **换主题现在会刷新所有窗口**。主题源为所有窗口共享，而 `ThemeHandle::set` 只调
+  `anim::request_repaint()`，那只唤起当前窗口。此前换肤能联动纯属巧合——若应用同时写了某个
+  `Signal`（如用 `Signal<bool>` 记明暗），是那次信号写入顺带触发了跨窗广播；只调 `theme.set()`
+  的写法则其他窗口停在旧配色。
+- **跨窗口共享的 `Signal` 变更现在会让其他窗口也重绘**。事件分发只让发起方产生脏区，于是
+  "在设置窗里改了名字，主窗显示的还是旧的"。改为在分发收尾时按「本次写过信号」广播失效给
+  其余窗口（`signal::take_cross_window_dirty`）。按"写过信号"而非"需要重绘"来广播：后者每次
+  hover 都成立、会让所有窗口跟着刷，而信号写入是人手速度的低频事件，且正是跨窗共享状态唯一
+  可能变化的途径。单窗口下恒为空操作。
+
+### Changed
+- **托盘、全局热键、跨线程唤醒移到 App 级消息宿主**（多窗口地基，单窗口行为不变）。
+  这三样都是**应用**的资源而非某个窗口的：托盘图标代表整个程序、全局热键在所有窗口之外
+  生效、后台线程唤醒的是"这个应用"。此前它们挂在唯一那个窗口的 `WindowState` 上，于是
+  "窗口"与"应用"两个生命周期被迫重合——多窗口下就成了「关掉哪个窗口托盘图标才消失」这种
+  没有正确答案的问题，而绑在窗口上的 waker 更是那个窗口一关就静默失效，通道数据再不上屏。
+  win32 侧改为挂在一个 message-only 窗口（`AppHost`）上，活到消息循环结束为止；它不进活动
+  窗口表，故不阻止退出。跨线程唤醒投到它再**广播**给各窗口——`App::channel` 的 pump 挂在
+  各自宿主上，消息落到哪个窗口只有那个宿主知道，多叫醒几个的代价是几次被脏区挡掉的重绘，
+  漏叫一个的代价是那条通道永远不上屏。托盘「退出」相应改为销毁全部窗口，否则留下的子窗
+  会让消息循环继续跑（表现为「点了退出，图标没了，程序还在」）。
+  macOS 侧托盘本就由 `run_windowed` 的栈持有、已是 App 级；waker 与全局热键随后一并补齐
+  （见本版「多窗口」与「全局热键（macOS）」两条），三样资源在两平台都归应用而非窗口。
+- **消息循环改为窗口集合驱动，最后一个窗口关闭才退出**（多窗口地基，单窗口行为不变）。
+  此前 `run_message_loop(hwnd)` 绑死单个句柄——`wants_animation` 只问它一个、`InvalidateRect`
+  只发给它，而任何窗口的 `WM_DESTROY` 都直接 `PostQuitMessage`。三处都按"只有一个窗口"写死，
+  多开一个就是关掉设置子窗把整个应用带走。
+  改为按 win32 侧的活动窗口登记表（`LiveWindows`）驱动：每轮取一次快照，逐个问要不要续帧、
+  逐个发失效；`WM_DESTROY` 注销自己，注销后表空了才发退出消息。帧间隔取各窗口所在显示器中
+  **最短**的那个——这是条共享循环，按慢屏配速会让快屏窗口掉帧，反之只是多几次被脏区挡掉的
+  失效通知。macOS 侧同样改为计数式（`windowWillClose:` 减到零才 `terminate`），其帧驱动本就
+  是每个视图自调度，无需集合。
+
+### Fixed
+- **嵌套对话框的 ESC 先关最内层那个**，此前关的是最外层——连带把里面那层一起吞掉。
+  对话框栈按 `Element::dialog` 的**构造顺序**登记，而内层作为外层的参数先求值，栈序正好
+  是反的。改为在 `build` 期按先序遍历登记（父先插入、再递归子），栈顶因此恒为最内层。
+- **对话框栈下沉到 `Tree`，不再是线程全局栈**。全局栈按构造顺序累积，两个窗口下后构建的
+  那个占住栈顶，于是在 B 窗口按 ESC / 点关闭，关掉的是 A 窗口的对话框。改由遮罩自己带着
+  显示信号（`Widget::modal_signal`），`Element::build` 登记进所属的树。
+  登记必须落在 build 期而非构造期：若仍在构造期收集，"先建两棵树、再建各自宿主"的调用
+  顺序会让第一个宿主把所有对话框一并收走。绑到 `&mut Tree` 后归属跟着树走，与构建顺序无关。
+  顺带清掉两处既有的无界增长：重复登记去重、关闭时剔除已失效的信号句柄。
+- **续帧请求归各宿主自己所有**。`anim` 的动画请求位是线程全局的，而每帧起始都要
+  `reset_request()` 清一次；`UiHost::wants_animation` 此前直接读那个全局位。同一 UI 线程
+  上跑两个窗口时，后绘制的窗口会把前一个刚提出的续帧请求一并抹掉，于是它的动画在对方
+  出帧的瞬间冻住。改为在帧末与脏区、重排请求一同收进宿主自己的字段——那三样本就同源同期，
+  少收一样就是给多窗口留一个只在特定出帧次序下复现的哑弹。
+  帧**之外**的重绘请求（后台线程写信号、热键/托盘回调、定时器）不经此路：那些路径各有
+  `InvalidateRect` 兜底，本方法只回答"上一帧画完后要不要继续按帧驱动"。
+
+## [0.12.0] - 2026-08-14
+
+### Added
+- **`testing` 模块：下游终于测得了收 `&mut EventCtx` 的回调**。`testing::run_with_ctx(f)`
+  借一棵最小树的 ctx 跑 `f`，把它请求的副作用（toast、对话框、关窗、菜单、URL、窗口操作、
+  重绘）按 `DispatchResult` 交回；`run_with_ctx_in(&mut tree, id, f)` 用调用方自己的树，
+  回调改到树上的东西跑完仍可断言、节点几何也是布局后的真值。
+  本版把回调普遍改成收 ctx（菜单动作、`App::channel` 的 on_message、`on_close_request`）之后，
+  下游就再也造不出这个参数了——`EventCtx` 字段私有、`Tree::run_detached` 是 `pub(crate)`，
+  于是"点这一项确实弹了 toast"这类断言只能退化成"把回调体抽成不收 ctx 的具名函数、再断言
+  那个函数"：测的是抽出来的那一半，回调本身有没有接对反而没人管。这个退化在下游已经发生过
+  两次，是本模块存在的直接原因。
+  `run_detached` 保持 `pub(crate)` 不变：ctx 借的是宿主对控件树的可变访问，把内部入口直接
+  放开等于敞开这条借用契约；包一层只暴露"跑一段闭包、收回副作用"这个受控形状。
+- **表单行限行 `FormTheme::label_max_lines` / `desc_max_lines`**：设了就同时启用**末尾省略**
+  与**悬浮看全文**，`None`（默认）保持原样按内容换行。
+  设置页的说明文字长度常由后端数据决定：真实数据里有四分之一的说明超出左列单行宽度，
+  不限行就会把行撑成三四行，同一列的行高从此参差，末尾还会被卡片边缘裁掉半截。而
+  `setting_row_desc` 返回的是**拼好的容器**，调用方够不到内部那个 label——`.max_lines()`
+  加在返回值上只会打到容器身上，这条路只能由主题这一侧给。
+  截断与 tooltip 绑成一件事而非两个开关：截断意味着信息不完整，tooltip 是它唯一的兜底，
+  拆开只会让人漏配后一半、把说明文字直接丢掉。短文本不会因此多出一个与可见文字相同的
+  提示——`Tree::node_tooltip` 按 `Label::text_truncated()` 门控，没真截断就不弹。
+  含换行的文本仍限行但**跳过 tooltip**：`Element::tooltip` 只收单行、多行会 `debug_assert`
+  拦下，而这里的提示是库替调用方加的，不该由它引爆；调用方显式传多行才是该被拦的误用。
+- **`Truncate` 补 `Debug`**：断言里 `assert_eq!(tr, Truncate::End)` 此前编译不过。
+
+- **动态文案 `TextContent`：控件文案可直接绑 `Signal<String>`**。此前全库只有
+  `Element::label_signal` 一条路径能让文字跟随状态，`button`/`link`/`badge`/`checkbox` 等
+  的文案都是构建后不可变的 `impl Into<String>`——于是"切换类按钮"（播放/暂停、展开/收起、
+  隐藏已完成/显示全部）这个最常见的需求根本做不了。`examples/dyn_list.rs` 的头部注释写着
+  两个按钮会在「按名称排序 / 按优先级排序」之间切换，实现却是写死的固定文案，说明与代码
+  对不上正是因为框架给不了。
+  改法不是给每个控件再加一个 `_signal` 构造器，而是把动态性下沉到**参数类型**：所有单条
+  文案参数从 `impl Into<String>` 放宽为 `impl Into<TextContent>`，`&str` / `String` /
+  `Signal<String>` 走同一个构造器。规则因此收敛成一句话——**凡是接受一段文案的参数都可以
+  传 `Signal<String>`**，不必记哪个控件有孪生构造器；`_signal` 后缀继续只用于参数类型确实
+  不同的场景（`list_signal` 收 `Signal<Vec<T>>`）。选它而不选修饰符方案（`.text_signal(s)`）
+  是因为绑错类型在**编译期**就过不去，不像修饰符只能靠 `debug_assert` 运行期喊停，而且
+  `button("占位").text_signal(s)` 里的占位串是个永不显示的死参数。
+  覆盖 `label` / `button` / `link` / `badge` / `badge_intent` / `checkbox` / `radio` /
+  `nav_row` / `icon_button`（图标按钮绑信号即"图标随状态换"）。文案在每次 measure 时现取，
+  所以换字会**重新测量宽度**而不是被旧尺寸裁掉：点击回调里写信号已由核心升级为
+  `DamageReq::Layout` 级失效，整窗帧必先 `layout_root`。
+- **表单脚手架 `Element::field` / `setting_row` / `setting_row_desc` / `card`**：「标签 + 控件」
+  的一行和「标题 + 内容」的卡片此前在 6 个示例里各写了一遍，实现几乎逐字相同，只差行高与
+  标签宽度——正是这个库自称的核心场景（做小工具）里重复最多的样板。
+  `field` 是固定标签列 + 紧随其后的控件（表单感，控件左缘对齐成一条竖线），`setting_row`
+  把控件贴到行右缘（设置页感），二者的差别只有这一点；两者都**定高**，一列行才对得齐。
+  `setting_row_desc` 在标签下加一行弱化说明，是唯一**不定高**的一种——副标题长短不一，
+  定高只会把它挤出去，故改由上下内边距撑开。副标题做成独立构造器而非 `Option` 参数：
+  `Option<impl Into<String>>` 的 `None` 推断不出类型，退成 `Option<&str>` 又会让这一个参数
+  破例不收 `String`，且占多数的无副标题行还得白写一个 `None`。
+  行高/标签列宽/间距/字号一律走新的 `FormTheme` 与 `CardTheme` 覆盖层，**不进签名**：
+  一个应用里的表单行必须整齐划一，逐行传尺寸只会让每处各写一个近似值。
+  这几个构造器返回的是拼好的容器而非挂了 widget 的控件，故只接受容器/样式类修饰符，
+  控件专属修饰符（`.intent()` / `.small()` / `.outline()`）须加在传入的 `control` 上——
+  rustdoc 与 `docs/API_GUIDE.md` 均明确列出了可用与不可用的两类（`badge`/`chip`/`grid`/
+  `dialog_panel` 同属此类，此前从签名上看不出来）。
+- **`FormTheme` / `CardTheme` 主题覆盖层**：表单行的行高、标签列宽、水平间距、标签字号字重、
+  副标题字号、带副标题行的上下内边距；卡片的圆角、内边距、元素间距、标题字号字重。
+  全部 `Option` 回退 palette/metrics 并接入 TOML。卡片刻意**不含底色槽**——底色走
+  `Role::Surface` 延迟解析才能在运行期换主题时跟着变，个别卡片换色链 `.bg_role(..)` 即可。
+- **语义色角色补全 `Role::Success` / `Role::Warning`**：此前只有 `Danger` 一个语义色，
+  优先级三色、状态圆点这类需求只能留硬编码。新增 `palette.success` / `palette.warning`
+  两个色槽，亮暗两套各给取值，并同步扩展 `Intent::Success` / `Intent::Warning`——
+  与 `Danger` 一样是「一个色槽、两条访问路径」（`Role` 供直接上色、`Intent` 供控件语义），
+  不是第二套并行体系。取值刻意保证对表面 ≥ 3:1（有单元测试锁住）：语义色经常直接当**前景**
+  用（状态文字、标签边框），而饱和亮黄在浅色表面上只有约 1.9:1，字一上去就糊。
+- **三级弱化文字 `Role::TextSubtle`**：比 `TextMuted` 更淡但仍是可读正文（版权行、脚注、
+  时间戳）。此前这类文字只能压成 `TextMuted`，正文的视觉层级从三档降成两档；借
+  `TextDisabled` 会把可读内容说成不可交互，借 `Placeholder` 则暗示「待填写」，语义都不对。
+  四档文字色的强弱顺序由单元测试锁住，防止后续调色把层级调反。
+- **反色表面 `Role::SurfaceInverse` / `Role::OnSurfaceInverse`**：与当前主题**明暗相反**的
+  实底条块及其前景（亮色主题下是深色横幅，暗色主题下翻成浅色）。取值即本主题的
+  `text` / `bg`——正文色天生就是「在 bg 上对比最强的那一档」，用它当反色底能保证与页面其余
+  部分同属一套色相。注意「不论主题都恒为深色」的标题栏是一个固定设计而非角色，
+  仍应写死颜色（`examples/frameless.rs` / `light_titlebar.rs` 即刻意如此，已补注释说明）。
+- **表格行右键菜单 `Element::on_row_context_menu`**：右击数据行时按行下标现取现建菜单项并
+  弹级联浮层，返回空 `Vec` 则不弹。三类表格（`table_sortable` / `table_sortable_server` /
+  `table_selectable`）均支持——右键与首列复选框不争语义（复选框只吃左键），故不像整行双击
+  激活那样把可选表格排除在外。菜单**每次右击重建**，`check` / `enabled` 才能反映
+  右击当刻的数据；回调挂在行容器上，行内空白、自定义单元格、操作列上右击都能弹。
+  表格行是控件内部构建的，应用侧拿不到行 `Element`，故这条接线只能由框架提供。
+- **菜单项里也能做阻塞式原生调用**：右键菜单里的"导出到文件…"这类项此前**无法表达**——
+  动作是无参 `Fn()`，执行时虽已不在控件的 `on_event` 里、却仍在平台消息回调栈内，直接同步弹
+  原生模态框会与对话框自身的消息泵冲突。现在菜单动作收 `&mut EventCtx`（见 Changed 段），
+  写 `ctx.defer_blocking(f)` 即可把流程排到事件分发**完全返回**之后执行。
+  本轮曾先落地一个无 `ctx` 的自由函数 `app::defer_blocking` 作为过渡，同版内即因根因被修掉而
+  标记废弃；其配套的 `app::take_deferred` 保留：复用既有的 `DialogRequest::Custom` 通道交付
+  （平台已在正确时机轮询它），`AppHandler::take_dialog_request` 的默认实现即取该队列，
+  自定义 handler 覆盖时记得回退到它。
+- **私用区回退字体 `text::register_private_use_font`**：注册一个 `.ttf` 后，文本里落在
+  Unicode 私用区的码位改用它渲染，其余字符不受影响。图标字体（Font Awesome、Material
+  Icons 等）的字形全部落在私用区，注册后即可把图标码位当普通文字放进任何 `label`/`button`，
+  与文本同流布局、随字号缩放，无需另做图片资源。字体**不必安装到系统**——走 DirectWrite
+  自建字体集加载文件，应用可以直接把 `.ttf` 随包分发。
+  三段私用区（BMP `U+E000..=U+F8FF`、补充私用区 A/B `U+F0000..=U+10FFFD`）全部识别：
+  图标集用哪一段并不统一，只判 BMP 会让用补充私用区的字体静默落回主字体、渲染成方框；
+  而判据不能只看"是不是代理对"，否则 CJK 扩展 B 等生僻字会被误切到图标字体，同样变方框。
+  注册表沿用 `render::image` 解码器的 thread-local 模式，须在 `App::run` 前调用；
+  运行期替换用 `DWriteEngine::set_private_use_font`（它会一并清测量与基线缓存——
+  私用区字符换了字形来源，宽度随之改变）。
+- **拖拽重排列表 `Element::reorder_list`**：面向设置类应用的手动排序列表，每行前置拖动手柄，
+  按住上下拖动即可调顺序，其余行平滑让位、被拖行浮起跟手，松手播回落动画后才提交，
+  拖动中按 `Esc` 取消。手柄独立于行内容，故行里照常可放开关/下拉/输入框而不抢事件；
+  让位按各行实际高度重新堆叠，支持带副标题的不等高表单行。
+  默认 `CommitMode::Children` 直接重排子节点、**不重建行**，行内控件状态天然保留；
+  数据驱动场景切 `CommitMode::Callback`，由应用在 `on_reorder` 回调里更新数据源。
+  设计文档见 `docs/reorder-design.md`。
+- **`Node::offset` / `Node::raised` 绘制层能力**：`offset` 是不参与 measure/arrange 的
+  绘制/命中偏移，`raised` 把子节点提到同级最上层绘制并优先命中。二者供"视觉位移但布局不变"
+  的场景使用（拖拽让位、后续的 FLIP 动画等）——直接改 `bounds` 会被任何一次 relayout 冲掉。
+  变化纳入 `layout_signature`，故宿主自动升级整窗重绘，无需为其开特例分支。
+- **数据驱动重排 `Element::reorder_list_signal`**：行由 `Signal<Vec<T>>` 生成，信号变化即整体
+  重建，因此顺序的真相源在数据侧——`reorder_list` 的 `Children` 模式把顺序只存在节点树里，
+  应用无法把顺序**推回**控件，「恢复默认」「重新载入配置」这类反向同步全部落空。
+  重建能力做成非泛型的内部 `RowSource` 内嵌进 `ReorderList`（而非套一层 `DynList` 宿主：
+  一个节点只能挂一个 widget），故控件保持非泛型、`on_reorder`/`commit_mode` 的 downcast 照旧。
+  拖动中一律不重建（会打乱槽位快照与补间下标），积压的数据变更留到落定后补做；
+  落定提交后**同帧**重建，不闪回旧顺序。
+  手柄作为 `row_fn` 的第二个参数交还调用方安放：整行 `clickable()` 的列表**必须**把手柄放进
+  `stack` 当同级覆盖层——`Clickable` 消费 `Down`/`Up`，手柄嵌在它内部时冒泡断在那里，
+  列表收不到事件、拖动起不来。
+- **`ReorderTheme` 主题覆盖层**：手柄常态/悬停色、拖动中行底色与投影、指示线色、手柄槽宽、
+  拖动行圆角，全部 `Option` 回退 palette 并接入 TOML。
+- **菜单项语义色 `MenuItem::danger()` / `MenuItem::intent(Intent)`**：`Danger` 把标签染成
+  `palette.danger`，用于「删除 / 清空」这类不可逆项——菜单里所有项长得一样时，破坏性操作与
+  「复制」只差一个词的距离。取色优先级：禁用 > intent > 悬停/勾选 > 常规（不可点的项不该还在
+  喊危险；危险项被指向时更要保持红，而不是变成中性的强调色）。
+- **`MenuTheme` 新增 `shadow_dy` / `shadow_blur` / `shadow_color`**：菜单浮层投影可按环境覆盖，
+  `Option` 回退内置默认并接入 TOML（`#[serde(default)]`，旧 TOML 无需改动）。
+- **信号槽位回收：`signal::SignalScope` + `Signal::dispose` / `try_get` / `try_with` /
+  `is_alive` + `signal::stats`**。运行时 arena 此前只增不减（`free` 空闲链没有任何地方
+  `push`、`generation` 从不自增），创建过的每个槽位随线程活到进程退出。
+  所有权模型定为**两级**，而不是 leptos / floem 那样贯穿全库的隐式作用域树：作用域之外
+  创建的信号**默认无主、永不回收**（`main` 里的应用状态活到退出就是正确语义，回收它们没有
+  意义），只有 `SignalScope::collect(..)` 内创建的才归属该作用域、可整批回收。本库是保留
+  模式的控件树而非响应式图，没有一棵现成的所有权树可挂；隐式回收还会让"谁杀了我的信号"
+  不可追溯——菜单动作闭包、toast 回调、`App::channel` 的消息处理器都能合法地比控件节点
+  活得久。显式 `collect` 把边界写在代码里。
+  `Signal<T>` 仍是 `Copy`：回收的单位是**槽位**而非句柄，所以不需要给句柄加 `Drop`
+  做引用计数（`Copy` 出去的副本互不知情，本来也做不到）。调用方不必回到"每个闭包前先
+  clone 一遍"。
+  `stats()` 返回 `{ live, free, capacity, peak }`；环境变量 `WINDUI_SIGNALS=1` 让活跃槽位
+  每创下新高就往 stderr 打一行，健康的应用启动后即安静，泄漏表现为持续刷屏（值即报告
+  步长，嫌吵调大；`0` 或不设即关闭）。
+- **意图色的角色变体 `Intent::CustomRole(Role)` / `Element::accent_role`**：`Intent::Custom`
+  收的是构建期给定的**定色**，运行期换主题不跟随，于是"想拿 palette 里内置意图之外的色槽
+  当基色"这件事只能退回硬编码——`examples/multiline_demo.rs` 的 `const ACCENT = 0x4C8BF5`
+  正是这么来的，它一字不差就是默认主题的 `palette.accent`，换暗色主题后按钮还是那个亮蓝。
+  新变体把基色的解析推迟到 paint 期（口径同 `Brush::Role`：从当前线程活动主题取，
+  故 `Role::InputBg` 这类落在覆盖层上的角色也解得出），派生规则与 `Custom` 完全共用。
+  命名跟随既有成对约定 `fg` / `fg_role`，故是 `accent` / `accent_role`，Button 与 CheckBox
+  通用；`badge_intent` 下 `CustomRole` 也与内置意图同路走 `bg_role_alpha` + `fg_role`。
+  `examples/multiline_demo.rs` 已迁到 `.accent_role(Role::Accent)`，常量删除。
+
+### Changed
+- **`App::accelerated(bool)` 换成 `App::renderer(Renderer)`（破坏性）**。布尔开关只能表达
+  "要不要试 GPU"，答不了"拿不到 GPU 该怎么办"——而这两件事需要分开：
+
+  | 变体 | 行为 | 用途 |
+  |---|---|---|
+  | `Renderer::Auto` | GPU 优先，建不起来自动回退软光栅 | 发布给最终用户 |
+  | `Renderer::Software`（默认） | 强制软光栅 | 内存敏感场景 |
+  | `Renderer::Gpu` | 强制 GPU，拿不到就**报错终止** | 测试与排障 |
+
+  `Gpu` 之所以报错而非回退，是因为它的用途就是"拿不到 GPU 要告诉我"。静默换一条路会让
+  基于它的验证失去意义——两张软渲染的截图看起来当然一致。这也是它与 `Auto` 唯一的区别。
+  迁移：`accelerated(true)` → `renderer(Renderer::Auto)`；`accelerated(false)` 即默认，可直接删去。
+  命令行新增 `--renderer auto|software|gpu`，`--accelerated` 作为等价旧写法保留。
+  **默认仍是软光栅**：GPU 路径的验证还在补齐（本版从零测试补到 13 条），默认切换留待后续版本。
+- **`EventCtx::request_close` 改为走关闭决策链，新增 `force_close` 跳过它（破坏性）**。
+  此前 `request_close()` 的语义是"应用已决定关闭"——直接落地，不问 `on_close_request`、
+  也不先关最顶层对话框。问题在于**无边框窗口的 × 是自绘控件**
+  （`Element::window_button(WindowButtonKind::Close)`），它走的正是这条路：于是
+  `on_close_request` 拦得住 Alt+F4、ESC、系统 ×，唯独拦不住用户最常点的那个 ×。
+  下游的报告是"改了内容点 × 直接丢失、按 Alt+F4 才提示"——守卫在 frameless 应用里
+  基本等于没有。同一个"关闭窗口"的意图，来源不同却走两条路、守卫只覆盖一半，是设计漏洞。
+  现在 `request_close()` = **请求**关闭（关顶层对话框 → 问 `on_close_request` →
+  `hide_on_close`），与系统 × 完全同路；确实已经决定要关的场合改用 `force_close()`。
+  取"默认过守卫、绕过要显式"这个方向，是因为绝大多数调用点是按钮点击（用户意图），
+  而真正"应用已决定"的只有安装器要求退出、确认框里已选过"直接退出"这么几处——
+  后者若不绕过会死锁：安装器等窗口关、窗口等用户回答。
+  **迁移**：调用点若是"用户点了某个关闭按钮"，不动即可（自动获得守卫）；若是"程序已经
+  决定关闭"，改成 `force_close()`。未设 `on_close_request` 的应用不受影响。
+  `on_close_request` 回调内再调 `request_close()` 无效（宿主忽略以免自我递归）。
+- **`setting_row_desc` 的说明文字改用 `Role::TextSubtle`**（原 `TextMuted`，视觉变更）。
+  行标题已是正文档，说明再压一档才拉得开层次；`TextMuted` 是**次级正文**的档位，用在这里
+  两行字仍显得同重。本版新增 `TextSubtle` 时讲的正是"版权行、脚注这类比 muted 更淡但仍
+  可读"的场景，而库自己这处最典型的用例没跟上。四档文字色的强弱顺序由单测锁着。
+- **`ui::DynLabel` 并入 `ui::Label`**（保留为 `#[deprecated]` 类型别名，`DynLabel::new(sig)`
+  仍能编译）。它本是 `Label` 的逐行复制——换行、`max_lines` 裁剪、上百行的截断算法各存了
+  两份，改一处得记得改两处；文案的动态性交给字段类型 `TextContent` 之后，这个孪生类型就
+  没有存在理由了。附带好处：`.max_lines()` / `.truncate()` 不必再"先试 `Label` 再试
+  `DynLabel`"两次 downcast，误用提示也只剩一条。`Element::label_signal` 不变。
+- **`App::theme(t)` 现在**当场**把主题装进当前线程**，而不是等到 `run()`。一部分组合子
+  （`Element::field` / `card` / `badge` / `chip` / `tag_field` / `dialog_panel`）在**构造期**
+  就要读主题定尺寸和颜色；此前主题要到 `run()` 才装，这些构造器读到的一律是默认主题，
+  自定义主题里的行高、圆角、徽章色会**静默失效**——编译通过、不报错、只是没生效。
+  链式写法（`App::new(..).theme(t).content(build_ui())`）因此自动正确；若先把树建进变量
+  再传，请把建树挪到 `.theme(t)` 之后（`examples/ime.rs` / `settings.rs` / `ime_settings.rs`
+  已照此调整）。
+- **`Role` 与 `Intent` 各新增变体（破坏性）**：下游对它们做穷举 `match` 的代码需补分支。
+  `Role` 加了 `SurfaceInverse` / `OnSurfaceInverse` / `TextSubtle` / `Success` / `Warning`，
+  `Intent` 加了 `Success` / `Warning`；`Palette` 相应新增五个色槽（`#[serde(default)]`，
+  旧 TOML 无需改动）。两者本版同时加了 `#[non_exhaustive]`（见下文），**这是最后一次**
+  因新增语义色而破坏下游。
+- **`MenuItem` 新增 `pub intent: Option<Intent>` 字段（破坏性）**：下游用**字面量构造**或
+  穷尽解构 `MenuItem` 的代码会 `E0063` / `E0027`。
+  迁移：改用 `MenuItem::run` / `key` / `separator` / `submenu` 四个便捷构造加链式设置器
+  （它们已收敛到共同底座）。本版同时给 `MenuItem` 加了 `#[non_exhaustive]`（见下文），
+  字面量构造这条路已被封死，**这是最后一次**因新增字段而破坏下游。
+- **菜单浮层投影默认值收敛**：偏移 6 → 3、模糊半径 18 → 9、黑色不透明度 43% → 22%，与
+  `ReorderTheme` 既有的投影分量对齐（alpha 同为 56）。投影是用来把浮层从背景里托起来的，
+  不该成为画面里最显眼的东西；大面积低对比渐变又正是远程桌面这类有损通道最先牺牲的部分。
+  需要旧观感的用 `MenuTheme` 的三个投影字段覆盖。
+- **toast 投影与菜单对齐，并可主题化**：toast 此前硬编码偏移 6 / 模糊 22 / 黑 35%，菜单收敛后
+  它反而成了画面里更重的那个。两者都是浮在内容之上的临时面板，投影只负责把它们从背景里托起来，
+  没有理由一个比另一个重。改为走新增的 `ToastTheme::shadow_dy` / `shadow_blur` / `shadow_color`
+  （`Option` 回退，默认值与 `MenuTheme` 相同，接入 TOML）。淡入淡出仍按 alpha 缩放。
+- **菜单分隔线自动规范化**：所有层级（根层与各级子菜单，弹出与刷新两条路径）在构建时统一
+  去掉首尾分隔线、把相邻的折叠成一条。菜单项按条件生成、分组线无条件写下是最自然的写法，
+  整组为空时旧行为会留下孤立的线。副作用：**有意**写在菜单首尾的分隔线现在会被移除。
+- **`on_context_menu` 的构建器改收 `Fn`（原 `FnMut`），并交宿主兼任菜单重建器**：
+  粘滞项（`MenuItem::stay_open`，即右键菜单里的复选开关）点击后菜单不关，此前
+  `MenuRequest::rebuild` 恒为 `None`，勾选态刷不了——勾了也不变，看着像没生效。
+  同一个构建器要留两份（弹出时建项、粘滞项点击后重建），`FnMut` 独占交不出第二份，
+  故 `core::MenuFn` 由 `Box<dyn FnMut>` 改为 `Rc<dyn Fn>`。
+  迁移：构建器捕获的可变状态改放 `Cell`/`RefCell`/`Signal`（本来也该如此——它每次右击都跑）。
+- **`Signal<T>` 改为 `!Send` + `!Sync`（破坏性）**：此前它的字段全是 `Send`，于是自动实现了
+  `Send`，而运行时存储是 thread_local——句柄 move 进别的线程后 `set()`，查不到 slot 就走空
+  分支，不 panic 不报错、值直接丢掉，UI 侧毫无线索。这是从 `Rc<Cell<T>>` 迁到 `Signal` 时
+  丢掉的编译期保护（`Rc` 是 `!Send`，同样的错误代码在旧模型下根本编译不过）。
+  加零大小的 `PhantomData<*const ()>` 负标记补回，`Copy`/型变/8 字节布局均不受影响。
+  迁移：跨线程更新状态走 `App::channel` 拿 `Sender<Msg>`（`Msg: Send`，可 move 进工作线程），
+  在 UI 线程执行的 `on_message` 回调里写信号——回调本身不要求 `Send`，故能捕获信号。
+  因此报错的下游代码本就在静默丢值，编译失败是把运行期的哑故障提前到了编译期。
+  另：`set`/`update` 在 slot 缺失时补 `debug_assert`，与 `with`/`get` 的 panic 对齐，
+  消除"读会炸、写静默"的分裂（当前 slot 永不回收，该分支不可达，是留给日后释放作用域的护栏）。
+- **绑信号的构造统一 `_signal` 后缀**：`Element::label_rc` → `label_signal`、`rich_rc` → `rich_signal`、
+  `dropdown_reactive` → `dropdown_signal`、`dropdown_items_reactive` → `dropdown_items_signal`。
+  同一个概念此前有三套后缀：`_rc` 是 `Rc<Cell<T>>` 时代的残留，参数早已换成 `Signal<T>`（`Copy` 句柄），
+  名字却还在暗示"要先包一层 `Rc`"，读文档的人因此绕开这些构造、退回手写 `Rc<RefCell<..>>`；
+  `_reactive` 则与 `Element::reactive()`（把节点标记为响应式，供自定义控件用）撞概念，
+  一个是"绑什么数据"、一个是"节点怎么刷新"，二者出现在同一份补全列表里无从分辨。
+  既有的 `list_signal` / `host_signal` / `reorder_list_signal` 就是命名基准，本次向它们收敛。
+  **迁移**：旧名保留为 `#[deprecated]` 转发别名（计划 0.13 移除），编译告警会逐处指出新名，
+  照着改即可，签名与行为完全不变。
+- **运行期句柄的获取与操作对齐**：`App::hotkey_rc` → `App::hotkey_handle`，与既有的 `App::theme_handle`
+  同名式；`HotkeyHandle::rebind` → `HotkeyHandle::set`，与 `ThemeHandle::set` / `Signal::set` 同名式。
+  改名的动因是 `_rc` 一个后缀被用出了两种意思——`label_rc` 是"绑信号"，`hotkey_rc` 是"返回句柄"，
+  同一份 API 里同一个词指两件事，比起名不好更糟。句柄类现在统一是"`*_handle` 拿到、`set` 改值、
+  `set_enabled` 启停"，学会一个即会用另一个。
+  **迁移**：旧名保留为 `#[deprecated]` 转发别名（计划 0.13 移除）；`rebind(hk)` 直接换成 `set(hk)`，
+  语义未变（下一次消息循环生效，失败回滚保留旧绑定）。
+- **`MenuItem` builder 去掉 `with_` 前缀**：`with_icon`/`with_shortcut`/`with_check`/`with_subtitle`/
+  `with_badge`/`with_trailing_icon`/`with_enabled` → `icon`/`shortcut`/`check`/`subtitle`/
+  `badge`/`trailing_icon`/`enabled`。同类 builder 此前两套风格并存——`MenuItem` 全套 `with_*`，
+  而 `DropdownItem` / `CheckMenuItem` 全套无前缀，混用同一个菜单时要来回切换习惯。
+  取无前缀一侧是因为 Rust 生态里 `with_*` 通常表示"带着某配置构造"（如 `Vec::with_capacity`），
+  用在链式设属性上是误导；`MenuItem::stay_open()` 本就没有前缀，也印证了这一侧才是本意。
+  方法名与同名 `pub` 字段（`icon`/`enabled` 等）共存合法且无歧义：`self.icon` 取字段、
+  `item.icon(..)` 调方法，`stay_open` 字段与方法早已如此共存。
+  **迁移**：旧名保留为 `#[deprecated]` 转发别名（计划 0.13 移除），去掉 `with_` 前缀即可。
+- **启用 / 可见两条轴的形态对称化（部分破坏性）**：这两条轴表达的是同一件事——"这个节点这一帧
+  算不算数"，此前却各长各的。`enabled` 收 `Signal<bool>`、`disabled` 收 `bool`、`visible` 收 `bool`
+  而没有信号版，于是"下一个该传什么"无从预测：想按信号显隐只能退回 `visible_when(move || s.get())`
+  绕一圈，而 `enabled(true)` 这种最直觉的写法根本不存在。现在每条轴一律三形态、命名规则相同：
+
+  | 轴 | 静态 | 信号 | 闭包 |
+  |---|---|---|---|
+  | 启用 | `enabled(bool)` | `enabled_signal(Signal<bool>)` | `enabled_when(\|\| ..)` |
+  | 可见 | `visible(bool)` | `visible_signal(Signal<bool>)` | `visible_when(\|\| ..)` |
+
+  三形态可叠加，取与；`disabled(bool)` 保留为 `enabled(!v)` 的取反便捷式（调用点常读作
+  "这个按钮是禁用的"）。`_signal` 后缀沿用本版第一批定下的命名基准。
+  **迁移（硬破坏，无法用 `#[deprecated]` 别名过渡——同名函数不能按参数类型重载）**：
+  `enabled(sig)` → `enabled_signal(sig)`。旧调用点会在编译期报 `E0308`（expected `bool`,
+  found `Signal<bool>`），不会静默改变行为。其余形态与旧代码兼容。
+- **`Element::disabled(true)` 不再泄漏信号槽**：旧实现是 `self.enabled = Some(signal(false))`——
+  信号槽的回收尚未实现，于是每一次**常量**禁用都在全局 arena 里占掉一个永不释放的槽位；
+  在按帧重建子树的场景（表格行、`list_signal`）里这是随时间线性增长的泄漏。改为落在新增的
+  `Node::enabled_static: bool` 上，与可见轴的 `Node::visible` 一一对应，不分配任何东西。
+  `Node` 同时新增 `vis_signal` 字段承载 `visible_signal`；两个新字段对**用字面量构造 `Node`**
+  的下游是 `E0063`（该结构体字段全 `pub` 且非 `#[non_exhaustive]`），正常经 `Element::build`
+  的用法不受影响。
+- **`Element::accordion` 的选中模型改用 `Option`（破坏性）**：`Signal<i32>` 以 `-1` 当"全部收起"
+  的哨兵，`-2`、`-7` 这些值则是未定义区——类型允许、语义没有。它的文档还自称与
+  `Element::tabs` 的 `Signal<usize>` "同构"，而两者类型根本不同。改为 `Signal<Option<usize>>`：
+  `None` = 全收起，`Some(i)` = 展开第 i 个，非法状态直接不可表示。与 `tabs` 的差别也因此说得清了
+  ——标签页恒有一页选中，手风琴可以全收起，正好差一个 `Option`。
+  `ExpandState::Single { sel }`（`pub`）随之改为同样的类型。
+  **迁移（硬破坏，同上，参数类型变化无法用别名过渡）**：`signal(-1)` → `signal(None)`，
+  `signal(0i32)` → `signal(Some(0usize))`；读取处 `sel.get() == 0` → `sel.get() == Some(0)`。
+- **排序状态从裸元组提升为命名类型 `SortKey`**：`(usize, SortOrder)` 这个"哪一列 + 什么方向"的
+  概念在四处公开签名里重复出现却没有名字，谁是列、谁是方向全靠位置约定，读代码时要回签名里数。
+  新增 `pub struct SortKey { pub column: usize, pub order: SortOrder }`（`Copy + Eq + Debug`，
+  已进 prelude），便捷构造 `SortKey::asc(col)` / `SortKey::desc(col)` / `SortKey::new(col, ord)`。
+  `table_sortable` / `table_sortable_server` / `table_selectable` 的 `sort` 参数与
+  `table_sortable_server` 的 `on_sort` 回调参数一并从 `Option<(usize, SortOrder)>` 换成
+  `Option<SortKey>`。
+  **迁移（硬破坏，类型变化）**：`Some((0, SortOrder::Asc))` → `Some(SortKey::asc(0))`；
+  解构处 `Some((col, ord))` → `Some(SortKey { column: col, order: ord })`。
+- **`ListRow` / `TabItem` / `TabBar` 去掉 `with_` 前缀**：`ListRow::with_icon` /
+  `TabItem::with_icon` → `icon_content`，`TabBar::with_style` → `style`。理由同上一条
+  `MenuItem` 的收敛（`with_*` 在 Rust 生态里表示"带某配置构造"而非链式设属性）。
+  两个图标方法没有跟着叫 `icon`：它们收的是 `ImageContent`（图片/SVG/RGBA），而 `MenuItem::icon`
+  收的是 `impl Into<String>`（字形/emoji）——同名不同义比带个旧前缀更容易踩。`_content` 后缀
+  与既有的 `Element::icon_content` 对齐，同一份 API 里"图标给的是图片内容"始终是这个词。
+  `Dropdown::with_items` / `with_items_reactive` **不在此列**：它们是真正的"带配置构造"，用法正确。
+  **迁移**：旧名保留为 `#[deprecated]` 转发别名（计划 0.13 移除）。
+- **回调签名立法：`&mut EventCtx` 一律作第一参数（硬破坏）**：此前同一个库里 ctx 的位置各行
+  其是——`on_reorder(|ctx, from, to|)` 在前，`on_span_click(|id, ctx|)` 在后，用户每碰一个新
+  回调都得翻文档。ctx 是"环境/能力袋"而非数据，位置直觉同 `&mut self`；固定在首位后，读签名时
+  后面的参数才是这个回调真正关心的数据。
+  同名函数无法重载，**没有 deprecated 别名可过渡**，是编译期硬失败（`E0631` 闭包参数类型不符）。
+  **迁移**：`on_span_click(|id, ctx| ..)` → `on_span_click(|ctx, id| ..)`；
+  自定义控件直接持有 `rich::SpanClickFn` 的同步改为 `Box<dyn FnMut(&mut EventCtx, &str)>`。
+- **菜单项动作补上 `&mut EventCtx`（硬破坏）**：`MenuItem::run` 的动作闭包过去是无参 `Fn()`，
+  于是库里存在"这个回调能弹对话框、那个不能"的分层——菜单里想写"导出到文件…"就没有 `ctx`，
+  只能绕道自由函数 `app::defer_blocking`，文档还要专门开一节讲"三个入口"。
+  宿主执行菜单动作时其实握着 `&mut Tree` 与发起菜单的目标节点，缺的只是一条借出 `EventCtx`
+  的通道；新增内部的 `Tree::run_detached(id, f)` 补上，副作用（对话框、toast、关窗、焦点、
+  嵌套菜单）汇总成 `DispatchResult` 走宿主既有的 `apply_dispatch_effects` 消费——与指针/键盘
+  分发同一条路径，日后给 `DispatchResult` 加字段不会独独漏掉菜单这一路。
+  动作仍是 `Fn` 而非 `FnMut`：项会被克隆进浮层的每一级面板、粘滞项还要在原地重建后再执行
+  同一份动作，独占可变借用无处安放；要改状态用 `Signal`（`Copy` + 内部可变，正为此而设）。
+  受影响的签名：`MenuAction::Run(Rc<dyn Fn()>)` → `Run(MenuActionFn)`（即
+  `Rc<dyn Fn(&mut EventCtx)>`）、`MenuItem::run`、`MenuItem::trailing_icon`（及其废弃别名
+  `with_trailing_icon`）、`MenuItem::on_trailing_click` 字段、`DropdownItem::trailing_icon`、
+  `CheckMenuItem::action`、`CheckMenuItem::on_change`（新签名 `Fn(&mut EventCtx, bool)`，
+  ctx 在前、新值在后）。
+  **迁移**：`MenuItem::run("x", || f(), false)` → `MenuItem::run("x", |_ctx| f(), false)`；
+  `CheckMenuItem::on_change(|v| ..)` → `on_change(|_ctx, v| ..)`；其余同理补一个前置参数。
+  需要阻塞式原生调用的地方，把 `auroraui::app::defer_blocking(f)` 换成 `ctx.defer_blocking(f)`。
+- **自由函数 `app::defer_blocking` 标记 `#[deprecated(since = "0.12.0")]`**：它存在的唯一理由
+  是"菜单项动作拿不到 `ctx`"，上一条已经补上，改用 `ctx.defer_blocking(f)`。托盘菜单项另有
+  自己的 `TrayCtx`。`app::take_deferred` 保留不变——已经写下的老代码那条队列仍需被排空。
+  `docs/API_GUIDE.md` §8.6 的"三个入口"随之收敛为两个。
+- **`on_row_activate` 由 `Fn` 放宽为 `FnMut`**：一次性动作回调统一 `FnMut`（用户常需在闭包里
+  改捕获的状态），只有需要留存多份/反复调用的闭包才用 `Fn`。内部类型
+  `OnRowActivate` 相应从 `Rc<dyn Fn(..)>` 改为 `Rc<RefCell<dyn FnMut(..)>>`，与既有的
+  `OnSort` 同款。对下游是**放宽**：原本能传的闭包全都还能传，无需迁移。
+- **`TrayMenuItem::check` 的勾选态改收 `Signal<bool>`（硬破坏）**：这是全库最后一处在公共
+  签名里要 `Rc<Cell<bool>>` 的地方——同一个 `impl` 块里紧挨着的 `TrayMenuItem::enabled`
+  早在 0.4.1 就是 `Signal<bool>` 了，于是同一份托盘菜单里"勾选绑这个、灰显绑那个"要维护
+  两份同义状态，`examples/tray.rs` 也因此成了全库唯一还写 `Rc::new(Cell::new(..))` 的示例。
+  语义完全不变：勾选态仍是**菜单弹出时现读**，回调里自行翻转，框架不代改。
+  线程约束成立：`Signal` 的存储是线程局部的，而 `Signal` 的 `!Send` 使 `Tray` → `App` 一路
+  `!Send`，`App::run` 只能在建 `Tray` 的那个线程消费它并在那里建窗口；Win32 保证窗口消息
+  只由建窗线程派发（`build_menu` / `run_item` 都在 `wnd_proc` 内），macOS 侧 `pop_menu`
+  另有 `MainThreadMarker` 钉在主线程。这条不变量已加编译期护栏（`Tray` 一旦变成 `Send`
+  即编译失败）。
+  **迁移**：`Rc::new(Cell::new(true))` → `signal(true)`，传参去掉 `.clone()`，
+  回调里的 `.get()` / `.set(..)` 写法不变；同一个信号可以直接同时喂给 `check` 和 `enabled`。
+- **`Role` 与 `Intent` 加 `#[non_exhaustive]`（破坏性）**：本版给这两个枚举分别加了五个和
+  两个变体（见上文），而**每加一个都是下游的破坏性变更**——语义色恰恰是最会持续演进的
+  那类枚举，这个代价没有尽头。标注之后再补变体就只是新增。
+  `#[non_exhaustive]` 只约束**下游 crate**，本 crate 内部的 `match` 仍须穷尽（忘了给新角色
+  接上 `Role::resolve` 会当场编译失败，这正是想要的）。`Intent::Custom(Color)` 其实早已让
+  "把所有 intent 一一列举"失去意义（基色是无穷的），标注只是把这一点写进类型。
+  **迁移**：下游对 `Role` / `Intent` 做穷尽 `match` 的代码报 `E0004`（non-exhaustive patterns），
+  补一条 `_ => ..` 兜底分支即可；构造与比较不受影响。
+- **`MenuItem` 加 `#[non_exhaustive]`（破坏性）**：字段全 `pub` 且此前无标注，本版已因它
+  破坏过两次（加 `intent` 字段导致 `E0063`、`on_trailing_click` 换类型）。菜单项的可选修饰
+  只会越来越多，故把字面量构造这条路封住，日后加字段不再波及调用方。
+  一并补上 `MenuItem::trailing_icon_display(icon)`：字段文档里"有尾随图标但 `on_trailing_click`
+  为 `None`（纯展示）"是个受支持的状态，而唯一的设置器 `trailing_icon(icon, on_click)` 必须
+  同时收回调——这个字段组合此前只有字面量写得出来，封住字面量就等于把它变成不可达。
+  自查过全部 14 个字段，其余都已被四个构造器 + 链式设置器覆盖。
+  **迁移**：下游 `MenuItem { .. }` 报 `E0639`（cannot create non-exhaustive struct using
+  struct expression），改用 `MenuItem::run` / `key` / `separator` / `submenu` 四个便捷构造
+  加链式设置器；穷尽解构 `let MenuItem { label, .. } = it` 需补 `..`。**读字段不受影响**。
+- **`DropdownItem` 与 `CheckMenuItem` 一并加 `#[non_exhaustive]`（破坏性）**：它们与
+  `MenuItem` 常出现在同一份菜单代码里，只封住其中一个反而是新的记忆负担——用户得记住
+  "这个能写字面量、那个不能"。菜单项类型都会随需求长新字段和新变体，一次封齐。
+  `CheckMenuItem` 是枚举，故枚举本身与 `Check` / `Action` 两个变体都标了（前者禁止下游
+  穷尽 `match`，后者禁止变体的字面量构造）。
+  自查过字段覆盖：`DropdownItem` 的四个字段都有设置器（`trailing_icon` 的回调不是
+  `Option`，不存在 `MenuItem` 那种"纯展示"缺口）；`CheckMenuItem` 的
+  `check` / `action` / `separator` 三个构造器加 `on_change` / `enabled` 两个设置器覆盖全部字段。
+  **迁移**：改用构造器 + 链式设置器；对 `CheckMenuItem` 的穷尽 `match` 需补 `_ =>` 分支。
+- **`Element::icon(path)` 改名 `icon_file(path)`**：同一个 `Element` 上并列着
+  `icon(文件路径)` / `icon_bytes` / `icon_rgba` / `icon_svg` / `icon_content`，最短的名字
+  给了**唯一会碰文件系统、唯一可能失败**的那个形态（路径写错即无图标），最容易被当成
+  "通用图标入口"误用。改名后 `icon` 这个词在本库里只表示"图标这个概念"，不特指某种来源。
+  **迁移**：旧名保留为 `#[deprecated]` 转发别名（计划 0.13 移除），改叫 `icon_file` 即可，
+  签名与行为不变。注意与 `MenuItem::icon` / `DropdownItem::icon` 无关，那两个收的是字形。
+- **`MenuTheme::shadow()` / `ToastTheme::shadow()` 改返回 `style::Shadow`（硬破坏）**：
+  它们原返回 `(f32, f32, Color)` 三元组，而同名的 `ReorderTheme::shadow()` 早就返回
+  `Shadow`——同名不同型，调用方拿到哪个全凭记忆，解构位置写反了还是编译得过（两个都是
+  `f32`）。统一到 `Shadow` 而非反过来，是因为它同时是节点样式 `style.shadow` 的类型：
+  浮层投影与普通节点投影从此可以互相搬。`dx` / `spread` 在这两个浮层上恒为 0
+  （菜单/toast 只需"正下方托一层"），保留分量是为了共用同一个结构。
+  **迁移**：`let (dy, blur, col) = th.menu.shadow();` → `let sh = th.menu.shadow();`，
+  取 `sh.dy` / `sh.blur` / `sh.color`。`MenuTheme` / `ToastTheme` 的三个 `shadow_*` 字段
+  与 TOML 键不变。
+- **App 级回调收 `&mut EventCtx`（破坏性）**：`App::on_close_request`、`App::channel` 的
+  `on_message`、`App::on_interval` 的回调三者都多一个 `ctx` 参数。
+  `EventCtx` 是控件通往宿主能力的唯一通道（toast、对话框、剪贴板、焦点、窗口显隐、
+  `tree_mut` 改控件树），而这三个回调恰恰处在最需要它的时机上——后台任务完成要弹一条轻提示、
+  定时器到点要关窗、关闭请求要拦下来问一句"确认退出吗"。此前它们只能写信号，而 toast 是
+  **宿主浮层**、关窗与对话框是**宿主能力**，都没有信号可绑：这些场景不是难写，是**表达不出来**，
+  于是只能绕道已废弃的自由函数 `app::defer_blocking`，或干脆放弃。
+  ctx 的 `self_id` 取**根节点**（这些回调不属于任何控件），后果写进了各自的 rustdoc：
+  `ctx.bounds()` 是整个客户区、`mark_dirty()` 相当于整窗失效、`capture()` 无效
+  （没有指针事件可捕获，请求被丢弃）。
+  `on_close_request` **保留 `-> bool`**：它的返回值被平台在 `WM_CLOSE` /
+  `windowShouldClose:` 里同步等待，改成任何"异步决定"的形状都骗不过这个约束。
+  弹确认框的正确流程是「返回 `false` 挡下这一次 + 另起一条路把确认送回来」，两种写法
+  （应用内 `Element::dialog`，或 `ctx.defer_blocking` + `App::channel` 回程）都带可运行示例
+  写进了 `on_close_request` 的 rustdoc 与 `docs/API_GUIDE.md` §8.7。
+  配套修好了副作用的交付时机：`on_message` / `on_interval` 的回调产生在**帧内**，而窗口操作、
+  对话框请求、关窗意图此前只在指针/键盘路径被消费，于是"后台任务完成后 `ctx.request_close()`"
+  要拖到用户下一次点鼠标才生效；win32 的帧路径（`WM_PAINT`）与 `WM_CLOSE` 取消分支现在也消费
+  这几条意图。macOS 侧对应的消费点尚未补齐（toast、改树、焦点等不经平台的效果两端一致）。
+  **迁移**：闭包各加一个参数即可，不用 ctx 就写 `|_ctx, msg|` / `|_ctx|`；行为不变。
+  `App::single_instance` 的回调**刻意不动**（仍是 `FnMut(Vec<String>)`）：它不由主窗口驱动
+  （Windows 上跑在独立 message-only 窗口的 `wndproc` 里、可能在任意嵌套消息泵中到达），
+  够不着宿主状态；需要 ctx 的话在应用侧用 `App::channel` 转一道即可，rustdoc 给了写法与代价。
+
+### Fixed
+- **GPU 路径下非正方形矩形上的斜向线性渐变，轴角度不对**：线性画刷原先一律在单位空间
+  `[0,1]²` 构造、再用 `SetTransform(diag(w,h))` 映射到目标矩形（好处是与位置/尺寸无关，
+  一条缓存跨所有控件复用）。但非等比缩放**不保持垂直关系**：单位空间里轴 `(1,1)` 的等色线
+  方向是 `(-1,1)`，被缩放后成了 `(-w,h)`，而正确的等色线应垂直于变换后的轴 `(w,h)`、
+  即 `(-h,w)`——两者只在 `w == h` 时相等。
+  于是 100×70 的矩形上画 `(0,0)→(1,1)` 的渐变，GPU 的轴角是 45° 而非正确的 35°：右上角与
+  左下角都取到 t=0.5，软路径则分别是 0.671 / 0.329，最大通道差 43。
+  修法只对**斜轴**渐变改用绝对坐标构造（缓存键随之带上绝对端点）；轴平行于坐标轴的渐变
+  等色线也平行于另一条坐标轴，非等比缩放不改变正交关系，仍走原来的位置无关复用——绝大多数
+  UI 渐变是水平或垂直的，那条性能路径零回归。修复后最大通道差降到 1。
+- **鼠标在两个文本框之间点击后，旧框的光标竖条残留**：焦点转移时旧焦点收不到本次事件，
+  脏区里只有被点中的那个控件，于是局部重绘只画了新框——新框的光标出现，旧框的光标仍留在
+  后备缓冲里，要等下一次全窗刷新（改窗口大小、切主题等）才消失。
+  三条焦点路径里只有这一条漏了：Tab 切换与点击空白清焦点都已置 `needs_full`，唯独"鼠标点到
+  另一个可聚焦控件"没有。在 macOS 上实测发现，但成因与平台无关，Windows 同样复现。
+  修法取整窗而非把旧节点矩形并进脏区：焦点环画在节点框外 1px，而此刻旧节点的 `focused` 已
+  置 false，按它的脏区走会残留一圈——与点击空白清焦点那条分支同理。焦点转移是人手点击的
+  频率，一帧整窗换取正确性划算。
+- **GPU（Direct2D）路径下 `opacity` 子树里的文字整段消失**：ClearType 是子像素渲染，需要字形
+  背后的真实底色才能做三通道混合；`PushLayer` 开的却是一张透明离屏层，层内无底色可依。D2D
+  对此的应对不是降级成灰度，而是**整段文字不画**，且 `EndDraw` 不报错——于是软路径 551 个墨
+  像素的一段字，GPU 路径上是 0 个，静默消失。
+  改为按层深度推导抗锯齿模式：层内恒 GRAYSCALE、层外恒 ClearType。之所以不在 `draw_text` 里
+  临时切换再恢复，是因为"恢复"只能写死成 ClearType 而非"进入前的模式"——半透明文字画在
+  `opacity` 子树内部时（层套层），这个动作会把外层仍需的 GRAYSCALE 打回去，此后该层内所有
+  文字一并消失。由状态推导就不存在"该恢复成什么"。
+- **GPU 路径下半透明文字比软路径淡一半**：`ENABLE_COLOR_FONT` 路径（彩色 emoji）绕过 brush
+  alpha，故 alpha 由合成层承载；但普通文字的 brush alpha 是**生效**的，两处各乘一次即双重
+  削弱。实测半透明黑字峰值墨度 192，软路径 384，正好一半。toast 淡入淡出走的正是这条路
+  （`scale_alpha` 把 alpha 乘进文字颜色），淡出时文字比应有的更淡。
+  改为 alpha 全部交给合成层、brush 只管颜色——这是对彩色字形与普通字形都成立的唯一做法。
+  彩色 emoji 的半透明行为保持不变，并补了回归测试锁定。
+- **macOS 上装不下的多行文字整体居中溢出，与 Windows 不一致**：同一张表格，Windows 顶对齐、
+  超出部分截断，macOS 却上下各露半行。三条绘制路径的纵向定位公式本该同源，Core Text 一侧
+  少了 `.max(0)`——容器装不下时差值为负，文本便以容器中心为中心向上下对称溢出。
+  根因不止于那一个缺失的钳制：`TextEngine::draw` 的契约当时只写「垂直居中」，**没规定装不下
+  怎么办**。DirectWrite 实现的是「居中，但装不下顶对齐」，Core Text 实现的是字面意义的
+  「居中」，两边都没违反文档。歧义本身就是缺陷，所以这次把契约写进 trait 文档并给出参考实现
+  `block_offset_y`，d2d 的 `draw_text` 改为直接调用它，软硬两路不再各写各的。
+  配套的 `text_block_contract` 是一组**跨引擎**测试：Windows 跑 DirectWrite、macOS 跑
+  Core Text，同一份断言。判据取墨量而非逐像素比对——抗锯齿让边缘取值随引擎浮动，逐像素会把
+  两个都正确的实现判成不一致，而「这片区域有没有字」是稳定的。`coretext.rs` 此前测试数为零。
+- **软后端投影外缘的直角硬边**：阴影 pixmap 的模糊余量按 `2×半径` 留，而 3 趟 box-blur 每趟
+  各扩散一个半径、总计 `3×`——尾部在 pixmap 边界被硬截断。边界处窗口收窄后按实际样本数重新
+  归一，丢掉的又都是外侧接近 0 的样本，均值被抬高，于是截断处不是自然衰减到 0，而是留下一圈
+  被放大的亮边。远程桌面强制走软后端（flip-model swapchain 在 RDP 不可用），有损压缩再把这道
+  边糊成块。改留 `3×`，并加回归测试：沿射线向外扫，最后一个可见暗度必须已近乎归零。
+- **D2D 后端投影在高 DPI 下被重采样**：阴影原按逻辑像素烘焙，再由 `SetTransform(scale)` 连同
+  `DrawBitmap` 的 LINEAR 插值一起放大，125%/150% 下等于把一张低分辨率软阴影拉大——阴影是纯
+  渐变，最经不起重采样。改为全程按物理像素烘焙、目标矩形换算回逻辑坐标，尺寸 1:1。
+- **子菜单刷新后孤立分隔线复现、孙级菜单被静默关闭**：分隔线规范化最初只覆盖刷新路径的根层，
+  而 `submenu` 字段存的始终是原始列表，故子级仍拿到未规范化的项；且 `spawn` 记的是规范化后的
+  下标，按同一下标去原始列表取会错位——取到分隔线（`submenu` 为空）即走截断分支，把已展开的
+  孙级菜单无声关掉。改为取子级时就地规范化。
+- **重建子树时构建期信号永久累积**。三处会按数据变化整批重建子树的宿主——`list_signal` /
+  `host_signal` 的 `DynList`、`reorder_list_signal` 的行源、可排序表格的表头与三类正文——
+  都是"删掉旧子节点、按新数据重建"，但**只删节点不回收信号**：行构建期创建的每个信号
+  （调用方在 `row_fn` 里现造的、或 `accordion_multi` 逐面板分配的）每重建一轮就多留一批。
+  模块注释原本以"静态树可接受"为前提，而放宽后的动态文案 API（文案参数可收
+  `Signal<String>`）让"在 `row_fn` 里造信号"变成了自然写法，这个前提已不成立。
+  现在这三处各持有一个 `SignalScope`，回收与节点删除写在同一处（表格是 `clear_children`
+  同时做两件事），节点与其构建期信号同生共死。回归测试反复重建 20 轮后断言活跃槽位数与
+  arena 容量均不增长（改前是 73 vs 13）。
+  `list_signal` / `host_signal` 的**首批**行也纳入作用域并交给 widget，否则首轮永久漏一代。
+- **`Element::dropdown` / `with_items` 为静态选项表长期占用运行时槽位**：`Vec<String>` 被
+  包进一个 `signal()` 只为凑出统一的读取路径，而这个信号既没有 owner 也没人回收。改为
+  `Options::Static | Bound` 二选一（与 `TextContent` 同一套心智：动态性是**字段的类型**，
+  不是控件的类型），静态表直接按值存，读取路径仍只有一条。响应式入口
+  （`dropdown_signal` / `with_items_reactive`）行为不变。
+- **图片占位框不跟随主题**：图片加载失败（或调用方本就没图）时画的占位框，底色与边框是
+  模块级硬编码的淡灰 `#EEE`/`#CCC`——暗色主题下就是深色卡片中间一块近白方块。改走
+  `Role::SurfaceAlt` + `Role::Border`，与卡片、表头这些"空态容器"同源，运行期换主题跟着变。
+  取中性的表面角色而非 `Role::Danger`：占位分支的条件只是"没有可绘制的图层"，它同样覆盖
+  "图还没来"，报成错误是过度解读。
+- **菜单面板顶/底各 6px 的边带滚动后可点却看不见**：条目绘制裁剪到面板内缩
+  `MENU_VPAD` 后的矩形，命中判据却看整个面板矩形。`scroll == 0` 时首项恰好从裁剪线起画，
+  边带里没有行，问题不显；一旦滚动，挪进边带的行被裁掉不可见，却仍然可点——用户点到的是
+  一个屏幕上不存在的项。现在绘制裁剪与命中判据（含尾随可点击图标）都取自同一个
+  `MenuLevel::item_clip()`。落在边带上的点击照旧被菜单吞掉（不会误关菜单），只是不再命中项。
+- **`Element::widget()` 会静默替换已有控件**：它的定位是给 `leaf` / 空容器挂自定义控件，
+  但任何 `Element` 都能被它整个换掉——`Element::button("确定").widget(MyThing)` 会把按钮
+  丢掉，不报错也没有任何迹象。现在 debug 下 `debug_assert` + `#[track_caller]` 当场指出误用
+  （与相邻的 `clickable()` 一致）。库内组合构造器给自己刚建的节点挂控件走不受守卫的内部
+  入口，故 `table_*` / `list_signal` / `scroll` 等构造不受影响；但它们返回的节点从此也被
+  守卫覆盖——`Element::scroll().widget(..)` 会报错而不是悄悄毁掉滚动。
+- **`examples/theming.rs` 与 `examples/tray.rs` 接不上截屏回归**：另外 27 个 example 都链了
+  `App::screenshot_from_args()`，这两个漏了，于是统一的 `--screenshot` 命令对它们无效——
+  偏偏 `theming.rs` 演示的正是主题与边框单位，最需要看图对比。已补上。
+- **macOS：切走应用会让拖动态与输入法合成态永久悬挂**（以下三条均**未在 macOS 真机验证**，
+  开发机为 Windows，只保证 `cargo check --target aarch64-apple-darwin` 通过）。
+  `AppHandler::on_capture_lost` 在 macOS 后端从未被调用：Cocoa 有隐式捕获（`mouseDown:`
+  之后的 `mouseDragged:`/`mouseUp:` 自动续派发给同一 view），所以确实不需要 win32 那样的
+  `SetCapture`——但"按住不放时应用被切走、抬起事件从此不再送达"这件事一样会发生，
+  reorder 列表、滑块会永远卡在拖动态。现在 `windowDidResignKey:` 通知上层收尾，门控条件
+  （仅在上层自认持有捕获时才通知）与 win32 的 `WM_CAPTURECHANGED` 一致。
+- **macOS：合成中途切走应用后文本框光标再也不闪**。控件在输入法组合态期间不画自绘光标，
+  而 macOS 侧只有 `setMarkedText:`/`unmarkText`/`insertText:` 三条路会清合成态，切走应用
+  时一条都不走（win32 有 `WM_IME_ENDCOMPOSITION` 兜底）。现在同一个 `windowDidResignKey:`
+  里清合成态并 `discardMarkedText`。
+- **macOS：触控板慢速滚动整格丢失**。滚轮增量 `as i32` 直接截断，而触控板的精确增量单次
+  常不足 1 个框架单位，于是轻推毫无反应、动量尾段也提前断掉。改为累积亚像素残差后再取整
+  （同 `app/fling.rs` 的 `pan_residual`），新手势起手时清残差。同时把"macOS 的惯性滚动
+  由系统提供、`start_fling`/`cancel_fling` 刻意不实现"这条决策写进了 `AppHandler` 的
+  trait 文档与后端注释——它此前看着像漏实现，很容易被后人照 win32 又移植一遍自研惯性，
+  叠加成双倍速度。
+
+## [0.11.1] - 2026-08-11
+
+### Fixed
+- **`--no-default-features` 下编译失败**：`SvgSource` 及其 `impl` 没有随 `svg` feature 门控，
+  而 `resolve` 内调用的 `Image::from_svg_bytes` 有门控——关掉 `svg` 就是 E0599「找不到
+  `from_svg_bytes`」，且报错指向本 crate 内部，使用方无从下手。同一组合下 `SM_REMOTESESSION`
+  的未使用导入（只在 `d2d` 下用到）一并门控。
+  漏到发布版是因为 CI 只跑默认 feature：本仓的 example 全部跑在默认 feature 上，而唯一使用
+  `default-features = false` 的消费者在另一个仓里，本仓看不见。已在 CI 补 `--no-default-features`
+  的 clippy 门禁防回归。
+
+### Changed
+- **`fullshowcase` / `image` 两个 example 声明 `required-features = ["svg"]`**：它们用到
+  `icon_svg` / `image_svg`，关掉 `svg` 时应被跳过而非编译失败。其余 example 仍自动发现。
+
+## [0.11.0] - 2026-08-11
+
+本版本补齐键盘可达性：浮层菜单弹不出也动不了、模态对话框圈不住焦点、Tab 会跑到视口外、
+窗口按钮按空格没反应——这些键盘死角逐一修掉。另新增下拉式复选菜单，以及 SVG 按实际 DPI
+现场光栅化（各缩放档位下描边 1:1 落像素）。
+
+### Added
+- **`CheckMenu` 下拉式复选菜单**（`Element::check_menu`）：外观同 `Dropdown`（当前项即入口），
+  面板是菜单，项支持开关 / 动作 / 分隔线混排。默认点击即关（与右键菜单、单选下拉一致），
+  `.stay_open()` 显式开启粘滞——留给「一次连改多个」的场景，如一组显示过滤。粘滞是整菜单
+  开关不做逐项差异，同一面板里有的关有的不关，用户无法预期下一次点击会发生什么；动作项则
+  无论如何都关闭。配套 `CheckMenuItem::on_change`（收到的是已生效的新值，与 `CheckBox` 的
+  `on_toggle`「取代默认翻转」不同义，故不同名）。
+- **`MenuItem::stay_open`**：菜单项点击执行后不关闭浮层，仅对 `MenuAction::Run` 有效
+  （`SendKey` 是「把按键交给控件、菜单退场」的语义，与粘滞矛盾）。配套 `MenuRequest::rebuild`
+  在粘滞项点击后原地刷新勾选态：沿 spawn 路径逐级换项并保留每级的 rect/scroll，不重跑
+  `build_level`——后者会重新测量宽度、重做边界翻转，面板整个跳位置，而用户此刻正把指针停在
+  上面准备点下一项。
+- **浮层菜单完整键盘操作**：↑↓ 移动选项（跳过分隔线与禁用项、到头循环、自动滚进可视区）、
+  Home/End 首末项、→← 进出子菜单、回车/空格执行、Tab 收起浮层。首次 ↑↓ 落在 checked 项而
+  不是跳走一格——菜单刚弹出时没有高亮，直接跳下一项会让人不知道原来选中的是哪个。
+- **对话框把键盘焦点圈在框内**：新增 `Widget::is_modal()`，`focusable_order` 改从最上层可见
+  模态子树收集——此前遮罩后面那些鼠标点不到的控件，Tab 仍能停上去、空格仍能按下去。层级取
+  「前序遍历中最后出现」而非「最深」，与 `hit_test` 的语义一致。另补焦点移交（同
+  `<dialog>.showModal()`）：弹出落到框内首个可聚焦控件，关闭还给来处；嵌套 A→B 切换不覆盖
+  来处，A 也关掉时才还给最初那个。
+- **`Tree::scroll_into_view(id)`**：沿祖先链由内向外逐级对齐，每级只依赖当前帧的几何——内层
+  滚完后目标项已落在内层视口内，外层只需把内层容器整个滚进来。
+
+### Changed
+- **SVG 按 DPI 现场光栅化**：`ImageContent` 改为保留矢量源，paint 期按 dst 的实际物理尺寸
+  光栅化并按该尺寸缓存（着色结果一并入缓存）。写死光栅宽只在恰好等于该倍率的 DPI 下才是
+  1:1，其余档位都要经一次双线性重采样，细描边被摊成两行灰边。`from_svg_bytes(_, None)` 即
+  启用 DPI 感知，`Some(w)` 保持写死光栅宽的旧语义；`Element::image_svg` 一并改走 content
+  路径（原先绕过 `ImageContent` 直接构造 `Image`，DPI 感知对它不生效）。
+- **两个后端的 `draw_image` 补像素吸附**：物理尺寸与源图相差不足 1 像素时吸附为 1:1，落点
+  取整到整数物理像素。d2d 尤其必要——该路径全程逻辑坐标，逻辑整数在 125%/150% 下会落到半
+  物理像素上，LINEAR 插值照样把图标糊掉。
+- **分发副作用收口为 `apply_dispatch_effects`**：`DispatchResult` 的十个副作用字段原先由指针
+  与键盘两条路径各自手写消费，加字段时两边都不报错、漏接也没有任何征兆。改用无 `..` 兜底的
+  解构，字段一增即 `E0027`，逼作者当场决定它归谁管——产出不是少了几行重复，而是把一类静默
+  失败换成了编译错误。
+
+### Fixed
+- **下拉框按空格没反应**：宿主键盘路径消费了 `DispatchResult` 的 close / open_url / window_op
+  / dialog / toast，唯独漏了 `menu` 与 `focus`，而指针路径两个都接。控件侧一直正确发出展开
+  请求，是宿主收进结果后静默丢弃了。漏 `focus` 的后果更隐蔽：键盘路径上任何控件调
+  `request_focus` 都无效。
+- **点击控件外的空白不清焦点**：焦点归属此前完全由控件申报，点空白时没人上报、旧焦点原样
+  留着，于是「取消高亮」只能作为「另一个控件接手」的副作用发生。改为宿主在每次 Down 上重新
+  裁决（与 `activeElement` 的模型一致），判据取「命中节点是否落在焦点子树内」而非「本次有没有
+  控件 `request_focus`」——后者会误清「点在焦点控件自己的内部子节点上」与「按下被上层可点击
+  容器先消费」两种情况。
+- **窗口按钮不支持空格/回车激活**：`WindowButton::focusable()` 返回 true 本是为了让标题栏拖动
+  判定在按钮上让路，副作用是它一并进了 Tab 焦点环，而 `on_event` 只有 Pointer 分支——Tab 能停
+  上去、按空格没反应，成了键盘死角。
+- **焦点环只跟随键盘**：对话框的焦点移交此前无条件打开焦点环，纯鼠标用户会看到凭空冒出来的
+  框。`:focus-visible` 的判据从来不是「这次聚焦是不是程序性的」，而是用户最近一次交互用的什么
+  设备，故改为沿用当前状态——焦点本身照旧移进对话框，只是不画。
+- **Tab 焦点跑到视口外**：滚出视口的节点只是被 `clip_children` 在绘制时裁掉、逻辑上仍可见，
+  照样进焦点环，于是 Tab 几下焦点就到了看不见的地方，长列表里按空格会激活一个屏幕上根本没有
+  的控件。改为 scroll-into-view 而非把视口外节点踢出焦点环——后者会让长列表下半截键盘不可达。
+- **关闭浮层后的面板残影**：菜单画在控件树之上、不属于任何节点，而 render 的 overlay 判定问的
+  是「本帧有没有浮层」——关闭帧已经没有了，此时若恰好存在一小块脏区就会走局部重绘，面板像素
+  留在屏上直到下一次整窗重绘。四处关闭点（点面板外 / 尾随图标 / 命中叶子项 / Escape）收口为
+  `close_menu` 统一升整窗。
+
+## [0.10.0] - 2026-08-01
+
+本版本集中修无边框窗口下的交互缺陷——滚动条被窗口缩放边框压住、弹出对话框后整窗拖不动，
+另有文本控件选区与插入光标的渲染增强，以及非整数 DPI 下末字误换行的修复。
+
+### Added
+- **`Widget::tooltip()` 动态悬停提示**：控件可按当前指针位置自报提示文本，优先于节点上
+  `.tooltip(..)` 设的静态文本，返回 `None` 则回退到静态文本（没有则不弹）。
+  给自绘图表类控件用——整张图是一个节点，提示内容取决于指针落在哪个数据点上
+  （日历热力图的哪一格、柱状图的哪一根），静态文本表达不了。控件在 `on_event` 里记下
+  命中项、在 `tooltip()` 里据此返回文案即可，浮层的延时/跟随/边缘翻转仍由宿主统一处理。
+  默认实现返回 `None`，既有控件不受影响。
+- **`Element::max_height(px)` 限高**：只收窄节点占位，不削减滚动容器的 `content_h`
+  ——限高的滚动区仍可滚到全部内容。
+- **`Rect::scaled_out(scale)`**：左/上 `floor`、右/下 `ceil` 的物理化，契约为物理宽高不
+  小于 `size × scale`、空矩形恒为空。`scaled()` 保持 `round` 语义，裁剪 mask 与相邻矩形
+  仍无缝不重叠。
+
+### Changed
+- **插入光标改反色渲染**：光标条铺好后裁到光标矩形、用输入框底色把本行文字重画一遍，
+  落在光标宽度内的字形笔画因此翻成底色（等同经典 XOR 插入符的观感）。光标与文字同色时
+  压在笔画上会粘连、看不出落点，反色后不再沉进文字里。不走 difference 混合是因为 D2D
+  后端的 `SetPrimitiveBlend` 只有 SourceOver/Copy/Min/Add，真反相需改走 `ID2D1Effect`
+  离屏合成或每帧 GPU 读回。
+
+### Fixed
+- **无边框窗口弹出对话框后整窗拖不动**：模态遮罩全窗覆盖且自带背景，命中测试停在遮罩上，
+  自绘标题栏因此拿不到 `HTCAPTION`。拖动区判定改走穿透遮罩的命中（新增
+  `Widget::scrim_passthrough`，仅 `ModalScrim` 覆写），遮罩内的面板仍会在子遍历里先落定
+  ——被面板压住的标题栏区域照旧不可拖。事件分发与交互控件判定不受影响：遮罩照常吞指针
+  事件、照常屏蔽标题栏上的窗口按钮，模态语义不变。
+- **选区高亮改按行盒全高铺底**：`TextInput` 原先上下各内缩 2px、`RichText` 按碎片自身高
+  铺底，`p`/`{` 等下伸部露在高亮外，多行选中还在行与行之间留白缝。现在纵向一律取行盒
+  ——混排字号同行顶底齐平、相邻行首尾相接。
+- **滚动条避开窗口缩放边框**：无边框窗口把客户区右缘 8 逻辑 px 判为 `HTRIGHT`，贴边的
+  滚动条整条压在缩放边框底下，看得见点不着。贴窗口右缘的滚动容器整体内缩 8px 与边框相接
+  （不贴边的容器如对话框内滚动区保持原有紧凑外观），命中区由 10px 加宽至 16px 且两侧有界；
+  滑块配色改取主题角色——原先写死的黑色半透明在深色主题下会连滑块一起隐没，轨道底衬默认不画。
+- **非整数 DPI 下文字末字误换行**（125%/175%/225% 等档位）：`Rect::scaled()` 四条边各自
+  `round`，取整方向不一致时物理宽会比 `w × scale` 略窄，据此反向换算出的排版宽度装不下原
+  文本，DirectWrite/CoreText 便把本应单行的最后一个字挤到下一行。排版最大宽度改用
+  `scaled_out()`，与 measure 的 `max_width × scale` 同源；定位仍走 `scaled()`。（#6）
+
+## [0.9.0] - 2026-07-23
+
+本版本新增 RichText 富文本控件与全局热键管线，并把文字属性收进 `TextStyle`——后者改动了
+`TextEngine` / `Canvas` 两个 trait 的签名，自定义渲染后端需要跟随调整（见 Changed 的破坏性条目）。
+
+### Added
+- **`RichText` 富文本控件**（`Element::rich` / `rich_rc`）：段落 + 碎片（span）模型，配套能力如下。
+  - **排版**：CJK 避头尾（闭合标点不落行首、开括类不孤悬行尾）、`Para::hanging` 悬挂缩进
+    （编号义项续行对齐释义首字）、`Para::spacing_before` 按段覆盖段距。
+  - **span 点击**：`Para::span_id` / `styled_id` 标注纯数据 id，回调经 `Element::on_span_click`
+    挂在控件层——`RichDoc` 保持 `Clone` / 可比较 / 可缓存。悬停手型 + 同 id 跨行碎片一起提亮。
+  - **划选复制**：碎片级选区（CJK 逐字、Latin 整词吸附、chip 整体）、选区高亮、`Ctrl+C` 复制选区、
+    `Ctrl+Shift+C` 强制全文、`Ctrl+A` 全选，右键菜单按选区态给「复制 / 复制全部 / 全选」。
+    跨块补换行、块内软换行按 CJK/Latin 边界补空格。
+  - **双击选词 / 三击选段**：双击对 CJK 吞并同块内连续汉字碎片（至标点/空白/chip 边界止），
+    三击选中命中碎片所在段落全部碎片（含软换行续行、不跨段），对齐浏览器习惯。
+  - **折叠 Section**：可 `Tab` 聚焦，`↑↓` 在折叠头间移动、`Enter`/`Space` 翻转；展开/收起为
+    卷帘高度动画（收拢中按目标状态完整排版，对外只占补间高度）。
+  - **行数截断**：`Para::clamp(max_lines, expanded)` 未展开只排 N 行，行尾缀可点击的「… 展开」标记
+    （不计入复制文本）。
+  - **动态文档**：`Element::rich_rc(Signal<RichDoc>)` 整篇换文档，同步失效布局缓存与选区、复位悬停
+    与键盘焦点下标。
+  - `RichDoc::plain_text`（含 chip 与折叠区文字）与内建右键「复制全部」菜单，`Element::copy_menu(false)` 可关闭。
+- **全局热键**：`App::hotkey` 注册全局热键、`App::start_hidden` 启动不显示窗口、
+  `EventCtx::show_window` / `hide_window`，`WindowOp` 增 `Show` / `Hide`。回调只拿意图不拿句柄
+  （`HotkeyCtx` 仅持 `Option<WindowOp>`），窗口操作在平台层释放借用后执行。注册失败不阻止启动。
+  Windows 走 `RegisterHotKey` + `WM_HOTKEY`；macOS 待补。
+- **热键运行期改绑**：`App::hotkey_rc` 返回 `HotkeyHandle`，`rebind(hotkey)` / `set_enabled(bool)`
+  运行期即时生效（此前仅启动期一次性注册，改热键须重启）。改绑失败回滚重注册旧组合，
+  `set_enabled(false)` 注销把组合归还系统。
+- **主题运行期动态更新**：`ThemeHandle::update(|t| ...)` 局部改主题（换强调色/调字号一行完成，
+  下一帧全树跟随）；新增 `Brush::RoleAlpha(Role, alpha)`、`Element::bg_role_alpha` 与
+  `Role::InputBg` / `InputBorder`，把构建期取色改为角色延迟解析——徽章/chip/标签输入/对话框面板/
+  表格编辑格换主题后自动跟随，不再停在旧主题色。
+- **关闭即隐藏**：`App::hide_on_close()` 把 `ESC` 与标题栏关闭按钮转为隐藏窗口，退出留给托盘菜单
+  （常驻托盘类应用的常见期望）。拦截器优先级高于它——`close_handler` 返回 `false` 时窗口既不关也不隐。
+- **文字排版三项**：`Element::line_height(倍数)`（取倍数使行距随字号与 DPI 缩放）、
+  `Element::max_width(px)`（测量前收窄可用宽，内容据此换行而非事后裁切）、
+  `Element::border_edges(Edges)` 单边边框（页签下划线、分区底线不必再用 1px 色块拼）。
+- **字体族**：`Element::font_family(name)` 指定字体族名（Windows/macOS 均生效）。字体未安装时静默回退系统默认，不报错也不 panic。
+- **节点级焦点覆盖**：`Element::focusable(bool)` 控制 `Tab` 遍历是否纳入该节点（不改命中/拖动/`request_focus` 语义）。
+- **胶囊式标签条**：`TabStyle::Pill` 与 `Element::tabs_pill`——accent 实底胶囊 + 白字滑动。
+- **下拉项富信息**：`MenuItem` 新增 `subtitle` / `badge` / `trailing_icon`，展开态支持两行项与徽章胶囊，
+  尾随图标点击独立于主项 action；收起态同步显示选中项徽章。新增 `DropdownItem` 与
+  `Element::dropdown_items`，纯文本 `Vec<String>` 旧用法零改动。
+- **表格整行双击激活**：`Element::on_row_activate`（释放 `Up` 时触发）。
+- **无边框窗口圆角**：`frameless()` 窗口在 Win11 上显式声明 `DWMWA_WINDOW_CORNER_PREFERENCE`，与系统其余窗口一致；Win10 上 DWM 不识别该属性、返回错误码并被忽略，无需版本判断。macOS 由 AppKit 天然保持圆角。
+
+### Changed
+- **（破坏性）文字属性收进 `TextStyle`**：`TextEngine::measure` / `line_metrics` 与
+  `Canvas::measure_text` / `draw_text` 改为接收 `&TextStyle`，字族/字号/字重/行高一并传递；
+  原先的线程局部字重注入（`text::set_weight` / `current_weight`）随之删除——那让字重成了隐式全局
+  状态，漏复位就会让后续无关文字跟着变粗。自定义 `TextEngine` / `Canvas` 实现需按新签名调整；
+  控件调用方改为 `&TextStyle::of(style)`，比原先的散开参数更短。
+- **（破坏性）`TrayCtx` 改意图队列**：不再持有 `hwnd`/`uid`，四个方法只累积 `TrayAction`，由平台层在
+  释放借用后执行；macOS `TrayCtx` 同步改 `&mut self`，使两平台签名一致。
+- **标签条重做为下划线式**：`TabButton` 逐节点 → 单个自绘 `TabBar`，选中项为整格宽指示条 + 贯穿基线，
+  切换时横向滑动；去掉选中焦点框与悬停淡底，选中态加粗且按选中字重恒定测量以免布局抖动。
+  整条为一个焦点节点、内部 `Left`/`Right` 移动，符合 tablist roving tabindex 约定。
+- **chip 前景对比度**：默认前景按 WCAG AA 自适应——从 accent 向正文色插值直到对实际底色 ≥4.5:1
+  （「同色淡底 + 同色前景」实测仅约 3:1）。
+- **事件路径时间源**：新增 `EventCtx::now_ms` 作为事件回调中的推荐时间源。
+
+### Fixed
+- **托盘回调重入 UB**：`WM_TRAYICON` 在持有 `&mut WindowState` 期间跑用户回调，而回调经 `TrayCtx`
+  直接调 `ShowWindow`/`DestroyWindow`、右键还调模态的 `TrackPopupMenu`，重入 `wnd_proc` 后再取一次
+  `&mut WindowState` 即别名 UB；其中 `quit()` 的 `DestroyWindow` 会同步 drop 掉正在执行的闭包本身，
+  属 use-after-free。改为意图队列后消除。顺带修正点托盘图标唤不起最小化窗口（`SW_SHOW` → `WindowOp::Show`）。
+- **帧时钟在事件路径冻结**：`clock_ms()` 此前只在 render 前刷新，空闲不出帧期间停在上一帧，
+  两次交互之间的静默期被整段计入时长判定（长按、双击、拖动速度均受影响）。`on_pointer`/`on_key`
+  入口也同步帧时钟。
+- **步进器点击即进快速加**：长按起点改由按下后首帧 paint 用刚刷新的帧时钟锚定，不再在事件路径读冻结时钟。
+- **清屏色不随主题热切换**：未经 `App::bg` 显式固定时，`UiHost` 每帧跟随 `palette.bg`——修「切暗色主题后
+  清屏/局部重绘仍是亮色底」。`theme()` 不再覆盖显式 `bg`（`.bg(c).theme(t)` 与反序同义）。
+- **下拉徽章灰字灰底**：Neutral 意图徽章前景改用 `text_muted`。
+- **最小化/最大化动画期左上角内容被拉伸**：flip-model 交换链下 `ResizeBuffers` 到重绘落地之间存在真空期，
+  DWM 会采样旧尺寸缓冲并按 `DXGI_SCALING_STRETCH` 从左上角拉伸。非拖拽的最大化/还原改同步重绘
+  （拖拽缩放中保持异步以免拖累手感）、跳过 `SIZE_MINIMIZED`、交换链 Scaling 改 `NONE`。
+- **单实例转发失败被挡在门外**：首实例退出中或僵死时 `WM_COPYDATA` 同步发送会把二次实例一起挂住；
+  改用 `SendMessageTimeoutW(SMTO_ABORTIFHUNG)` 探测送达失败并回退为正常启动新窗口。
+- **表格多行单元格顶部对齐**：多行分支由 stack 改为 row + `cross(Center)`，同行折行撑高时单行文本格竖直居中。
+- **富文本布局缓存每帧堆分配**：`ensure_layout` 命中判定改引用比较 + 零分配快路径，仅 miss 时构造 `LayoutKey`。
+
+## [0.8.3] - 2026-07-13
+
+### Added
+- **表格单元格多行**：`Table` 单元格支持多行文本，新增 `cell_lines(n)` 配置显示行数。
+
+### Fixed
+- **表格多行单元格裁切**：多行单元格内容被错误裁切，修正行高与裁剪区计算。
+- **`on_update` 相位的 toast 被丢弃**：在 `on_update` 阶段调用 `ctx.toast*` 发出的浮层不再被丢弃。
+- **对话框复显开关瞬时落定**：对话框重新显示时开关状态瞬时正确落定；文本输入清除残留选区。
+- **无边框窗口标题栏区域 toast 失效**：无边框窗口标题栏区域的 toast 被命中判定为客户区，修复其上 ✕ 关闭 / 右键菜单失效。
+
+### Changed
+- **toast 面板样式**：降低面板高度、移除强调色条，右键菜单置于 toast 之上。
+
+## [0.8.2] - 2026-07-06
+
+### Fixed
+- **连续空格中光标无法移动**：`DWRITE_TEXT_METRICS::width` 不含尾随空白宽度，导致以
+  空格结尾的子串测量宽度被折叠为同一值——文本框光标索引在连续空格中正确递增，但换算出的
+  视觉 x 坐标不再前进，表现为"光标卡在第一个非空格字符处"。改用
+  `widthIncludingTrailingWhitespace` 字段（`src/text/dwrite.rs`、`src/platform/win32/d2d.rs`）。
+- **输入法组合态期间自绘光标位置错误**：拼音等未上屏组合期间，`TextInput`/`Stepper` 自绘的
+  光标条停留在组合开始前的位置不动，与系统组合浮层里跟随合成进度前进的光标同时存在，视觉上
+  像卡住。新增 `Widget::set_composing`，由平台层在 Windows 的
+  `WM_IME_STARTCOMPOSITION`/`WM_IME_ENDCOMPOSITION`、macOS 的
+  `setMarkedText`/`unmarkText`/`insertText:` 时通知焦点控件，组合期间跳过自绘光标绘制，
+  交由系统浮层呈现。
+- **输入法组合串字体与正文不一致**：Windows 合成串 `LOGFONTW.lfFaceName` 之前留空，系统常
+  回退到陈旧的宋体；现显式指定为与正文渲染同族的 `Microsoft YaHei UI`。
+
+## [0.8.1] - 2026-07-06
+
+### Added
+- **`PickDialog` 同步方法误用检测**：`pick_file`/`pick_files`/`pick_folder`/`pick_folders`/
+  `save_file` 在控件事件回调（`on_click`/`on_event`）栈内被调用时，`debug_assert!` 报错
+  （release 构建零开销剔除）——把"回调里别同步开模态对话框，OS 捕获来不及释放会导致鼠标
+  失灵"这条只写在文档注释里的契约，变成 debug/测试阶段能捕获到的确定性失败，而不是留到运行时
+  变成偶发的鼠标卡死。内部用线程局部 `EventDispatchGuard` 标记风险窗口（`on_pointer`/`on_key`/
+  `on_drop_files` 分发期间），win32/macos 两个后端均已接入；`app.rs::on_drop_files` 同时补上了
+  之前遗漏的 `dialog` 请求转发（`Element::on_drop` 回调里调用 `EventCtx::request_*` 之前会被
+  静默丢弃）。
+
+## [0.8.0] - 2026-07-06
+
+### Added
+- **`DialogRequest` + `EventCtx::request_pick_file`/`request_pick_files`/`request_pick_folder`/
+  `request_pick_folders`/`request_save_file`/`defer_blocking`**：原生文件对话框不再在事件回调
+  栈内同步弹出——按钮点击回调里直接调用 `PickDialog::pick_file()` 等阻塞方法时，OS 鼠标捕获的
+  释放要等整条事件分发调用栈返回才生效，导致对话框存续期间主窗口仍持有 `SetCapture`，与对话框
+  自己的消息泵抢鼠标输入，反复开关几次后捕获状态与 OS 实际状态错位，表现为鼠标彻底失灵。
+  现改为把对话框请求（`PickDialog` + 结果延续回调，或 `defer_blocking` 逃生舱包一段任意阻塞式
+  原生调用序列）经 `EventCtx`/`DispatchResult` 交给宿主，在事件分发**完全返回**、OS 捕获同步
+  完毕之后才真正执行。`PickDialog` 本身的同步 API 仍保留（非 UI 回调场景可用），但**不要**在
+  `on_click`/`on_event` 回调里直接调用。
+- **表格自定义单元格渲染 `Element::cell_render`**：按 `(行下标, 列下标, 单元格文本)` 逐格询问，
+  返回 `Some(Element)` 用自定义控件（徽章/彩色标签/图标等），`None` 回退默认文本。排序仍基于
+  单元格文本（渲染与排序键解耦）；行下标语义同 `.actions`（客户端表格为原始行下标，服务端表格
+  为页内显示下标）。适用于 `table_sortable` / `table_sortable_server` / `table_selectable`，
+  可与 `.actions` 组合。fullshowcase 表格 tab 新增演示。
+- **`Element::host_signal`**：信号驱动的响应式重建宿主。同 `list_signal` 的重建机制，但容器为
+  普通列容器（非滚动）——子元素 `weight`/`fill` 能拿到确定高度，适合整体重建"结构随状态变化"
+  的子树（如列集随类别切换的表格；滚动容器按无限高度测量会令表格正文高度崩塌）。
+
+### Fixed
+- 响应式广播（`dispatch_reactive_updates`）曾用广播快照的存活集**覆盖**注册列表，把广播期间
+  动态重建子树新注册的响应式节点抹掉——`list_signal`/`host_signal` 重建出的响应式表头/正文
+  永远收不到 `on_update`，表格在宿主重建后空白。现改为按批次迭代到收敛（新注册节点**同帧**
+  收到回调，避免首帧空白），清理阶段基于真实列表 retain。
+
+### Changed
+- `DispatchResult` 不再 `derive(Clone)`（新增字段携带 `Box<dyn FnOnce()>`，不可 Clone；原实现
+  从未实际克隆过该结构，纯类型层面的收紧）。
+
+## [0.4.0] - 2026-06-26
+
+### Added
+- **Direct2D GPU 渲染后端（Windows，可选 opt-in）**：大窗口/多控件下软件光栅 paint-bound，新增
+  Direct2D 后端把几何/渐变/裁剪/opacity/图片/阴影/文字光栅迁到 GPU。窗口级显式 opt-in
+  `App::accelerated(true)`（示例 `--accelerated`），**默认仍软渲染**；与 tiny-skia 软路径并存。
+  - 文字坚持走 **DirectWrite**（`DrawTextLayout`，系统字体缓存 + ClearType），与软路径字体/字重一致。
+  - 阴影用 `ID2D1Shadow` GPU 高斯模糊，烘焙一次缓存成品避免每帧重模糊。
+  - 自动回退软渲染（绝不 panic）：RDP 远程会话、无可用 GPU、设备创建失败、离屏截图。
+  - 设备丢失检测 → 整体重建设备链 → 连续失败降级软后端；同 UI 线程多窗口共享设备链（避免 ×N 内存）。
+  - 重对象（文字布局/画刷/位图/后备缓冲）全缓存复用，常驻内存从早期 190M 降到 ~70M。
+- 渐变画刷（线性/径向）+ `Brush`（Solid/Gradient/Role）主题角色取色体系。
+- `Theme::dark` 暗色预设 + `ThemeHandle` 运行期主题热切换（整树跟随刷新）。
+- 浮层投影（box-shadow）+ 子树整体不透明度（离屏层合成）。
+- 级联右键菜单（图标/分隔/快捷键/子菜单）+ `Element::on_context_menu`。
+- `PickDialog`：系统原生文件/目录选择对话框。
+- `Signal<T>`：`Copy` 句柄状态原语（运行时 arena 承载），全控件状态从 `Rc<Cell>`/`Rc<RefCell>` 迁入；
+  `set` 自动产生局部脏区，新控件免手写 `mark_dirty`。
+- 文字字重支持；半透明文字色。
+- `App::min_size`：限制窗口最小客户区尺寸。
+- 新增 `examples/ime.rs`（复刻中文输入法界面，暗/亮双主题）。
+
+### Changed
+- 控件状态原语统一为 `Signal<T>`，取代散落的 `Rc<Cell>`/`Rc<RefCell>`（API 基本不变，状态语义更一致）。
+- 渲染接缝重构：`AppHandler::render` 改为面向 `RenderTarget`，软/GPU 两后端同形接入，软路径零回归。
+
+### Performance
+- 交互失效系统：hover/拖动/点击/打字走 ~1ms **局部重绘**（结构签名判定局部 vs 整窗），不再每次整窗重绘。
+- DirectWrite 测量结果缓存，消除稳定文本每帧重复排版。
+- 模糊阴影缓存（位置无关），修复阴影每帧重算导致的卡顿；新增 `WINDUI_PROF` 绘制热点计时。
+
+### Fixed
+- 窗口按钮与复选框的文字/悬停色未跟随主题。
+- DPI 缩放下 win32 窗口显示异常（全窗重绘 scale 由 handler 提供）。
+- 点击切换内容不刷新；标签条内边距、菜单尾随快捷键换行、分段选中反色、菜单高亮溢出等多处 UI 细节。
+
+## [0.3.0] - 2026-06-23
+
+### Added
+- 多行 `TextInput`：滚动条、滚轮滚动、跨视口拖选。
+- `Label` `max_lines` 行数限制 + Truncate 省略号（End/Start/Middle）。
+
+### Fixed
+- `ScrollWidget` 滚轮滚动到边界时冒泡给外层容器。
+
+## [0.2.0] - 2026-06-23
+
+### Added
+- 跨线程 UI 更新：`App::channel::<Msg>(on_message) -> Sender<Msg>`（后台 `send` 事件驱动唤醒 UI、`on_message` 在 UI 线程写状态）+ `App::on_interval(dur, cb)` 定时回调。有更新才重绘、空闲零 CPU。
+- 语义意图色（Intent）体系：Button / CheckBox 统一 `.intent()` / `.danger()` / `.neutral()` / `.accent(color)`；
+  内置 primary/neutral/danger，`Custom(Color)` 为扩展点——单基色自动派生 hover/active + 对比自适应前景。
+  Button 默认 Primary（现有代码零改动）；CheckBox 现有 `.danger()`/`.accent()` 收编进同一体系（API 不变）。
+- CheckBox 受控点击拦截：`Element::checkbox(..).on_toggle(cb)`——设回调后点击/键盘激活不自动翻转
+  绑定 state，交 app 决定是否翻转（可在翻转前弹确认、确认后再置真，渲染跟随 state，零闪烁）。
+- `Color::lighten` / `darken` / `pick_fg`（对比自适应前景）颜色派生工具。
+- 彩色 emoji 渲染：DirectWrite 字形经 `IDWriteFactory2::TranslateColorGlyphRun`
+  拆成 COLR/CPAL 彩色层逐层着色（emoji、ZWJ 组合序列、肤色修饰均正确合成彩色），
+  字体无彩色数据时自动回退原单色路径。新增 `examples/emoji.rs` 演示。
+
+### Fixed
+- 文本框无法输入 emoji：WM_CHAR 对补充平面字符（码点 > U+FFFF，如 emoji）
+  分两条消息发来 UTF-16 代理对，原逻辑对单个代理项解码失败而丢弃。现正确
+  暂存高代理项并与低代理项合成为单个 `char`，emoji 及 CJK 扩展区字符可正常输入。
+
+## [0.1.0] - 2026-06-22
+
+首个公开版本（Windows + macOS）。
+
+### Added
+- 核心框架：命令式 Builder API、retained 模式、DPI 感知、tiny-skia 渲染。
+- 完整控件集（布局/文本/按钮/表单/容器/列表/图片/导航）、系统托盘、无边框窗口、触摸滚动、自动截屏。
+- Windows 平台后端（Win32 + GDI + DirectWrite 文字）。
+- macOS 平台后端（Cocoa/AppKit 窗口 + Core Text 文字 + NSPasteboard 剪贴板 + NSStatusItem 托盘）。
+- 跨平台缝合层：渲染/控件/事件平台无关，平台仅实现「窗口+事件循环」与「文字引擎」两条缝。
+- 开源配套：双许可（MIT OR Apache-2.0）、DCO、贡献指南、开发指南、issue/PR 模板、CI、发布工作流。
+
+### Changed
+- 依赖按 target 门控：`windows` 仅 Windows、`objc2` 系列仅 macOS。
+- README 改为跨平台说明（中文主 + 英文副）。
+- 依赖更新：`toml` 0.8 → 1.1；CI actions（checkout v7、action-gh-release v3）。
+- **windows-rs 0.58 → 0.62 迁移**：`implement` 宏改由 `windows-core` 提供；可空句柄参数
+  语义化为 `Option<T>`；`BOOL` 迁至 `windows::core`；COM 实现入参 `Option<&T>` → `Ref<'_, T>`。
+
+[Unreleased]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.30.0...v0.31.0
+[0.30.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.29.0...v0.30.0
+[0.29.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.28.0...v0.29.0
+[0.28.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.27.1...v0.28.0
+[0.27.1]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.27.0...v0.27.1
+[0.27.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.26.0...v0.27.0
+[0.26.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.25.0...v0.26.0
+[0.25.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.23.0...v0.24.0
+[0.23.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.22.0...v0.23.0
+[0.22.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.16.1...v0.17.0
+[0.16.1]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.16.0...v0.16.1
+[0.16.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.11.1...v0.12.0
+[0.11.1]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.11.0...v0.11.1
+[0.11.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.8.3...v0.9.0
+[0.8.3]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/huanfeng/aurora-ui-rust/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/huanfeng/aurora-ui-rust/releases/tag/v0.1.0

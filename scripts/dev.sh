@@ -1,0 +1,2101 @@
+#!/usr/bin/env bash
+# WindInput 开发菜单 (Linux 开发机)
+#
+# ★ 构建不在本机进行 —— 凡会写进 build[_dev]/ 或 dist/ 的命令都转发到 Windows 编译机,
+#   用原生 MSVC 编, 产物回传本机。理由: clang/cargo-xwin 交叉编出的 wind_tsf.dll 在带
+#   安全加固的宿主里 COM 激活失败, 根因在工具链代码生成层 (6dbc8595)。本机的 cargo-xwin
+#   只剩 check/clippy 一个正当用途 —— 那两个不链接、不产出交付物。
+#   配置: cp scripts/build.local.example scripts/build.local; 未配置时构建类命令硬失败。
+#
+# 用法:
+#   ./scripts/dev.sh            # 交互式菜单 (对齐 dev.ps1)
+#   ./scripts/dev.sh <命令>     # 非交互直调, 如 ./scripts/dev.sh release
+#
+# 本机 (Linux) 交叉编译为 Windows (MSVC) 可执行文件:
+#   - Rust(aurora_input): cargo-xwin → x86_64-pc-windows-msvc (+crt-static 自包含)
+#   - Rust(aurora_core/apps/setting): 本仓内嵌的设置程序
+#   - Rust(../wind-portable): 独立仓库, 不存在则跳过便携启动器
+#   - C++ TSF: clang + lld-link + llvm-rc + cargo-xwin 的 MSVC SDK (x64 + x86)
+#   - 依赖: cargo-xwin + clang-19/lld-19/llvm-19 (MSVC STL 要 clang≥19)
+#   - 全构建产物落【项目根】build/(release) 或 build_dev/(dev)，内容 == 安装内容
+#
+# 命令（菜单与命令行直调同一套；前缀 d=dev, p=push, m=单模块）:
+#   1            Release 全构建: aurora_input + tsf(x64/x86) + setting + portable + 词库数据 → build/
+#   d1           Debug 全构建 → build_dev/
+#   m1 / dm1     仅 tsf (x64+x86)            release / dev
+#   m2 / dm2     仅 aurora_input (核心 exe)     release / dev
+#   m3 / dm3     仅 aurora_setting (aurora_core/apps/setting)     release / dev
+#   m4 / dm4     仅 aurora_portable (../wind-portable)            release / dev (不存在则跳过)
+#   8            生成安装包 (= 1 + 打包 → Setup.exe + sha256)
+#   8s           跳过编译，直接打包现有 build/
+#   9            生成便携包 (= 1 + 打 zip → dist/WindInput-Portable-<版本>.zip + sha256)
+#                (免安装；不依赖 wind-installer；内含便携标记，不含 userdata/)
+#   9s           跳过编译，直接打包现有 build/
+#   instbins     从编译机取安装器三件套(原生 MSVC) → .cache/installer-bins/
+#   stage/dstage 打发布中转产物 → dist/WindInput[Dev]-Stage-<版本>.zip (release / dev)
+#                (build/ + 安装器三件套 + stage.json；拷到本机 dev.ps1 unstage 后签名打包)
+#   p1 / pd1     push 全部 build[_dev]/ → Windows 安装目录 (release / dev)
+#   pm1/pm2      push 单模块 (tsf/核心, release)
+#   pdm1/pdm2    push 单模块 (dev)
+#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  hooks(=激活pre-commit)  clean
+#   sk=setting-check  st=setting-test  sg=setting-regen   aurora_core/apps/setting
+#     (交叉到 Windows 目标; st/sg 经 wine 执行。sg = 重生成检入的 capability 快照与 mockdata)
+#     ↑ 只改了 core 配置注册表的话, 先跑 cargo test -p aurora-rpc --test wind_setting_assets
+#       (在 core 这边对账设置程序三份检入产物, 不必编译它)
+#     ↑ 这几个【在本机跑】: 不产出交付物, cargo-xwin 在 Linux 上仅存的正当用途就是它们;
+#       t/test 更是原生 cargo test。想在本机直接出二进制看看链接过不过: AURORA_BUILD_LOCAL=1
+#       (⚠️ 产物不能部署也不能发版, 见 lib/remote-build.sh)
+#   gd=gen-data  r=repl  dl=pull-data  pc=pull-config  pl=pull-log(pla=全部)
+#   远程诊断(靶机现场, 配置见 deploy.local):
+#     rwhere  常用位置    rproc  进程+部署产物时间戳    rls/rcat/rtail <路径>    rgrep <模式>
+#   GUI 验证(设置界面离屏截图, 进程内合成事件、不走 SendInput, 故 SSH 会话可用):
+#     shot [--size W H] [--click X Y] [--rclick X Y] [--drag X0 Y0 X1 Y1] [--hover X Y]
+#          [--type <文本>] [--key <键名>]   → .remote/shots/  (SHOT_ON=vm 截编译机那份)
+#
+# 三机分工:
+#   Linux 本机   代码、编辑、check/clippy/test
+#   Win 编译机   原生 MSVC 出 exe/DLL  (build.local;  凡产出交付物的命令自动转发过去)
+#   Win 靶机     部署、实机运行、日志现场 (deploy.local; p*/pd* 推送, r* 诊断)
+#
+# 部署配置 scripts/deploy.local（SSH 推送到 Windows 实测机）:
+#   AURORA_REMOTE              = user@host             # SSH 目标
+#   AURORA_REMOTE_DIR_RELEASE  = C:/.../WindInput      # p1 全量/ pm* 推送目录
+#   AURORA_REMOTE_DIR_DEV    = C:/.../WindInputDev  # pd1 / pdm* 推送目录
+#   AURORA_DATA_DIR / AURORA_LOCAL_DIR  = %APPDATA% / %LOCALAPPDATA%\<App>  # pull-config/log 用
+#
+# 数据目录说明：
+#   data/           源文件（入库）：配置、五笔词库、主题等手工维护文件
+#   .cache/         外部下载/生成（gitignore）：rime-frost、opencc、unigram、tsf-obj 等
+#   build/ build_dev/  全构建产物（gitignore）；内容即安装到 Program Files 的内容
+#
+# 推荐实测流程：① gen-data 下载+组装词库 → ② repl 在 Linux 验证候选逻辑
+#               ③ push 把 exe drop-in 到 Windows → 重启服务做应用内实测
+
+set -o pipefail
+
+# ---------- 路径 ----------
+# 目录层级: <产品仓>/scripts/dev.sh
+#   SCRIPT_DIR   = <产品仓>/scripts
+#   PRODUCT_ROOT = <产品仓>          (含 docs/VERSION、data/、.cache/ 等)
+#   PROJECT_ROOT = <产品仓>/aurora_core (Cargo workspace 根)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRODUCT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$PRODUCT_ROOT/aurora_core"
+# C++ TSF 核心层（clang/MSVC 交叉编译，见 aurora_tsf/Makefile）
+TSF_DIR="$PRODUCT_ROOT/aurora_tsf"
+SETTING_DIR="$PRODUCT_ROOT/aurora_core/apps/setting"
+PORTABLE_DIR="$(cd "$PRODUCT_ROOT/.." && pwd)/wind-portable"
+# wind-installer: 通用安装器生成器（兄弟仓库, app.toml 驱动）。默认值与覆盖用的环境变量
+# 都与 pack-installer.sh 的 AURORA_INSTALLER_DIR 保持一致, 免得两个脚本各找各的安装器。
+INSTALLER_DIR="${AURORA_INSTALLER_DIR:-$(cd "$PRODUCT_ROOT/.." && pwd)/wind-installer}"
+VERSION="$(tr -d '[:space:]' < "$PRODUCT_ROOT/docs/VERSION" 2>/dev/null || echo '?')"
+# 发布产物目录在【项目根】（内容 == 安装到 Program Files 的内容，无中间产物）
+BUILD_DIR="$PRODUCT_ROOT/build"
+BUILD_DEV_DIR="$PRODUCT_ROOT/build_dev"
+# 打包输出目录（gitignore）：便携包 zip、发布中转产物 zip
+DIST_DIR="$PRODUCT_ROOT/dist"
+# 外部下载/生成的词库缓存目录（不入库）
+CACHE_DIR="$PRODUCT_ROOT/.cache"
+# 安装器三件套的落点：由 `dev.sh instbins` 从编译机取回的【原生 MSVC】版本。
+# 刻意不放进 cargo 的 target/ —— 那里会被下一次本地 cargo xwin build 覆盖成交叉编版本,
+# 而同一路径此前是原生、此后是交叉编, 肉眼分不出来。理由全文见 do_instbins 头部。
+INSTALLER_BIN_DIR="$CACHE_DIR/installer-bins"
+# Rust 工具链根目录（aurora_core/ workspace）
+RUST_WORKSPACE="$PRODUCT_ROOT/aurora_core"
+# 加一道显式校验：本次改名（wind_input/ → aurora_core/）之后这两个变量曾一直指向不存在的
+# 目录，而 dev.sh 里所有 cargo 调用都是 `cd "$X" && cargo ...`——cd 失败只让那条命令返回
+# 非零，`set -e` 未开时脚本会继续跑完并报出不相干的错。宁可开场就炸。
+[ -d "$PROJECT_ROOT" ] || { echo "[dev.sh] Cargo workspace 不存在: $PROJECT_ROOT" >&2; exit 1; }
+[ -d "$TSF_DIR" ] || { echo "[dev.sh] TSF 源码目录不存在: $TSF_DIR" >&2; exit 1; }
+
+# 远程 Windows 测试机配置（SSH）。在 scripts/deploy.local 或环境变量中设置：
+#   AURORA_REMOTE              = user@host          （SSH 目标）
+#   AURORA_REMOTE_DIR_RELEASE  = release 安装目录    （p1/pm* 推送目标；scp 正斜杠风格，
+#                              如 'C:/Users/me/AppData/Local/Programs/WindInput'）
+#   AURORA_REMOTE_DIR_DEV    = dev 安装目录      （pd1/pdm* 推送目标，如 .../WindInputDev）
+[ -f "$SCRIPT_DIR/deploy.local" ] && . "$SCRIPT_DIR/deploy.local"
+AURORA_REMOTE="${AURORA_REMOTE:-}"
+AURORA_REMOTE_DIR_RELEASE="${AURORA_REMOTE_DIR_RELEASE:-}"
+AURORA_REMOTE_DIR_DEV="${AURORA_REMOTE_DIR_DEV:-}"
+AURORA_REMOTE_DIR="${AURORA_REMOTE_DIR:-}"   # 兼容旧配置：未设 _RELEASE 时作 release 回退
+# 远程数据/本地目录（拉配置、拉日志用；见 deploy.local 注释）：
+#   AURORA_DATA_DIR   = %APPDATA%\<App>        含 config.toml（用户配置）
+#   AURORA_LOCAL_DIR  = %LOCALAPPDATA%\<App>   含 logs/（服务日志）、cache/
+AURORA_DATA_DIR="${AURORA_DATA_DIR:-}"
+AURORA_LOCAL_DIR="${AURORA_LOCAL_DIR:-}"
+# 从远程拉取的配置/日志落地处（本地查看用，不入库）
+REMOTE_PULL_DIR="$PRODUCT_ROOT/.remote"
+REMOTE_DIR=""   # 由 resolve_remote_dir 按 profile 填充
+
+# Rust 交叉编译目标:MSVC(经 cargo-xwin 在 Linux 上交叉编,tier-1 目标)。
+# C++ TSF DLL 也走 MSVC(clang + xwin SDK,见 aurora_tsf/Makefile),整链统一。
+TARGET="x86_64-pc-windows-msvc"
+
+# ---------- 颜色 ----------
+if [ -t 1 ]; then
+    C_CYAN='\033[36m'; C_YELLOW='\033[33m'; C_GREEN='\033[32m'
+    C_RED='\033[31m'; C_GRAY='\033[90m'; C_RESET='\033[0m'
+else
+    C_CYAN=''; C_YELLOW=''; C_GREEN=''; C_RED=''; C_GRAY=''; C_RESET=''
+fi
+say()  { printf '%b%b%b\n' "$C_GREEN" "$1" "$C_RESET"; }
+warn() { printf '%b%b%b\n' "$C_YELLOW" "$1" "$C_RESET"; }
+err()  { printf '%b%b%b\n' "$C_RED" "$1" "$C_RESET"; }
+gray() { printf '%b%b%b\n' "$C_GRAY" "$1" "$C_RESET"; }
+
+# 文件大小 (人类可读)。
+# ⚠️ 不用 `du -h`: 它报的是【磁盘占用】而非文件大小, 取值依赖文件系统的块分配策略 ——
+#    在开发机的文件系统上对一个 5 MB 的文件稳定报 "512" (实测, ls -lh 同一文件报 5.0M)。
+#    于是「已同步 (512)」「打包完成 (512)」这类输出会让人以为什么都没传出去/没打进去。
+fsize() { ls -lh "$1" 2>/dev/null | awk '{print $5}'; }
+
+# ---------- cargo-xwin / clang (统一 MSVC 交叉编译工具链) ----------
+# Rust/Tauri 经 cargo-xwin、C++ TSF 经 clang+llvm-rc,均交叉编 *-pc-windows-msvc,
+# 共用 cargo-xwin 下载的 MSVC CRT/Windows SDK(缓存于 ~/.cache/cargo-xwin)。
+# 统一用带版本号的 clang(MSVC STL 要求 clang≥19);可用 AURORA_LLVM_VER 切到 20。
+# 依赖:cargo-xwin、clang-<ver>、lld-<ver>、llvm-<ver>(含 llvm-rc/llvm-lib)。
+# XWIN_BIN / AURORA_LLVM_VER / setup_xwin_env 定义在共享环境桥里 —— pack-installer.sh
+# 写同一个 $XWIN_BIN 目录，两处各存一份实现会互相覆盖（原委见 lib/xwin-env.sh 头部）。
+. "$SCRIPT_DIR/lib/xwin-env.sh"
+
+# ---------- 远程构建 (Linux → Windows 编译机) ----------
+# 凡会写进 build[_dev]/ 或 dist/ 的命令一律推到编译机上用原生 MSVC 编 —— 本机 cargo-xwin
+# /clang 的产物在加固宿主里 COM 激活失败 (6dbc8595), 只剩 check/clippy 一个正当用途。
+# 配置: scripts/build.local (模板 build.local.example); 未配置时构建类命令【硬失败】。
+[ -f "$SCRIPT_DIR/build.local" ] && . "$SCRIPT_DIR/build.local"
+. "$SCRIPT_DIR/lib/remote-build.sh"
+
+# 统一 MSVC 构建入口:确保工具链就绪,并注入 +crt-static(静态链 MSVC 运行时,
+# 产物自包含,无需目标机装 VC++ 运行库)。RUSTFLAGS 仅作用于此次 cargo-xwin 调用,
+# 不污染本机 host 工具(gen_unigram 等 cargo run)的构建。
+cargo_xwin() {
+    setup_xwin_env || return 1
+    RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static" cargo xwin "$@"
+}
+
+# ---------- 构建（单模块 + 全构建）----------
+# 输出目录：release → BUILD_DIR；dev → BUILD_DEV_DIR。
+out_for() { [ "${1:-release}" = dev ] && echo "$BUILD_DEV_DIR" || echo "$BUILD_DIR"; }
+
+# cargo 项目的 target 目录 (产物落点)。
+#
+# 不能拼 "$proj/target" —— 本机若在 ~/.cargo/config.toml 里设了 build.target-dir
+# (几个 Rust 项目共用一份依赖编译产物, 省下几十 G 磁盘), 或设了 CARGO_TARGET_DIR,
+# 产物就根本不在项目目录内, 硬拼出来的路径会指向一个空壳, 或上一次的旧二进制 ——
+# 后者更坏: 构建报成功、推过去的却是旧的。
+# 向 cargo 自己要这个值是唯一可靠来源: 各设备的共享目录路径不同也无需改脚本,
+# 没设共享时它返回的就是 <项目>/target, 与旧行为完全一致。
+# cargo/jq 缺失时回落硬拼, 保证脚本在裸环境仍可用。
+#
+# 结果按项目缓存 (与 scripts/mac/dev.sh 的同名函数同法: 逐项目专用变量)。
+_TDIR_CORE=""
+_TDIR_SETTING=""
+_TDIR_PORTABLE=""
+cargo_target_dir() {
+    local proj="$1" d=""
+    case "$proj" in
+        "$PROJECT_ROOT")  d="$_TDIR_CORE" ;;
+        "$SETTING_DIR")   d="$_TDIR_SETTING" ;;
+        "$PORTABLE_DIR")  d="$_TDIR_PORTABLE" ;;
+    esac
+    if [ -z "$d" ]; then
+        d="$( cd "$proj" 2>/dev/null && cargo metadata --format-version 1 --no-deps 2>/dev/null \
+              | jq -r '.target_directory // empty' 2>/dev/null )" || d=""
+        [ -n "$d" ] || d="$proj/target"
+        case "$proj" in
+            "$PROJECT_ROOT")  _TDIR_CORE="$d" ;;
+            "$SETTING_DIR")   _TDIR_SETTING="$d" ;;
+            "$PORTABLE_DIR")  _TDIR_PORTABLE="$d" ;;
+        esac
+    fi
+    printf '%s\n' "$d"
+}
+
+# 模块一：aurora_input 核心 exe。
+# dev 变体 = dev-variant profile（继承 dev 优化 + 关 debug_assertions）；源码与 release 完全一致：
+#   ① debug_assertions 关闭 → windows_subsystem="windows" 生效，无控制台窗口；
+#   ② opt-level=1 快编译且手感够用；③ 独立 _dev 身份(管道/目录隔离, 运行期按 exe 名探测)。
+build_core() {
+    local profile="${1:-release}" outdir="${2:-$(out_for "$1")}"
+    mkdir -p "$outdir"; cd "$PROJECT_ROOT" || return 1
+    local suffix="" prof="release"
+    [ "$profile" = dev ] && { prof="dev-variant"; suffix="_dev"; }
+    say "\n[core] 交叉编译 aurora_input ($prof, $TARGET)..."
+    cargo_xwin build --profile "$prof" --target "$TARGET" -p aurora_service \
+        || { err "aurora_input 构建失败!"; return 1; }
+    local src="$(cargo_target_dir "$PROJECT_ROOT")/$TARGET/$prof/aurora_input.exe"
+    [ -f "$src" ] || { err "未找到产物: $src"; return 1; }
+    cp -f "$src" "$outdir/aurora_input${suffix}.exe"
+    gray "已构建: aurora_input${suffix}.exe ($(fsize "$outdir/aurora_input${suffix}.exe"))"
+    # CLI 包装器 (aurora_input config ...; 运行时自辨 dev/release exe, 两变体共用一份)
+    [ -f "$PROJECT_ROOT/scripts/wind_cli.bat" ] && cp -f "$PROJECT_ROOT/scripts/wind_cli.bat" "$outdir/wind_cli.bat" && gray "已复制: wind_cli.bat"
+}
+
+# 模块二：设置程序 (aurora_core/apps/setting)。
+# 独立兄弟仓库；本地开发缺仓库时跳过。GitHub Release workflow 会先强制 checkout，
+# 无权限或缺产物会在 workflow/pack 阶段失败。
+build_setting() {
+    local profile="${1:-release}" outdir="${2:-$(out_for "$1")}"
+    if [ ! -d "$SETTING_DIR" ]; then
+        warn "设置程序目录不存在, 跳过设置程序。"
+        return 0
+    fi
+
+    local suffix="" cargo_args=(build --target "$TARGET") target_dir="debug"
+    if [ "$profile" != dev ]; then
+        cargo_args+=(--release)
+        target_dir="release"
+    else
+        suffix="_dev"
+    fi
+
+    mkdir -p "$outdir"; cd "$SETTING_DIR" || return 1
+    say "\n[setting] 交叉编译 aurora_setting ($profile, $TARGET)..."
+    export AURORA_APP_VERSION="$VERSION"   # 版本注入: docs/VERSION → 设置程序 (与主仓统一)
+    cargo_xwin "${cargo_args[@]}" || { err "aurora_setting 构建失败!"; return 1; }
+
+    local src="$(cargo_target_dir "$SETTING_DIR")/$TARGET/$target_dir/aurora_setting.exe"
+    [ -f "$src" ] || { err "未找到产物: $src"; return 1; }
+    cp -f "$src" "$outdir/aurora_setting${suffix}.exe"
+    gray "已构建: aurora_setting${suffix}.exe ($(fsize "$outdir/aurora_setting${suffix}.exe"))"
+}
+
+# 模块三：wind-portable 便携启动器。
+# 独立兄弟仓库；dev/release 均产出同一份 release 二进制。
+build_portable() {
+    local profile="${1:-release}" outdir="${2:-$(out_for "$1")}"
+    if [ ! -d "$PORTABLE_DIR" ]; then
+        warn "../wind-portable 仓库不存在, 跳过便携启动器。"
+        return 0
+    fi
+
+    mkdir -p "$outdir"; cd "$PORTABLE_DIR" || return 1
+    say "\n[portable] 交叉编译 aurora_portable ($profile → 单一二进制, $TARGET)..."
+    export AURORA_APP_VERSION="$VERSION"   # 版本注入: docs/VERSION → wind-portable (与主仓统一)
+    cargo_xwin build --release --target "$TARGET" || { err "aurora_portable 构建失败!"; return 1; }
+
+    local src="$(cargo_target_dir "$PORTABLE_DIR")/$TARGET/release/aurora_portable.exe"
+    [ -f "$src" ] || { err "未找到产物: $src"; return 1; }
+    cp -f "$src" "$outdir/aurora_portable.exe"
+    gray "已构建: aurora_portable.exe ($(fsize "$outdir/aurora_portable.exe"))"
+}
+
+do_check() {
+    say "\n正在运行 cargo check ($TARGET, 全工作区)..."
+    cd "$PROJECT_ROOT" && cargo_xwin check --target "$TARGET" --workspace
+}
+
+do_clippy() {
+    # 传 "deny" 时把警告升为错误(CI 走这条)。本地 `dev.sh l` 不传, 迭代中途的 warning
+    # 不该直接中断; 门禁只在 CI 上生效。
+    # --all-targets 不可省: 不带它连测试代码都不检查, 而测试里同样会长出警告。
+    # --keep-going 同样不可省: cargo 默认在首个 crate 失败后就不再调度新任务, 一轮只
+    # 报得出一个错误。实测同一份代码, 不带它报 1 条, 带上报 22 条(分五层, 层与层之间
+    # 是 crate 依赖关系, 前一层不修后一层根本不被检查)。缺了它 CI 一红就是"推一次修
+    # 一个", 8 月中连红 8 次即此。加上它仍需多轮, 但一轮能推进一整层。
+    local deny_args=()
+    [ "${1:-}" = "deny" ] && deny_args=(-- -D warnings)
+    say "\n正在运行 cargo clippy ($TARGET, 全工作区含测试)..."
+    cd "$PROJECT_ROOT" && cargo_xwin clippy --keep-going --target "$TARGET" --workspace --all-targets "${deny_args[@]}"
+}
+
+do_test() {
+    # --no-fail-fast: 默认首个失败的 test binary 就停, 排在它后面的整个不跑。本机
+    # Windows 有 113 个 test binary, CI 的 Linux job 曾在第 84 个(aurora-ui)停下 ——
+    # 中间 29 个在 CI 上从未执行过。代价是失败时更慢, 换来一次看全所有失败点。
+    say "\n正在运行 cargo test (本机, 全工作区)..."
+    cd "$PROJECT_ROOT" && cargo test --workspace --no-fail-fast
+}
+
+# ---------- 设置程序: 本机检查 / 测试 ----------
+# 【为什么要交叉到 Windows 目标】设置程序依赖 auroraui, 而 auroraui 对非 Windows/macOS
+# 目标是 `compile_error!("auroraui 目前仅支持 Windows 与 macOS 平台")` —— 原生 Linux 编不过,
+# 且那不是 rfd 后端的问题(rfd 只是最先爆的那个)。交叉到 x86_64-pc-windows-msvc 则一切正常,
+# check --all-targets 含测试代码一并过。
+#
+# 【与 core 的跨仓对账各管一段】本机改了 core 的配置注册表之后:
+#   · `cargo test -p aurora-rpc --test wind_setting_assets` 在 core 这边比对邻仓三份产物
+#     (键在不在、类型/默认值对不对), 不需要编译设置程序 —— 日常改配置用这个最快;
+#   · sk/st 跑的是设置程序 **自己那套**守护测试(值的策展偏离、控件类型、选项文案),
+#     那些只有它自己知道。
+do_setting_check() {
+    [ -d "$SETTING_DIR" ] || { err "设置程序目录不存在: $SETTING_DIR"; return 1; }
+    say "\n正在检查 aurora_setting ($TARGET, 含测试代码)..."
+    export AURORA_APP_VERSION="$VERSION"
+    cd "$SETTING_DIR" && cargo_xwin check --target "$TARGET" --all-targets
+}
+
+# 测试二进制是 Windows PE, 靠 wine 执行(cargo-xwin 自动配 runner)。
+# ⚠️ 没装 wine 时明确报出来 —— 否则 cargo 只会甩一句 "cannot execute binary file",
+#    看不出缺的是什么。
+#
+# 【实测 2026-09-17, wine 9.0 / Ubuntu 24.04】全量 1041 passed / 0 failed / 4 ignored, 1.6s。
+# 两个顾虑都不成立: env!("CARGO_MANIFEST_DIR") 的 Linux 绝对路径 wine 解析得了(邻仓多处
+# 测试靠它找 ../WindInput/data, 全过), 启动时那句 "wine32 is missing" 对 x64 目标无碍。
+# 首次跑会建 ~/.wine prefix(慢一次, 之后秒级)。
+do_setting_test() {
+    [ -d "$SETTING_DIR" ] || { err "设置程序目录不存在: $SETTING_DIR"; return 1; }
+    if ! command -v wine >/dev/null 2>&1 && ! command -v wine64 >/dev/null 2>&1; then
+        err "需要 wine 才能跑 Windows 目标的测试二进制: sudo apt install wine64"
+        err "只想验证编不编得过, 用 sk (setting-check, 不需要 wine)。"
+        return 1
+    fi
+    say "\n正在运行 aurora_setting 测试 ($TARGET, 经 wine)..."
+    export AURORA_APP_VERSION="$VERSION"
+    cd "$SETTING_DIR" && cargo_xwin test --target "$TARGET"
+}
+
+# 重新生成邻仓的两份检入产物(capabilities.snapshot.json / mockdata/config.json)。
+#
+# 这两个生成器是 `#[ignore]` 的维护工具, 邻仓 capabilities.rs 明令「重新生成而不是手改
+# JSON —— 手改正是漂移的来源」。**以前只能上编译机跑**(见设置程序那段 README 式注释),
+# 现在经 wine 本机就能跑, 实测重生成的产物与检入版逐字一致。
+#
+# ⚠️ 跑完 `git diff` 里若只剩 appVersion 一行, 那是**正常的**: 它跟着 docs/VERSION 走,
+#    与配置契约无关(邻仓的守护测试也刻意不比它)。别把它跟自己的改动一起提交。
+do_setting_regen() {
+    [ -d "$SETTING_DIR" ] || { err "设置程序目录不存在: $SETTING_DIR"; return 1; }
+    if ! command -v wine >/dev/null 2>&1 && ! command -v wine64 >/dev/null 2>&1; then
+        err "需要 wine: sudo apt install wine64"; return 1
+    fi
+    say "\n正在重生成 aurora_setting 的检入产物 ($TARGET, 经 wine)..."
+    export AURORA_APP_VERSION="$VERSION"
+    cd "$SETTING_DIR" && cargo_xwin test --target "$TARGET" -- --ignored regenerate_
+}
+
+do_fmt() {
+    say "\n正在运行 cargo fmt..."
+    cd "$PROJECT_ROOT" && cargo fmt
+}
+
+do_fmt_check() {
+    say "\n正在运行 cargo fmt --check..."
+    cd "$PROJECT_ROOT" && cargo fmt --all -- --check
+}
+
+do_hooks_install() {
+    say "\n激活 .githooks (git config core.hooksPath .githooks)..."
+    cd "$PRODUCT_ROOT" && git config core.hooksPath .githooks
+    say "已激活："
+    gray "  pre-commit  暂存的 .rs 跑 rustfmt --check"
+    gray "  pre-push    待推内容跑 fmt + clippy(-D warnings)，拦下 CI 会红的 lint"
+    gray "  逃生口：git commit/push --no-verify"
+}
+
+do_clean() {
+    say "\n正在运行 cargo clean..."
+    cd "$PROJECT_ROOT" && cargo clean
+}
+
+do_ci() {
+    cd "$PROJECT_ROOT" || return 1
+    do_fmt_check || { err "fmt 检查失败!"; return 1; }
+    do_clippy deny || { err "clippy 失败!"; return 1; }
+    do_test      || { err "test 失败!"; return 1; }
+    do_proto_check || { err "协议常量对账失败!"; return 1; }
+    do_wire_check  || { err "线格式真值表失败!"; return 1; }
+    say "\nCI 全部通过 ✓"
+}
+
+# 协议常量对账：Rust 真源 ↔ C++（BinaryProtocol.h / ExtProtocol.h）↔ Swift。
+#
+# 拦住「改了 protocol.rs 忘了镜像」。那类漂移的症状是**某类消息静默丢失**：两侧值都合法、
+# 都能编译、都在跑，零报错。与 CI 的「协议常量对账」步、.githooks/pre-push 第 5 步同一条命令。
+do_proto_check() {
+    say "\n[proto] 协议常量对账..."
+    ( cd "$PROJECT_ROOT" && cargo run -q -p aurora-tools --bin gen_protocol )
+}
+
+# 线格式真值表：Rust 编解码器产出的字节 vs 各前端读出来的东西。
+#
+# 与上面那条是**两层**：`gen_protocol` 管命令码（漂了症状是「某类消息静默丢失」）；
+# 这条管 **payload 的字节布局**（漂了症状是上屏一串错字 / preedit 残留，两端都不报错、
+# 日志里一个字都没有）。TSF 的 SendKeyEvent 直接 memcpy 结构体上送，
+# `static_assert(sizeof(...))` 连「两个 uint16_t 互换」都拦不住。
+#
+# 与 CI、.githooks/pre-push 第 6 步同一条命令。
+do_wire_check() {
+    say "\n[wire] 线格式真值表..."
+    ( cd "$PROJECT_ROOT" && cargo test -q -p aurora-ipc --test wire_vectors )
+}
+
+# 模块四：C++ TSF DLL（x64 + x86；clang/MSVC 交叉编译）。
+# obj 中间产物落 .cache，保持 outdir 干净（== 安装内容）。dev → _dev 后缀。
+build_tsf_all() {
+    local profile="${1:-release}" outdir="${2:-$(out_for "$1")}"
+    mkdir -p "$outdir"
+    if ! command -v "clang++-$AURORA_LLVM_VER" >/dev/null 2>&1; then
+        warn "未找到 clang++-$AURORA_LLVM_VER（C++ TSF 需 clang≥19）；跳过 TSF。"
+        gray "  安装 clang-$AURORA_LLVM_VER lld-$AURORA_LLVM_VER llvm-$AURORA_LLVM_VER 后可构建。"
+        return 0
+    fi
+    if [ ! -d "$HOME/.cache/cargo-xwin/xwin/sdk" ]; then
+        warn "未找到 MSVC SDK 缓存；请先跑一次完整构建（cargo-xwin 会下载 SDK）。跳过 TSF。"
+        return 0
+    fi
+    local dv=0; [ "$profile" = dev ] && dv=1
+    local objbase="$CACHE_DIR/tsf-obj"
+    say "\n[tsf] 交叉编译 x64 + x86 ($profile, clang-$AURORA_LLVM_VER/MSVC)..."
+    local a objsfx; [ "$dv" = 1 ] && objsfx="d" || objsfx=""
+    for a in x64 x86; do
+        make -C "$TSF_DIR" ARCH="$a" DEV_VARIANT="$dv" VERSION="$VERSION" OUTDIR="$outdir" \
+             OBJDIR="$objbase/$a$objsfx" \
+             CLANG="clang++-$AURORA_LLVM_VER" LLVM_RC="llvm-rc-$AURORA_LLVM_VER" >/dev/null \
+          || { err "TSF $a 构建失败！见 'make -C $TSF_DIR ARCH=$a' 输出。"; return 1; }
+    done
+    gray "已构建: $(cd "$outdir" && ls wind_tsf*.dll 2>/dev/null | tr '\n' ' ')"
+}
+
+# ---------- 词库下载 ----------
+
+# helper: 下载单个文件（已存在则跳过）
+download_file() {
+    local url="$1" dst="$2" desc="${3:-}"
+    if [ -f "$dst" ]; then
+        gray "[skip] $(basename "$dst") 已存在"
+        return 0
+    fi
+    gray "[get ] $(basename "$dst") $desc"
+    if ! curl -fsSL --retry 3 --retry-delay 2 -o "$dst" "$url"; then
+        err "下载失败: $url"
+        return 1
+    fi
+}
+
+# 下载外部词库到 .cache/
+download_dicts() {
+    say "\n下载外部词库 → $CACHE_DIR"
+    local rime_frost="$CACHE_DIR/rime-frost"
+    local rime_frost_cn="$rime_frost/cn_dicts"
+    local rime_frost_en="$rime_frost/en_dicts"
+    local opencc="$CACHE_DIR/opencc/dictionaries"
+    mkdir -p "$rime_frost_cn" "$rime_frost_en" "$opencc"
+
+    local FROST_BASE="https://raw.githubusercontent.com/gaboolic/rime-frost/master"
+    gray "rime-frost (拼音):"
+    download_file "$FROST_BASE/rime_frost.dict.yaml"              "$rime_frost/rime_frost.dict.yaml"        "词库入口"
+    download_file "$FROST_BASE/cn_dicts/8105.dict.yaml"           "$rime_frost_cn/8105.dict.yaml"           "单字词库"
+    download_file "$FROST_BASE/cn_dicts/41448.dict.yaml"          "$rime_frost_cn/41448.dict.yaml"          "扩展字表"
+    download_file "$FROST_BASE/cn_dicts/base.dict.yaml"           "$rime_frost_cn/base.dict.yaml"           "基础词库 ~10MB"
+    download_file "$FROST_BASE/cn_dicts/ext.dict.yaml"            "$rime_frost_cn/ext.dict.yaml"            "扩展词库 ~8MB"
+    download_file "$FROST_BASE/cn_dicts/others.dict.yaml"         "$rime_frost_cn/others.dict.yaml"         "容错词"
+    download_file "$FROST_BASE/cn_dicts/corrections.dict.yaml"    "$rime_frost_cn/corrections.dict.yaml"    "错音词"
+    download_file "$FROST_BASE/cn_dicts/tencent.dict.yaml"        "$rime_frost_cn/tencent.dict.yaml"        "腾讯词频 ~17MB"
+    # emoji / 符号表：emoji 附加模块的数据源（aurora-config 的 EMOJI_MODULES，出厂只开 emoji）
+    mkdir -p "$rime_frost/opencc"
+    download_file "$FROST_BASE/opencc/emoji.txt"  "$rime_frost/opencc/emoji.txt"  "emoji 表"
+    download_file "$FROST_BASE/opencc/others.txt" "$rime_frost/opencc/others.txt" "符号 / 杂项表"
+    local cell
+    mkdir -p "$rime_frost/cn_dicts_cell"
+    for cell in $FROST_CELLS; do
+        download_file "$FROST_BASE/cn_dicts_cell/$cell.dict.yaml" "$rime_frost/cn_dicts_cell/$cell.dict.yaml" "扩展词库"
+    done
+
+    gray "rime-frost (英文):"
+    download_file "$FROST_BASE/en_dicts/en.dict.yaml"     "$rime_frost_en/en.dict.yaml"     "主词库"
+    download_file "$FROST_BASE/en_dicts/en_ext.dict.yaml" "$rime_frost_en/en_ext.dict.yaml" "扩展"
+
+    local pinyin_data="$CACHE_DIR/pinyin-data"
+    mkdir -p "$pinyin_data"
+    local PINYIN_BASE="https://raw.githubusercontent.com/mozillazg/pinyin-data/master"
+    gray "pinyin-data (汉字拼音反查):"
+    download_file "$PINYIN_BASE/pinyin.txt"         "$pinyin_data/pinyin.txt"         "全量底表(官方合成)"
+    download_file "$PINYIN_BASE/kXHC1983.txt"       "$pinyin_data/kXHC1983.txt"       "新华字典多音字"
+    download_file "$PINYIN_BASE/kTGHZ2013.txt"      "$pinyin_data/kTGHZ2013.txt"      "通用规范汉字"
+    download_file "$PINYIN_BASE/kMandarin_8105.txt" "$pinyin_data/kMandarin_8105.txt" "8105 标准首音"
+    download_file "$PINYIN_BASE/overwrite.txt"      "$pinyin_data/overwrite.txt"      "手工纠正"
+
+    local OPENCC_BASE="https://raw.githubusercontent.com/BYVoid/OpenCC/master/data/dictionary"
+    gray "OpenCC 简繁词典:"
+    download_file "$OPENCC_BASE/STCharacters.txt" "$opencc/STCharacters.txt" "简->繁 字级"
+    download_file "$OPENCC_BASE/STPhrases.txt"    "$opencc/STPhrases.txt"    "简->繁 词级"
+    # 繁->简 两张表供「繁入简出」（input.t2s）。用官方表而不是反转 ST*：繁→简的取舍
+    # （异体字归并、一简对多繁的收敛方向）官方表直接给出，反转出来的要自己定夺。
+    download_file "$OPENCC_BASE/TSCharacters.txt" "$opencc/TSCharacters.txt" "繁->简 字级"
+    download_file "$OPENCC_BASE/TSPhrases.txt"    "$opencc/TSPhrases.txt"    "繁->简 词级"
+    download_file "$OPENCC_BASE/TWVariants.txt"   "$opencc/TWVariants.txt"   "台湾字形"
+    download_file "$OPENCC_BASE/TWPhrases.txt"    "$opencc/TWPhrases.txt"    "台湾词汇"
+    download_file "$OPENCC_BASE/HKVariants.txt"   "$opencc/HKVariants.txt"   "香港字形"
+
+    # 五笔词库：下载上游原始档，主库与 extra 由 gen_dict 重排/拆分后写入 build 目录；
+    # district 不经 gen_dict，原样复制（见 assemble_data）
+    local rime_wubi="$CACHE_DIR/rime-wubi"
+    mkdir -p "$rime_wubi"
+    local WUBI_BASE="https://raw.githubusercontent.com/KyleBing/rime-wubi86-jidian/master"
+    gray "rime-wubi86-jidian (五笔):"
+    download_file "$WUBI_BASE/wubi86_jidian.dict.yaml"                "$rime_wubi/wubi86_jidian.dict.yaml"                "主词库"
+    download_file "$WUBI_BASE/wubi86_jidian_extra.dict.yaml"          "$rime_wubi/wubi86_jidian_extra.dict.yaml"          "扩展词库"
+    download_file "$WUBI_BASE/wubi86_jidian_extra_district.dict.yaml" "$rime_wubi/wubi86_jidian_extra_district.dict.yaml" "行政区域"
+
+    # Unicode CLDR emoji 中文注解 + emoji 白名单。不参与常规构建——emoji 命名表
+    # (custom_emoji_named.txt) 已入库，这些原始档只在需要重新生成它时用到：
+    #   cargo run -p aurora-tools --bin gen_emoji_names -- --cldr .cache/cldr \
+    #     --stopwords <gen_dict数据目录>/emoji_stopwords.txt --out <同目录>/custom_emoji_named.txt
+    # 许可证 Unicode-3.0，见 NOTICE.md
+    local cldr="$CACHE_DIR/cldr"
+    mkdir -p "$cldr"
+    local CLDR_BASE="https://raw.githubusercontent.com/unicode-org/cldr/main/common"
+    gray "Unicode CLDR (emoji 中文名):"
+    download_file "$CLDR_BASE/annotations/zh.xml"        "$cldr/zh.xml"         "emoji 注解"
+    download_file "$CLDR_BASE/annotationsDerived/zh.xml" "$cldr/zh_derived.xml" "派生注解(国旗)"
+    download_file "https://unicode.org/Public/emoji/latest/emoji-test.txt" "$cldr/emoji-test.txt" "emoji 白名单"
+
+    # 辅助码表：拼音候选的字形二次筛选（默认关闭的功能，见 schema.pinyin.aux_code）。
+    # 小鹤/自然码两张已是 `字=码` 行格式，零转换；笔画表来自 rime-stroke 的 .dict.yaml，
+    # 由 gen_aux_code 剥 YAML 头 + 按字集裁剪（字表来自 zispace/hanzi-chars）。
+    # ⚠️ rime-stroke 是 LGPL-3.0，与本仓 GPL-3.0 不同 —— 同 rime-frost 处理：只下载不入库，
+    # 产物随发行版分发并适用原许可，见 NOTICE.md。
+    local aux_code="$CACHE_DIR/aux-code"
+    mkdir -p "$aux_code/charset"
+    local AUX_BASE="https://raw.githubusercontent.com/HowcanoeWang/rime-lua-aux-code/main/aux_code"
+    gray "辅助码表:"
+    download_file "$AUX_BASE/flypy_full.txt"   "$aux_code/flypy_full.txt"   "小鹤形码"
+    download_file "$AUX_BASE/ZRM-wanxiang.txt" "$aux_code/ZRM-wanxiang.txt" "自然码形码"
+    download_file "https://raw.githubusercontent.com/rime/rime-stroke/master/stroke.dict.yaml" \
+        "$aux_code/stroke.dict.yaml" "笔画(上游全表)"
+    # 笔画表裁剪用的字集（文件名须与 gen_aux_code::CHARSET_FILES 一致；URL 段已百分号编码）
+    local HANZI_BASE="https://raw.githubusercontent.com/zispace/hanzi-chars/main"
+    download_file "$HANZI_BASE/data-charset/GB%2018030-2000.txt" \
+        "$aux_code/charset/GB 18030-2000.txt" "字集: GB18030 基本集"
+    download_file "$HANZI_BASE/data-charlist/%E3%80%8A%E9%80%9A%E7%94%A8%E8%A7%84%E8%8C%83%E6%B1%89%E5%AD%97%E8%A1%A8%E3%80%8B%EF%BC%882013%E5%B9%B4%EF%BC%89.txt" \
+        "$aux_code/charset/《通用规范汉字表》（2013年）.txt" "字集: 通用规范汉字表"
+    download_file "$HANZI_BASE/data-unicode/Unicode-CJK%20%E3%80%87.txt" \
+        "$aux_code/charset/Unicode-CJK 〇.txt" "字集: 〇"
+
+    # Emoji 候选扩展（设计见 docs/design/emoji-suggestion.md，出厂关闭）。
+    # ⚠️ rime-emoji 是 LGPL-3.0，与本仓 GPL-3.0 不同。政策与 rime-stroke 一致 —— 只下载不入库；
+    #    但**分发方式刻意不同**：本表随发行版**原样**分发（不做构建期转换），我们分发的因此是
+    #    逐字副本而非衍生作品，LGPL 的修改版义务不触发。繁→简归一与二进制化都在**用户本机**
+    #    首次启用时进行，产物是本机缓存，从不离开用户机器 ⇒ 不构成 conveying。
+    #    详见 NOTICE.md 与设计文档 §3.5。⛔ 切勿 include_bytes! 嵌进 exe（会构成 LGPL §4
+    #    Combined Work，须另行提供重新链接机制）。
+    local rime_emoji="$CACHE_DIR/rime-emoji"
+    mkdir -p "$rime_emoji/opencc"
+    local EMOJI_BASE="https://raw.githubusercontent.com/rime/rime-emoji/master"
+    gray "rime-emoji (候选扩展):"
+    download_file "$EMOJI_BASE/opencc/emoji_word.txt"     "$rime_emoji/opencc/emoji_word.txt"     "词→emoji"
+    download_file "$EMOJI_BASE/opencc/emoji_category.txt" "$rime_emoji/opencc/emoji_category.txt" "分类→emoji"
+    # 许可证全文必须随数据一起分发（GPL-3.0 §4: give all recipients a copy of this License）。
+    download_file "$EMOJI_BASE/LICENSE"                   "$rime_emoji/LICENSE"                   "LGPL-3.0"
+}
+
+# 随包附带的 rime-frost 细胞词库（上游 cn_dicts_cell/ 下的文件名，组装到 schemas/pinyin/ext/）。
+# 只挑体积小、开了对主库排序几乎无影响的（共约 3.6MB，见 docs/design/schema-dict-discovery.md §8）。
+# ⚠ 与 dev.ps1 的 $FrostCells、mac/dev.sh 的 FROST_CELLS、data/schemas/{pinyin,shuangpin}.schema.toml
+#   里的 cell_* 词库声明同步。
+FROST_CELLS="exthot idiom place history name name2 sport geography animal computer music media industry_product inputmethod chess chess2"
+
+# rime-frost others.txt 里不随包的分组（按分组标题整组剔除）。「著名表演艺术家」是成人影星的
+# 中日文名对照，即便模块默认关也不该进安装包。
+# ⚠ 与 dev.ps1 的 $FrostOthersExclude、mac/dev.sh 的同名变量同步。
+FROST_OTHERS_EXCLUDE="著名表演艺术家"
+
+# 按分组标题过滤 rime-frost 的 OpenCC 杂项表：$1 源，$2 目标。标题行形如
+# `----------偏旁部首<Tab>----------`（OpenCC 无注释语法，rime-frost 借假词条写标题），
+# 被剔除的组从其标题到下一个标题整段去掉；其余行原样保留（运行时按分组取，见 emojidict::select_sections）。
+strip_frost_sections() {
+    awk -v excl="$FROST_OTHERS_EXCLUDE" '
+        BEGIN { n = split(excl, ex, " ") }
+        /^----------[^\t]*\t-+[ \t]*$/ {
+            name = $0; sub(/^-+/, "", name); sub(/\t.*$/, "", name)
+            skip = 0
+            for (i = 1; i <= n; i++) if (name == ex[i]) skip = 1
+        }
+        !skip { print }
+    ' "$1" > "$2"
+}
+
+# 把 rime 主表 import_tables 里**没随包**的子表、以及全部 cn_dicts_cell/ 细胞词库注释掉（就地改写）。
+#
+# 上游 rime_frost.dict.yaml 默认导入 GB18030-2022 与 23 张细胞词库：
+# - 没随包的：原样带着的话每次加载都对缺的那些 warn 一遍。
+# - 细胞词库：一律裁掉，哪怕随包附带了。它们作为扩展词库由方案单独开关；留在主表里就成了
+#   主库的一部分、关不掉。随包的组装在 ext/ 而非 cn_dicts_cell/，按下面的存在判据本也会裁，
+#   这里单列是为了标对来源（[扩展词库] 而非 [未随包]）。
+# 其余子表的判据是「输出目录里有没有这个文件」而不是写死名单：以后多发几张不用回来改这里。
+# ⚠ dev.ps1 的 Remove-UnshippedImports、mac/dev.sh 的 strip_unshipped_imports 是同一件事，改一边要同步另外两边。
+strip_unshipped_imports() {
+    local main="$1" dir
+    dir="$(dirname "$main")"
+    awk -v dir="$dir" '
+        /^\.\.\.[[:space:]]*$/ { done = 1 }
+        !done && /^import_tables:/ { inblk = 1; print; next }
+        !done && inblk && /^[^[:space:]#-]/ { inblk = 0 }
+        !done && inblk && match($0, /^[[:space:]]*-[[:space:]]*[^[:space:]#]+/) {
+            entry = substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*-[[:space:]]*/, "", entry)
+            if (entry ~ /^cn_dicts_cell\//) {
+                print "  # [扩展词库] " substr($0, RSTART + RLENGTH - length(entry)); next
+            }
+            if (system("test -f \"" dir "/" entry ".dict.yaml\"") != 0) {
+                print "  # [未随包] " substr($0, RSTART + RLENGTH - length(entry)); next
+            }
+        }
+        { print }
+    ' "$main" > "$main.tmp" && mv -f "$main.tmp" "$main"
+}
+
+# 从 data/（源）+ .cache/（下载/生成）组装完整运行时数据到 $outdir/data/
+assemble_data() {
+    local outdir="${1:-$BUILD_DEV_DIR}"
+    local data="$outdir/data"
+    local schemas="$data/schemas"
+    local pinyin="$schemas/pinyin"
+    local pinyin_cn="$pinyin/cn_dicts"
+    local english="$schemas/english"
+    local rime_frost="$CACHE_DIR/rime-frost"
+
+    say "\n组装 data/ → $data"
+    rm -rf "$data"
+    # 单独跑 gd 时 $outdir(build_dev/)在全新检出里还不存在，下面的 cp -r 会因父目录缺失而整体失败，
+    # 且报错之后脚本照常往下跑——最终得到一份只有下载物、缺 data/ 源文件(配置/方案/主题)的残缺目录。
+    # do_full 总是先 mkdir，所以此前只有「全新检出直接 gd」才踩得到(CI 的 Linux 词库任务正是这条路)。
+    mkdir -p "$outdir"
+
+    # 1. 复制 data/ 源文件（configs、五笔词库、主题等）
+    cp -rf "$PRODUCT_ROOT/data" "$data"
+    # AI 工具在会话 cwd 下落的运行时状态（.omc/state/… 等）会随 cp 混进产物、被推到靶机
+    # 安装目录。它们都被 .gitignore 挡着，git 里看不见，只能在组装时剥掉。
+    strip_tool_state "$data"
+
+    # 1b. 合并 aurora_core/data/settings/（manifest.toml 等 RPC 元数据）。
+    # aurora-rpc 运行时优先读 data_dir()/settings/manifest.toml；
+    # 该文件不在 PRODUCT_ROOT/data/ 故需单独合并，否则 Windows 部署端缺失/过期。
+    if [ -d "$PROJECT_ROOT/data/settings" ]; then
+        mkdir -p "$data/settings"
+        cp -rf "$PROJECT_ROOT/data/settings/." "$data/settings/"
+    fi
+
+    # 2. rime-frost 拼音词库
+    mkdir -p "$pinyin_cn"
+    if [ -f "$rime_frost/rime_frost.dict.yaml" ]; then
+        cp -f "$rime_frost/rime_frost.dict.yaml" "$pinyin/"
+        for f in 8105.dict.yaml 41448.dict.yaml base.dict.yaml ext.dict.yaml \
+                 others.dict.yaml corrections.dict.yaml; do
+            [ -f "$rime_frost/cn_dicts/$f" ] && cp -f "$rime_frost/cn_dicts/$f" "$pinyin_cn/"
+        done
+        # 细胞词库放主词库目录的 ext/（扩展词库的默认发现目录），不沿用上游的 cn_dicts_cell/
+        mkdir -p "$pinyin/ext"
+        for f in $FROST_CELLS; do
+            [ -f "$rime_frost/cn_dicts_cell/$f.dict.yaml" ] && cp -f "$rime_frost/cn_dicts_cell/$f.dict.yaml" "$pinyin/ext/"
+        done
+        strip_unshipped_imports "$pinyin/rime_frost.dict.yaml"
+    else
+        warn "缺 .cache/rime-frost/，拼音词库不可用（运行 gen-data 下载）"
+    fi
+
+    # 3. 英文词库
+    mkdir -p "$english"
+    for f in en.dict.yaml en_ext.dict.yaml; do
+        [ -f "$rime_frost/en_dicts/$f" ] && cp -f "$rime_frost/en_dicts/$f" "$english/"
+    done
+
+    # 4.（unigram.txt 不再随 data/ 分发：引擎侧的读取链已移除，词图打分改用词条自身的
+    #    词典权重，见 aurora-engine/pinyin/lattice.rs::score_node_inner。
+    #    .cache 里的 unigram.txt 仍由 gen-data 生成 —— gen_dict 用它给五笔扩展词库的
+    #    CJK 条目赋权，见 gen_dict/extra.rs::assign_weights。）
+
+    # 4b. 汉字拼音反查表（候选拼音提示/拼音方案自动出码）
+    local pinyin_map_cache="$CACHE_DIR/pinyin-data/pinyin_map.txt"
+    if [ -f "$pinyin_map_cache" ]; then
+        cp -f "$pinyin_map_cache" "$data/pinyin_map.txt"
+    else
+        warn "缺 pinyin_map.txt（运行 gen-data 生成）"
+    fi
+
+    # 5. OpenCC 编译 .octrie（Rust 工具 gen_opencc）
+    mkdir -p "$data/opencc"
+    if [ -d "$CACHE_DIR/opencc/dictionaries" ] && \
+       [ "$(ls "$CACHE_DIR/opencc/dictionaries/"*.txt 2>/dev/null | wc -l)" -gt 0 ]; then
+        gray "编译 OpenCC → .octrie ..."
+        ( cd "$RUST_WORKSPACE" && cargo run -q --bin gen_opencc -- \
+            --src "$CACHE_DIR/opencc/dictionaries" --out "$data/opencc" ) \
+            || warn "OpenCC 编译失败（简繁转换不可用）"
+    else
+        warn "缺 .cache/opencc/，OpenCC 不可用（运行 gen-data 下载）"
+    fi
+
+    # 6. 五笔词库（Rust 工具 gen_dict）：主库按词频重排 + extra 拆成 4 库。
+    # 产物直接写进 build 目录、不入版本库 —— 源码树 data/schemas/wubi86/ 只保留
+    # wubi86.schema.toml 与字体等真正的源文件，避免把生成物误当源文件手工编辑。
+    local rime_wubi="$CACHE_DIR/rime-wubi"
+    local wubi_out="$data/schemas/wubi86"
+    if [ -f "$rime_wubi/wubi86_jidian.dict.yaml" ]; then
+        gray "生成五笔词库 (gen_dict) ..."
+        mkdir -p "$wubi_out"
+        # district 由 gen_dict 的 passthrough 一并处理（原样透传 + 清洗头部）
+        ( cd "$RUST_WORKSPACE" && cargo run -q -p aurora-tools --bin gen_dict -- \
+            --cache "$CACHE_DIR" --out "$wubi_out" --report "$rime_wubi" ) \
+            || warn "五笔词库生成失败（五笔方案不可用）"
+    else
+        warn "缺 .cache/rime-wubi/，五笔词库不可用（运行 gen-data 下载）"
+    fi
+
+    # 7. 辅助码表（Rust 工具 gen_aux_code）：小鹤/自然码原样透传，笔画表 YAML→`字=码` + 字集裁剪。
+    # --schema-out 另从同一份笔画数据产出「笔画」码表方案的词库 schemas/stroke/stroke.dict.yaml
+    # （权重取 rime-frost 单字字频；方案文件 stroke.schema.toml 入库、已随第 1 步复制）。
+    # 全拼默认辅助码引用的就是这个方案（schema:stroke）；stroke.txt 照旧产出，供旧写法的用户 override。
+    # 与五笔同理：产物只进 build 目录、不入版本库（rime-stroke 是 LGPL-3.0，见 NOTICE.md）。
+    # 功能出厂关闭，故缺表只是「辅助码 / 笔画方案用不了」，不影响其它一切 —— 用 warn 不中断构建。
+    if [ -f "$CACHE_DIR/aux-code/stroke.dict.yaml" ]; then
+        gray "生成辅助码表 + 笔画方案词库 (gen_aux_code) ..."
+        mkdir -p "$schemas/aux_code"
+        ( cd "$RUST_WORKSPACE" && cargo run -q -p aurora-tools --bin gen_aux_code -- \
+            --cache "$CACHE_DIR" --out "$schemas/aux_code" --schema-out "$schemas" ) \
+            || warn "辅助码表生成失败（辅助码功能与笔画方案不可用）"
+    else
+        warn "缺 .cache/aux-code/，辅助码不可用（运行 gen-data 下载）"
+    fi
+
+    # 8. Emoji 候选扩展表：**原样复制**，不做任何构建期转换（与 5/6/7 的生成物刻意不同）。
+    # 繁→简归一、撞键合并与二进制化全部推迟到用户本机首次启用时 —— 这样我们分发的是
+    # LGPL 原文的逐字副本，而非衍生作品（见 NOTICE.md 与 design/emoji-suggestion.md §3.5）。
+    # LICENSE 必须一并复制：缺了它这份分发就不合规。
+    # 功能出厂关闭，故缺表只是「emoji 扩展用不了」，用 warn 不中断构建。
+    local emoji_cache="$CACHE_DIR/rime-emoji"
+    if [ -f "$emoji_cache/opencc/emoji_word.txt" ]; then
+        gray "复制 emoji 扩展表 (原样) ..."
+        mkdir -p "$data/emoji"
+        cp -f "$emoji_cache/opencc/emoji_word.txt" "$data/emoji/"
+        # 分类表可缺（出厂关），缺了不影响主表。
+        [ -f "$emoji_cache/opencc/emoji_category.txt" ] \
+            && cp -f "$emoji_cache/opencc/emoji_category.txt" "$data/emoji/"
+        if [ -f "$emoji_cache/LICENSE" ]; then
+            cp -f "$emoji_cache/LICENSE" "$data/emoji/LICENSE"
+        else
+            warn "缺 rime-emoji LICENSE，该数据不得分发（重跑 gen-data）"
+        fi
+    else
+        warn "缺 .cache/rime-emoji/，emoji 扩展不可用（运行 gen-data 下载）"
+    fi
+
+    # 8b. rime-frost 的 emoji / 符号表（emoji 附加模块）。GPL-3.0，与上面的拼音词库同源同许可。
+    # others.txt 剔除不随包的分组（FROST_OTHERS_EXCLUDE），其余分组运行时按模块取。
+    if [ -f "$rime_frost/opencc/emoji.txt" ]; then
+        mkdir -p "$data/emoji"
+        cp -f "$rime_frost/opencc/emoji.txt" "$data/emoji/frost_emoji.txt"
+        [ -f "$rime_frost/opencc/others.txt" ] \
+            && strip_frost_sections "$rime_frost/opencc/others.txt" "$data/emoji/frost_others.txt"
+    else
+        warn "缺 .cache/rime-frost/opencc/，白霜 emoji 模块不可用（运行 gen-data 下载）"
+    fi
+
+    gray "data/ 组装完成 ($(find "$data" -type f | wc -l) 文件)"
+}
+
+# ---------- 实测 / 远程部署（SSH）----------
+
+# 本机跑候选 REPL。data 目录优先 build_dev/data/，其次 .cache/pulled-data/。
+do_repl() {
+    local data="${1:-}"
+    if [ -z "$data" ]; then
+        if [ -f "$BUILD_DEV_DIR/data/schemas/pinyin/cn_dicts/base.dict.yaml" ]; then
+            data="$BUILD_DEV_DIR/data"
+        elif [ -d "$CACHE_DIR/pulled-data" ]; then
+            data="$CACHE_DIR/pulled-data"
+            gray "使用 pull-data 拉取的词库: $data"
+        else
+            warn "未找到词库数据；请先运行 gen-data 或 pull-data"
+            data="$BUILD_DEV_DIR/data"
+        fi
+    fi
+    say "\n启动候选 REPL (data=$data)..."
+    cd "$PROJECT_ROOT" && AURORA_DATA="$data" cargo run --release -p aurora-repl --bin wind_repl -- "$data"
+}
+
+require_remote() {
+    if [ -z "$AURORA_REMOTE" ]; then
+        err "未配置 AURORA_REMOTE：请在 $SCRIPT_DIR/deploy.local 设置 SSH 目标"
+        echo "  示例: AURORA_REMOTE=me@192.0.2.20"
+        return 1
+    fi
+}
+
+# 解析远端安装目录（按 profile）。结果写入全局 REMOTE_DIR（去尾斜杠避免 // ）。
+#   release → AURORA_REMOTE_DIR_RELEASE（兼容旧 AURORA_REMOTE_DIR）；dev → AURORA_REMOTE_DIR_DEV
+resolve_remote_dir() {
+    local profile="${1:-release}"
+    if [ "$profile" = dev ]; then
+        REMOTE_DIR="${AURORA_REMOTE_DIR_DEV:-}"
+        [ -n "$REMOTE_DIR" ] || { err "未配置 AURORA_REMOTE_DIR_DEV（deploy.local）"; return 1; }
+    else
+        REMOTE_DIR="${AURORA_REMOTE_DIR_RELEASE:-${AURORA_REMOTE_DIR:-}}"
+        [ -n "$REMOTE_DIR" ] || { err "未配置 AURORA_REMOTE_DIR_RELEASE（deploy.local）"; return 1; }
+    fi
+    REMOTE_DIR="${REMOTE_DIR%/}"
+}
+
+# 在远端(实测靶机)跑 PowerShell：脚本经 UTF-16LE+base64 编码传入，彻底避开 bash/ssh/cmd
+# 多层引号。★ 这是【靶机】通道；编译机那条走 lib/remote-build.sh 的 rbuild_ps，别混用。
+#
+# ⚠️ 三个开关缺一不可，都是为了让【返回值可读】：
+#   $ProgressPreference  Windows PowerShell 5.1 即使给了 -OutputFormat Text，仍会把
+#                        progress 记录序列化成 `#< CLIXML <Objs...>` 吐到 stderr(实测:
+#                        一句 Get-ChildItem 就带出两坨"正在准备首次使用模块")。取单个
+#                        值的调用(如 pull-log 找最新文件名)会被这堆 XML 污染成垃圾。
+#   -OutputFormat Text   同上，抑制 stdout 侧的对象序列化。
+#   OutputEncoding UTF8  中文 Windows 默认代码页 936(GBK)，不设则中文路径/报错全乱码。
+remote_ps() {
+    command -v iconv >/dev/null 2>&1 || { err "需要 iconv（编码远端 PowerShell 脚本）"; return 1; }
+    local script b64
+    script="\$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; $1"
+    b64="$(printf '%s' "$script" |  iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
+    ssh "$AURORA_REMOTE" "powershell -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $b64"
+}
+
+# 本 profile 的二进制基名（exe/dll）。data/ 不在此（不会被锁，直接 scp 覆盖）。
+#
+# ⚠️ x86 那个是 wind_tsf_x86_dev.dll 而不是 wind_tsf_dev_x86.dll —— 后缀顺序是
+#    base + _x86 + _dev，真源是 aurora_tsf/Makefile 的 TARGET := wind_tsf$(ARCHSUFFIX)$(DBGSUFFIX)。
+#    写反了【只在 dev 变体上发作】(release 的 sfx 为空，两种写法碰巧同名)，且是静默的:
+#    remote_rename_aside 的 Test-Path 为假就跳过，不报错；于是它从不让路，仅当恰好有
+#    32 位宿主正加载着它时 scp 覆盖才失败。判据: 靶机 dev 目录里 wind_tsf_dev.dll 攒了
+#    一堆 .old_*，而 wind_tsf_x86_dev.dll 一个都没有 —— 那就是它从没被让路过。
+bins_for() {
+    local sfx=""; [ "$1" = dev ] && sfx="_dev"
+    printf '%s\n' "aurora_input${sfx}.exe" "wind_tsf${sfx}.dll" "wind_tsf_x86${sfx}.dll"
+}
+
+# 把 bash 列表转成 PowerShell 字符串数组字面量： a b → 'a','b'
+ps_list() { local out="" x; for x in "$@"; do out="$out${out:+,}'$x'"; done; printf '%s' "$out"; }
+
+# 终止远端进程（按 profile 决定 _dev 后缀；mod 限定只杀该模块的进程）。
+#
+# ⚠️ **全量推送（mod 为空）必须连设置端一起停**：`do_push_full` 推的是整个 build[_dev]/
+# 目录，里面有 aurora_setting[_dev].exe，而运行中的 exe 在 Windows 上**不可覆盖** ⇒ scp 直接
+# 报 `dest open "...wind_setting_dev.exe": Failure` 整条推送失败。此前这里只停主进程，
+# 于是「在设置页配完按键、接着部署」这条最常见的路径必然撞上（2026-09-18 实测撞到）。
+#
+# ⛔ **aurora_portable.exe 不在此列，别加**：它是两个变体**同名**的唯一产物（无 _dev 后缀，
+# 见 build/ 与 build_dev/ 各一份）。`taskkill /IM` 按映像名匹配，杀它会连带结束**正式版**
+# 的便携版进程 —— 而 dev 变体存在的全部意义就是「重部署不打断正在用的正式版」
+# （见 scripts/deploy.local 开头那段）。它开着时仍会让 scp 失败，那种情况由下方 scp 的
+# 错误提示点名，交给人去关。
+#
+# ★ 与 `dev.ps1` 的 `Stop-ProcessForFile` **有意不同**，不是这边漏了：那边逐个文件按映像名
+#   杀，**包括** aurora_portable。差异的理由是部署位置不同 —— ps1 是**本机**部署（人就坐在那台
+#   机器前，杀错了当场看得见），dev.sh 推的是**远程靶机**（人在另一台机器上，静默杀掉他正在
+#   用的便携版，他只会看到输入法突然没了）。远程侧该更保守。
+#   ⚠️ 设置端那一条则是这边**真的落后了**：ps1 侧一直杀（它的注释明确点了
+#   「独立打开的设置程序 aurora_setting[_dev].exe ... 覆盖前需先按名杀掉」），dev.sh 直到
+#   2026-09-18 才补上。两处同构实现漂移，本仓反复吃亏的形态，改任一侧时请对着另一侧看一眼。
+remote_taskkill() {
+    local profile="$1" mod="${2:-}" sfx=""
+    [ "$profile" = dev ] && sfx="_dev"
+    local procs=()
+    case "$mod" in
+        core)    procs=("aurora_input${sfx}.exe") ;;
+        tsf)     procs=("aurora_input${sfx}.exe") ;;  # 改 DLL 也需停宿主
+        "")      procs=("aurora_input${sfx}.exe" "aurora_setting${sfx}.exe") ;;
+    esac
+    local p
+    for p in "${procs[@]}"; do
+        # taskkill 的退出码可用：杀成功为 0，进程不存在为非 0。据此只在**真的停了**
+        # 某个进程时才出一行 —— 尤其设置端，静默关掉会让人以为自己忘了点保存。
+        if ssh "$AURORA_REMOTE" "taskkill /F /IM $p" >/dev/null 2>&1; then
+            case "$p" in
+                aurora_setting*) say "  已关闭设置端 $p（它占着自己的 exe，不关则推送失败；未保存的设置会丢失）" ;;
+                *)             say "  已停止 $p" ;;
+            esac
+        fi
+    done
+    sleep 1
+}
+
+# 把加载中的旧二进制改名让路（已加载的 DLL/EXE 可改名、不可覆盖）。$@ = 基名列表。
+remote_rename_aside() {
+    local arr; arr="$(ps_list "$@")"
+    remote_ps "\$ErrorActionPreference='SilentlyContinue'; \$d='$REMOTE_DIR'; \
+foreach(\$n in @($arr)){ \$p=Join-Path \$d \$n; if(Test-Path \$p){ Rename-Item \$p (\$n+'.old_'+(Get-Random)) -Force } }" >/dev/null 2>&1 || true
+}
+
+# 部署期闸门：HKLM\Software\WindInput[Dev] 的 InstallerRunning="1" 时，宿主里的 TSF DLL
+# 连不上管道也不自行拉起服务（aurora_tsf/src/IPCClient.cpp 的 _StartService → _InstallerGuardBlocks）。
+#
+# ★ 为什么必须有：dev.sh 此前从不写它（dev.ps1 早有 Set-InstallerRunning，又一处两侧漂移）。
+#   taskkill 之后、改名让路之前的那一两秒里，靶机上任一宿主敲键/切焦点，DLL 就按**原路径**
+#   CreateProcess 起了**旧 exe**；随后改名让路把这个正在跑的旧 exe 改成 .old_*，scp 写上新 exe，
+#   脚本末尾的计划任务启动被单例挡掉 —— 而旧的存活检查按映像名 tasklist，照样报「存活」。
+#   2026-09-24 实测：服务日志 23:15:44 起的是 build 14:39Z，新 exe mtime 23:15:47。
+#
+# ⚠️ 键按变体分：DLL 读的是 "Software\\" AURORA_APP_NAME（dev 为 WindInputDev，见
+#   aurora_tsf/include/Globals.h），写错变体就是一道不生效的闸门。
+# ⚠️ 开启时顺手删掉 InstallerRunningOwner：若残留一个已死安装器的 owner，DLL 走身份校验
+#   判「主人已死 → 遗物」而放行，闸门静默失效。无 owner 时走 10 分钟年龄兜底 —— 脚本中途
+#   被打断没来得及清，最多挡 10 分钟，不会永久卡死。
+# ⚠️ 结尾的 exit 0 不能省：值不存在时 Remove-ItemProperty 虽被 -EA 静默，powershell 仍以
+#   「最后一条命令失败」退出码 1 收场，于是写成功了也报失败（实跑踩到）。
+# ⚠️ 键写入需要管理员 SSH 会话（同步 TSF 系统副本本来就需要）；失败只告警不中断，
+#   靠 remote_start_main 的「新版本存活」校验兜底。
+remote_deploy_guard() {
+    local profile="$1" on="$2" app="AuroraInput"
+    [ "$profile" = dev ] && app="AuroraInputDev"
+    local k="HKLM:\\Software\\$app"
+    if [ "$on" = on ]; then
+        remote_ps "\$ErrorActionPreference='Stop'; if(-not (Test-Path '$k')){ New-Item -Path '$k' -Force | Out-Null }; \
+Set-ItemProperty -Path '$k' -Name InstallerRunning -Value '1' -Type String -Force; \
+Remove-ItemProperty -Path '$k' -Name InstallerRunningOwner -EA SilentlyContinue; exit 0" >/dev/null 2>&1 \
+            && gray "  部署闸门开启：$k InstallerRunning=1（推送期间 TSF DLL 不自动拉起服务）" \
+            || warn "  部署闸门开启失败（$k）；推送期间宿主可能拉起旧 exe，靠最后的版本校验兜底"
+    else
+        remote_ps "\$ErrorActionPreference='Stop'; if(Test-Path '$k'){ Set-ItemProperty -Path '$k' -Name InstallerRunning -Value '0' -Type String -Force }" >/dev/null 2>&1 \
+            || warn "  部署闸门清除失败（$k InstallerRunning 仍为 1，10 分钟后 DLL 按陈旧标记放行）"
+    fi
+}
+
+# 开闸 + 装 trap：推送途中 Ctrl+C / kill / 断线也要关闸，否则 InstallerRunning=1 残留，
+# 靶机上 DLL 最多 10 分钟不自行拉起服务（表现为「部署完却打不出字」）。
+# 做法同 rbuild_trap_on：信号里先收尾，再恢复原 trap 并把同一信号重发给自己，
+# 这样退出状态仍是「被信号中断」。正常结束由 deploy_guard_close 关闸并恢复原 trap。
+deploy_guard_open() {
+    local profile="$1" sig
+    DEPLOY_GUARD_SAVED_TRAPS="$(trap -p INT TERM HUP)"
+    remote_deploy_guard "$profile" on
+    for sig in INT TERM HUP; do
+        # shellcheck disable=SC2064  # profile 与 sig 要在装 trap 时展开
+        trap "remote_deploy_guard '$profile' off; trap - INT TERM HUP; eval \"\$DEPLOY_GUARD_SAVED_TRAPS\"; kill -$sig \$\$" "$sig"
+    done
+}
+deploy_guard_close() {
+    remote_deploy_guard "$1" off
+    trap - INT TERM HUP
+    eval "$DEPLOY_GUARD_SAVED_TRAPS"
+}
+
+# 启动远端主进程，并校验跑起来的**确实是刚推上去的那份 exe**。
+# 注意：经 SSH 直接 Start-Process 的子进程会随 SSH 断开被 Job Object 连带杀掉
+# （症状：部署后看不到进程）。改用计划任务(schtasks)在用户交互会话拉起，脱离 SSH 生命周期。
+#
+# ★ 判据是「运行中进程映像 = 安装目录里那份 exe」（MD5 相同且映像路径不是 .old_*），
+#   不是「有个叫 aurora_input*.exe 的进程」：后者在推送途中被拉起的旧进程（映像已被改名成
+#   .old_*）面前恒真，见 remote_deploy_guard。
+#   期望值取**远端**安装目录里的 exe，不取本地产物：只推 tsf（pm1/pdm1）时远端 exe 本就
+#   不是本地这份，拿本地比会把好好的进程当旧版本杀掉；全量/core 推送后远端那份即新文件。
+#   但只比远端会漏掉「scp 静默没覆盖上」（远端仍是旧 exe，进程与它一致照样判通过）：故
+#   core/全量推送时传第 2 参 = 本地产物路径，先校验远端 exe 的 MD5 == 本地那份；只推 tsf 不传。
+#   不一致就把该变体进程全停掉再起，最多 3 轮，仍不一致返回 1。
+#   映像路径读不到（权限不足时 Path 为 null）的进程无从比对，单独报出、不当版本不符去杀。
+remote_start_main() {
+    local profile="$1" sfx=""; [ "$profile" = dev ] && sfx="_dev"
+    local name="aurora_input${sfx}" exe="$REMOTE_DIR/aurora_input${sfx}.exe"
+    local want; want="$(remote_ps "(Get-FileHash -Algorithm MD5 -LiteralPath '$exe' -EA Stop).Hash" 2>/dev/null | tr -d '\r' | tail -1)"
+    [[ "$want" =~ ^[0-9A-F]{32}$ ]] || { err "读不到远端 $exe 的 MD5，无法校验运行中的版本"; return 1; }
+    if [ -n "${2:-}" ]; then
+        local local_md5; local_md5="$(md5sum "$2" | cut -d' ' -f1 | tr 'a-f' 'A-F')"
+        if [ "$want" != "$local_md5" ]; then
+            err "远端 $exe 与本地 $2 不一致（远端 MD5 $want ≠ 本地 $local_md5）—— 推送没覆盖上，别按新版本测。"
+            return 1
+        fi
+        say "远端 exe = 本地产物（MD5 ${want:0:8}…）。"
+    fi
+    local try out known
+    for try in 1 2 3; do
+        say "启动远端主进程 $name.exe (计划任务,脱离 SSH 会话；第 $try 轮)..."
+        remote_ps "\$ErrorActionPreference='SilentlyContinue'; \
+\$exe='$exe'.Replace('/','\\'); \$wd='$REMOTE_DIR'.Replace('/','\\'); \
+\$a=New-ScheduledTaskAction -Execute \$exe -WorkingDirectory \$wd; \
+Register-ScheduledTask -TaskName 'WindInputDeployBoot' -Action \$a -Force | Out-Null; \
+Start-ScheduledTask -TaskName 'WindInputDeployBoot'; Start-Sleep -Seconds 2; \
+Unregister-ScheduledTask -TaskName 'WindInputDeployBoot' -Confirm:\$false" >/dev/null 2>&1 || true
+        sleep 2
+        # 每行: pid|映像MD5|映像路径。映像已被改名让路的旧进程，Path 指向 .old_*，MD5 对不上。
+        out="$(remote_ps "Get-Process -Name '$name' -EA SilentlyContinue | ForEach-Object { \
+\$h=''; try { \$h=(Get-FileHash -Algorithm MD5 -LiteralPath \$_.Path -EA Stop).Hash } catch {}; \
+'{0}|{1}|{2}' -f \$_.Id, \$h, \$_.Path }" 2>/dev/null | tr -d '\r')"
+        if printf '%s\n' "$out" | grep -v '\.old_' | grep -q "^[0-9]*|$want|."; then
+            say "新版本主进程已启动并存活（映像 = 安装目录 exe，MD5 ${want:0:8}…）。"
+            return 0
+        fi
+        known="$(printf '%s\n' "$out" | grep -v '^[0-9]*||$' | grep -v '^$')"
+        if [ -n "$out" ] && [ -z "$known" ]; then
+            err "  无法读取 $name 的映像路径（Path 为空，多半是 SSH 会话权限不足），无从判断是否新版本:"
+            printf '%s\n' "$out" | sed 's/^/    /'
+            return 1
+        fi
+        if [ -n "$out" ]; then
+            warn "  运行中的 $name 不是刚推上去的版本（占着单例，新进程起不来）:"
+            printf '%s\n' "$out" | sed 's/^/    /'
+        else
+            warn "  未检测到 $name 进程。"
+        fi
+        ssh "$AURORA_REMOTE" "taskkill /F /IM $name.exe" >/dev/null 2>&1 || true
+        sleep 1
+    done
+    err "3 轮后远端运行的仍不是安装目录里那份 exe（期望 MD5 $want）—— 部署未生效，别按新版本测。"
+    return 1
+}
+
+# TSF DLL 的**系统副本**同步：<System32|SysWOW64>\IME\<App>\。
+#
+# ★ 为什么必须有这一步：TSF 由 COM 按注册表 InprocServer32 加载，而现行部署注册的是
+#   系统副本（见 dev.ps1 的 Get-TsfSystemDir / Register-Tsf，DLL 必须在系统目录才能被
+#   CS2 等 Trusted Mode 宿主放行）。只推安装目录 = 宿主加载的还是上一次 install 时的
+#   那份旧 DLL，**且全程没有任何报错**：scp 成功、进程重启成功、MD5 与本地一致 ——
+#   一致的是没人加载的那份。2026-09-15 靶机实测因此空转了四轮，判据全落在 Program Files
+#   那份上，而 Notepad 里跑的是三天前的 DLL（真凭据是 TSF 日志首行的 build=<日期>，
+#   以及 Get-Process 的 Modules 里 wind_tsf*.dll 的 FileName）。
+#
+# 源取远端安装目录里刚推上去的那份（不二次 scp）；改名让路后覆盖，再回校 hash。
+remote_sync_tsf_system_copy() {
+    local profile="$1" sfx="" app="AuroraInput"
+    [ "$profile" = dev ] && { sfx="_dev"; app="AuroraInputDev"; }
+    say "同步 TSF 系统副本 → %SystemRoot%\\{System32,SysWOW64}\\IME\\$app\\ ..."
+    # ⚠ 必须在 64 位 PowerShell 里跑：32 位进程访问 System32 会被 WOW64 文件系统重定向
+    # 静默改写到 SysWOW64 —— x64 DLL 装错地方，而下面的 Get-FileHash 比的是**重定向后的
+    # 同一个文件**，校验照样通过。又是一次「全程零报错但换错了文件」，正是本函数要根治的
+    # 那类故障。判据与 dev.ps1 的 Get-TsfSystemDir 同源（那边也是 throw，不做自动纠正：
+    # 静默纠正会掩盖调用方本身跑错了架构这一事实）。
+    remote_ps "\$ErrorActionPreference='Stop'; \
+if(-not [Environment]::Is64BitProcess){ throw '需要 64 位 PowerShell（32 位进程访问 System32 会被 WOW64 重定向到 SysWOW64）' }; \
+\$stamp=Get-Date -Format 'yyyyMMddHHmmss'; \
+\$pairs=@( \
+ @{src=Join-Path '$REMOTE_DIR' 'wind_tsf${sfx}.dll'; dst=Join-Path \$env:SystemRoot 'System32\\IME\\$app\\wind_tsf${sfx}.dll'; required=\$true}, \
+ @{src=Join-Path '$REMOTE_DIR' 'wind_tsf_x86${sfx}.dll'; dst=Join-Path \$env:SystemRoot 'SysWOW64\\IME\\$app\\wind_tsf_x86${sfx}.dll'; required=\$false} ); \
+\$fail=0; \
+foreach(\$p in \$pairs){ try { \
+ if(-not (Test-Path \$p.src)){ \
+   if(\$p.required){ \"FAIL  无源文件 \$(\$p.src)\"; \$fail++ } else { \"SKIP  无源文件 \$(\$p.src)\" } continue } \
+ \$dir=Split-Path \$p.dst -Parent; if(-not (Test-Path \$dir)){ New-Item -ItemType Directory -Force -Path \$dir | Out-Null } \
+ if(Test-Path \$p.dst){ Rename-Item -LiteralPath \$p.dst -NewName ((Split-Path \$p.dst -Leaf)+'.old_'+\$stamp) -Force } \
+ Copy-Item -LiteralPath \$p.src -Destination \$p.dst -Force; \
+ \$a=(Get-FileHash -Algorithm MD5 \$p.src).Hash; \$b=(Get-FileHash -Algorithm MD5 \$p.dst).Hash; \
+ if(\$a -eq \$b){ \"OK    \$(\$p.dst)\" } else { \"FAIL  hash 不符 \$(\$p.dst)\"; \$fail++ } \
+} catch { \"FAIL  \$(\$p.dst) :: \$(\$_.Exception.Message)\"; \$fail++ } } \
+if(\$fail -gt 0){ exit 1 }" || {
+        err "TSF 系统副本同步失败（需要管理员权限的 SSH 会话）"; return 1; }
+    remote_ps "\$ErrorActionPreference='SilentlyContinue'; foreach(\$d in @((Join-Path \$env:SystemRoot 'System32\\IME\\$app'),(Join-Path \$env:SystemRoot 'SysWOW64\\IME\\$app'))){ Get-ChildItem -Path \$d -Filter '*.old_*' -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue }" >/dev/null 2>&1 || true
+}
+
+# 清理历史改名残留 .old_*（仍被占用的会自动跳过，下次部署再清）。
+# AI 工具（Claude Code / oh-my-claudecode 等）在会话 cwd 下落的运行时状态目录。
+# 与 lib/remote-build.sh 的 RBUILD_EXCLUDE_DIRS 里那几项同源：那边挡的是「上传到编译机」，
+# 这边挡的是「组装进产物 / 推到靶机」。dev.ps1 的 $ToolStateDirs 是同一份清单。
+TOOL_STATE_DIRS=".omc .omx .claude .remember"
+
+strip_tool_state() {
+    local root="$1" d
+    for d in $TOOL_STATE_DIRS; do
+        find "$root" -type d -name "$d" -prune -exec rm -rf {} + 2>/dev/null || true
+    done
+}
+
+# 靶机安装目录里此前推上去的同类残留（scp 只叠加不删除，光停止推送清不掉）。
+remote_cleanup_tool_state() {
+    local names="" d
+    for d in $TOOL_STATE_DIRS; do names+="${names:+,}'$d'"; done
+    remote_ps "Get-ChildItem -LiteralPath '$REMOTE_DIR' -Recurse -Force -Directory -EA SilentlyContinue | Where-Object { @($names) -contains \$_.Name } | Remove-Item -Recurse -Force -EA SilentlyContinue" >/dev/null 2>&1 || true
+}
+
+remote_cleanup_old() {
+    remote_ps "Get-ChildItem -Path '$REMOTE_DIR' -Filter '*.old_*' -EA SilentlyContinue | Remove-Item -Force -EA SilentlyContinue" >/dev/null 2>&1 || true
+}
+
+# 全量 push：整个 build[_dev]/ → 远端安装目录（先改名锁定二进制让路，再 scp 覆盖，最后起主进程）。
+#   p1 / pd1
+do_push_full() {
+    local profile="${1:-release}"
+    require_remote || return 1
+    resolve_remote_dir "$profile" || return 1
+    local outdir; outdir="$(out_for "$profile")"
+    [ -d "$outdir" ] || { err "无 $outdir；请先 '$([ "$profile" = dev ] && echo d1 || echo 1)' 全构建。"; return 1; }
+    deploy_guard_open "$profile"
+    _push_full_body "$profile" "$outdir"
+    local rc=$?
+    deploy_guard_close "$profile"
+    return $rc
+}
+
+_push_full_body() {
+    local profile="$1" outdir="$2"
+    say "\n停止远端进程（$profile）..."
+    remote_taskkill "$profile"
+    ssh "$AURORA_REMOTE" "if not exist \"${REMOTE_DIR//\//\\}\" mkdir \"${REMOTE_DIR//\//\\}\"" >/dev/null 2>&1 || true
+    local bins; mapfile -t bins < <(bins_for "$profile")
+    say "改名让路（加载中的 DLL/EXE）..."
+    remote_rename_aside "${bins[@]}"
+    # 产物可能是编译机回传的、或本机旧组装留下的，推送前再剥一次，不依赖组装那一步。
+    strip_tool_state "$outdir"
+    say "全量推送 $outdir/ → $AURORA_REMOTE:$REMOTE_DIR/"
+    if scp -r "$outdir"/* "$AURORA_REMOTE:$REMOTE_DIR/"; then
+        # ★ 与 do_push_module 同理：不同步系统副本，新 TSF DLL 不会被任何宿主加载。
+        remote_sync_tsf_system_copy "$profile" || return 1
+        local sfx=""; [ "$profile" = dev ] && sfx="_dev"
+        remote_start_main "$profile" "$outdir/aurora_input${sfx}.exe" || return 1
+        remote_cleanup_old
+        remote_cleanup_tool_state
+        say "已全量部署并启动（$profile）。"
+    else
+        err "scp 失败：检查 $([ "$profile" = dev ] && echo AURORA_REMOTE_DIR_DEV || echo AURORA_REMOTE_DIR_RELEASE) 路径(正斜杠)、SSH、磁盘。"
+        # 报 dest open "...xxx.exe": Failure 基本就是被占用。主程序与设置端上面已经停了，
+        # 剩下最可能的是便携版——它两个变体同名，脚本刻意不杀（见 remote_taskkill 的 ⛔）。
+        err "  若报 dest open \"...exe\": Failure，是该文件正被占用：aurora_portable.exe 请手动关闭"
+        err "  （主程序与设置端脚本已自动停止；便携版两个变体同名，杀它会连带结束正式版，故不自动处理）"
+        return 1
+    fi
+}
+
+# 单模块 push：只推对应文件（不重编，用现有 build[_dev]/ 产物）。
+#   pm1=tsf  pm2=core （pd 前缀 = dev）
+do_push_module() {
+    local profile="${1:-release}" mod="$2"
+    require_remote || return 1
+    resolve_remote_dir "$profile" || return 1
+    local outdir; outdir="$(out_for "$profile")"
+    local sfx=""; [ "$profile" = dev ] && sfx="_dev"
+    local files=()
+    case "$mod" in
+        # ★ 名字取自 bins_for 而不是在这里再拼一遍 —— 这两处曾各写一份拼写规则, x86 的
+        #   后缀顺序在此处写反过(wind_tsf_dev_x86 ≠ 真产物 wind_tsf_x86_dev), 修 bins_for
+        #   时又漏掉了这一份。同一个事实只留一个出处。
+        tsf)     local b; mapfile -t b < <(bins_for "$profile")
+                 files=("${b[1]}" "${b[2]}") ;;                    # [0]=exe [1]=x64 dll [2]=x86 dll
+        core)    files=("aurora_input${sfx}.exe")
+                 [ -f "$outdir/wind_cli.bat" ] && files+=("wind_cli.bat") ;;  # CLI 包装器随核心
+        *)       err "未知模块: $mod（tsf|core）"; return 1 ;;
+    esac
+    local f
+    for f in "${files[@]}"; do
+        [ -f "$outdir/$f" ] || { err "本地无 $outdir/$f（先构建对应模块）"; return 1; }
+    done
+    deploy_guard_open "$profile"
+    _push_module_body "$profile" "$mod" "$outdir" "${files[@]}"
+    local rc=$?
+    deploy_guard_close "$profile"
+    return $rc
+}
+
+_push_module_body() {
+    local profile="$1" mod="$2" outdir="$3"; shift 3
+    local files=("$@") f
+    say "\n停止远端进程（$profile/$mod）..."
+    remote_taskkill "$profile" "$mod"
+    say "改名让路 + 推送..."
+    remote_rename_aside "${files[@]}"
+    local ok=1
+    for f in "${files[@]}"; do
+        say "推送 $f → $REMOTE_DIR/"
+        scp "$outdir/$f" "$AURORA_REMOTE:$REMOTE_DIR/$f" || { err "scp $f 失败"; ok=0; }
+    done
+    if [ "$ok" = 1 ]; then
+        # ★ TSF 必须同步系统副本：宿主按注册表 InprocServer32 加载的是那一份，
+        #   只推安装目录等于什么都没换（且全程不报错，见 remote_sync_tsf_system_copy）。
+        #
+        # ⚠ 这里**必须 return**，不能只置 ok=0：本段整个在 `if [ "$ok" = 1 ]` 内部，
+        #   置位之后没有任何人再读 ok，函数就此结束 —— 结果是同步失败仍旧重启主进程、
+        #   仍旧打印「模块部署完成」、仍旧返回 0。那正是本函数要根治的那类故障换了张脸：
+        #   从「全程零报错」变成「报了一行错、最后仍说成功」。与 do_push_full 保持一致。
+        case "$mod" in
+            tsf) remote_sync_tsf_system_copy "$profile" || return 1 ;;
+        esac
+        # 推了核心/TSF 则重启主进程让其立即生效
+        # core 推了 exe：再校验远端 exe == 本地产物；只推 tsf 时远端 exe 本就不是本地这份。
+        case "$mod" in
+            core) remote_start_main "$profile" "$outdir/${files[0]}" || return 1 ;;
+            tsf)  remote_start_main "$profile" || return 1 ;;
+        esac
+        remote_cleanup_old
+        say "模块部署完成（$profile/$mod）。"
+    else
+        return 1
+    fi
+}
+
+# 从 Windows 安装目录拉取已处理的 data/（含真实词库）到 .cache/pulled-data/ 供 REPL 使用。
+do_pull_data() {
+    require_remote || return 1
+    resolve_remote_dir "${1:-release}" || return 1
+    local dst="$CACHE_DIR/pulled-data"
+    say "\n拉取 data/ ← $AURORA_REMOTE:$REMOTE_DIR/data  →  $dst"
+    rm -rf "$dst"
+    mkdir -p "$CACHE_DIR"
+    if scp -r "$AURORA_REMOTE:$REMOTE_DIR/data" "$dst"; then
+        say "已拉取 → $dst"
+        say "提示: REPL 会自动使用此词库，或用 './dev.sh repl $dst' 显式指定"
+    else
+        err "scp 失败（检查路径/SSH）"
+    fi
+}
+
+require_remote_dirs() {
+    require_remote || return 1
+    if [ -z "$AURORA_DATA_DIR" ] || [ -z "$AURORA_LOCAL_DIR" ]; then
+        err "未配置远程目录：请在 $SCRIPT_DIR/deploy.local 设置 AURORA_DATA_DIR 与 AURORA_LOCAL_DIR"
+        echo "  示例: AURORA_DATA_DIR='C:/Users/me/AppData/Roaming/WindInputDev'"
+        echo "        AURORA_LOCAL_DIR='C:/Users/me/AppData/Local/WindInputDev'"
+        return 1
+    fi
+}
+
+do_pull_config() {
+    require_remote_dirs || return 1
+    mkdir -p "$REMOTE_PULL_DIR"
+    local dst="$REMOTE_PULL_DIR/config.toml"
+    say "\n拉取 config.toml ← $AURORA_REMOTE:$AURORA_DATA_DIR/config.toml"
+    if scp "$AURORA_REMOTE:$AURORA_DATA_DIR/config.toml" "$dst"; then
+        say "已拉取 → $dst"
+    else
+        err "scp 失败（检查 AURORA_DATA_DIR 路径/SSH；config.toml 可能尚未生成）"
+    fi
+}
+
+do_pull_log() {
+    require_remote_dirs || return 1
+    mkdir -p "$REMOTE_PULL_DIR/logs"
+    local mode="${1:-}"
+    if [ "$mode" = "all" ]; then
+        say "\n拉取全部日志 ← $AURORA_REMOTE:$AURORA_LOCAL_DIR/logs/"
+        if scp -r "$AURORA_REMOTE:$AURORA_LOCAL_DIR/logs" "$REMOTE_PULL_DIR/"; then
+            say "已拉取 → $REMOTE_PULL_DIR/logs/"
+        else
+            err "scp 失败（检查 AURORA_LOCAL_DIR 路径/SSH）"
+        fi
+        return
+    fi
+    say "\n查询远程最新日志 ← $AURORA_REMOTE:$AURORA_LOCAL_DIR/logs/"
+    local latest
+    # 走 remote_ps 而不是自己拼 ssh+powershell：那样绕开了 $ProgressPreference 与
+    # -OutputFormat Text，5.1 会把 CLIXML 混进来，$latest 就变成一串 XML 而不是文件名。
+    latest="$(remote_ps "Get-ChildItem -Path '$AURORA_LOCAL_DIR/logs' -Filter 'aurora_input*.log*' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty Name" 2>/dev/null | tr -d '\r' | tail -1)"
+    if [ -z "$latest" ]; then
+        err "未找到日志文件（或用 'pull-log all' 整目录拉取）"
+        return 1
+    fi
+    local dst="$REMOTE_PULL_DIR/logs/$latest"
+    say "拉取最新日志 $latest"
+    if scp "$AURORA_REMOTE:$AURORA_LOCAL_DIR/logs/$latest" "$dst"; then
+        say "已拉取 → $dst"
+    else
+        err "scp 失败"
+    fi
+}
+
+# 下载外部词库到 .cache/ + 生成 unigram + 组装 build_dev/data/
+do_gen_data() {
+    local outdir="${1:-$BUILD_DEV_DIR}"
+    if ! command -v curl >/dev/null 2>&1; then
+        err "需要 curl（下载词库用）"; return 1
+    fi
+
+    download_dicts || return 1
+
+    # 生成 unigram 词频表（Rust 工具 gen_unigram）。仅供 gen_dict 给五笔扩展词库的
+    # CJK 条目赋权，不随 data/ 分发 —— 引擎侧已改用词条自身的词典权重打分。
+    local unigram_cache="$CACHE_DIR/pinyin-frost/unigram.txt"
+    mkdir -p "$(dirname "$unigram_cache")"
+    if [ ! -f "$unigram_cache" ]; then
+        say "生成 unigram 词频表..."
+        ( cd "$RUST_WORKSPACE" && cargo run -q --bin gen_unigram -- \
+            --rime "$CACHE_DIR/rime-frost/cn_dicts" \
+            --out "$unigram_cache" ) \
+            || warn "unigram 生成失败（gen_dict 五笔赋权将随之失败）"
+    else
+        gray "unigram 已缓存"
+    fi
+
+    # 生成汉字拼音反查表（Rust 工具 gen_pinyin）
+    local pinyin_map_cache="$CACHE_DIR/pinyin-data/pinyin_map.txt"
+    if [ -f "$CACHE_DIR/pinyin-data/pinyin.txt" ]; then
+        say "生成汉字拼音反查表..."
+        ( cd "$RUST_WORKSPACE" && cargo run -q --bin gen_pinyin -- \
+            --src "$CACHE_DIR/pinyin-data" \
+            --out "$pinyin_map_cache" ) \
+            || warn "拼音反查表生成失败（候选拼音提示不可用）"
+    else
+        warn "缺 .cache/pinyin-data/，拼音反查表不可用"
+    fi
+
+    assemble_data "$outdir"
+    say "gen-data 完成 → $outdir/data"
+}
+
+# 发布前硬门禁:校验关键运行时数据完整。assemble_data 对缺失项仅 warn(交互式
+# 部分构建可容忍),但 dist(发版)必须完整——任一关键文件缺失/过小即失败,杜绝
+# 发出词库残缺(无智能组句/无简繁/词库不全)的安装器。
+verify_dist_data() {
+    local data="${1:-$BUILD_DIR}/data"
+    local ok=1
+    # "相对 data/ 的路径|最小字节数"(下限粗略,仅为捕获缺失/0 字节/截断)
+    local checks=(
+        "schemas/pinyin/cn_dicts/base.dict.yaml|1000000"
+        "schemas/pinyin/cn_dicts/8105.dict.yaml|10000"
+        "schemas/english/en.dict.yaml|1000"
+        "pinyin_map.txt|10000"
+        # 五笔词库为 gen_dict 生成物、不入版本库 —— 忘跑 gen-data 时必须在此拦下
+        "schemas/wubi86/wubi86_jidian.dict.yaml|1000000"
+        "schemas/wubi86/wubi86_jidian_extra.dict.yaml|10000"
+        "schemas/wubi86/wubi86_jidian_emoji.dict.yaml|1000"
+        "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml|10000"
+        # 笔画方案词库同为 gen_aux_code 生成物（实测约 1MB）；全拼默认辅助码经 schema:stroke
+        # 引用它，缺了则笔画方案与全拼辅助码都用不了，且用户只看得到「没反应」
+        "schemas/stroke/stroke.dict.yaml|500000"
+    )
+    say "\n校验发布数据完整性 → $data"
+    local entry path min sz
+    for entry in "${checks[@]}"; do
+        path="${entry%%|*}"; min="${entry##*|}"
+        if [ ! -f "$data/$path" ]; then
+            err "  ✗ 缺失: $path"; ok=0; continue
+        fi
+        sz=$(stat -c%s "$data/$path" 2>/dev/null || echo 0)
+        if [ "$sz" -lt "$min" ]; then
+            err "  ✗ 过小(${sz}B < 期望 ${min}B,疑似下载/生成失败): $path"; ok=0
+        else
+            gray "  ✓ $path ($(numfmt --to=iec "$sz" 2>/dev/null || echo "${sz}B"))"
+        fi
+    done
+    # OpenCC:至少一个非空 .octrie(简繁转换)
+    local octrie_cnt
+    octrie_cnt=$(find "$data/opencc" -name '*.octrie' -size +0c 2>/dev/null | wc -l)
+    if [ "$octrie_cnt" -lt 1 ]; then
+        err "  ✗ 缺失: opencc/*.octrie(简繁转换编译失败)"; ok=0
+    else
+        gray "  ✓ opencc/*.octrie ($octrie_cnt 个)"
+    fi
+
+    if [ "$ok" -ne 1 ]; then
+        err "\n发布数据校验失败!上述文件缺失或异常会导致安装器功能残缺。"
+        err "请排查 gen-data 的下载/生成(词库源、网络、gen_opencc/gen_dict)。"
+        return 1
+    fi
+    say "发布数据校验通过 ✓"
+}
+
+# ---------- 全构建（1 / d1）----------
+# 全部模块 + 数据落到【项目根】build/(release) 或 build_dev/(dev)。
+# 先清空输出目录，确保内容 == 安装到 Program Files 的内容，无任何中间产物。
+#   do_full [release|dev]
+# 版本变化侦测: 版本号变更时强制重建关键产物 (确定性保险)。
+# 产品版本唯一真源是 docs/VERSION; cargo 的 rerun-if-env-changed 已能自动重建, 此处
+# 再加保险: 记录上次构建版本, 一旦变化即清理最终产物 (Rust 最终包 + TSF obj),
+# 强制重新写入版本资源。仅版本真变时付代价。
+sync_version_stamp() {
+    local stamp="$CACHE_DIR/.last_build_version" last=""
+    [ -f "$stamp" ] && last="$(tr -d '[:space:]' < "$stamp")"
+    [ "$last" = "$VERSION" ] && return 0   # 版本未变 → 走增量, 不清理
+
+    if [ -n "$last" ]; then say "\n[version] 版本变化 $last -> $VERSION, 清理关键产物强制刷新版本号..."
+    else say "\n[version] 首次记录版本 $VERSION, 清理关键产物确保版本号写入..."; fi
+
+    # Rust: 仅清最终二进制包 (依赖库保留); build.rs 随之重跑注入新版本资源。
+    ( cd "$PRODUCT_ROOT/aurora_core" && cargo clean -p aurora_service >/dev/null 2>&1 ) || true
+    if [ -d "$SETTING_DIR" ]; then
+        ( cd "$SETTING_DIR" && cargo clean -p aurora_setting >/dev/null 2>&1 ) || true
+    fi
+    if [ -d "$PORTABLE_DIR" ]; then
+        ( cd "$PORTABLE_DIR" && cargo clean -p aurora_portable >/dev/null 2>&1 ) || true
+    fi
+    # TSF: 删交叉编译对象目录, 强制重新生成含新版本的资源。
+    rm -rf "$CACHE_DIR/tsf-obj"
+
+    mkdir -p "$CACHE_DIR"
+    printf '%s' "$VERSION" > "$stamp"
+}
+
+do_full() {
+    local profile="${1:-release}" outdir; outdir="$(out_for "$profile")"
+    say "\n========== 全构建 ($profile) → $outdir =========="
+    sync_version_stamp   # 版本号变化则强制重建关键产物 (确定性保险)
+    rm -rf "$outdir"; mkdir -p "$outdir"
+    build_core    "$profile" "$outdir" || return 1   # aurora_input[_dev].exe
+    build_tsf_all "$profile" "$outdir" || return 1   # wind_tsf[_x86][_dev].dll
+    build_setting "$profile" "$outdir" || return 1   # aurora_setting[_dev].exe (可选)
+    build_portable "$profile" "$outdir" || return 1  # aurora_portable.exe (可选)
+    do_gen_data   "$outdir"            || return 1   # data/(下载词库 + unigram/pinyin + opencc)
+    verify_dist_data "$outdir"         || return 1   # 硬门禁:词库/模型完整
+    say "\n========== 全构建完成 ($profile) → $outdir =========="
+    gray "内容即安装到 Program Files 的内容（无中间产物）；打包: dev.sh installer"
+}
+
+# ---------- 一键生成安装包（8 / 8s）----------
+# do_full release → pack-installer.sh 出自解压 Setup.exe + sha256。
+#   installer        完整重建 + 打包（对应 Go dev.ps1 的 8）
+#   installer skip   跳过重建，直接打包现有 build/（对应 8s）
+do_installer() {
+    local skip="${1:-}"
+    if [ "$skip" = "skip" ]; then
+        say "\n跳过构建，直接打包现有 $BUILD_DIR/"
+        [ -f "$BUILD_DIR/aurora_input.exe" ] || {
+            err "build/ 无产物；请先运行 'dev.sh installer'（不带 skip）或 'dev.sh 1'。"; return 1; }
+    else
+        do_full release || return 1
+    fi
+    say "\n=== 打包安装程序 ==="
+    "$SCRIPT_DIR/pack-installer.sh" --version "$VERSION" || return 1
+}
+
+# 便携版压缩包: build/ → dist/WindInput-Portable-<版本>.zip
+# 内容依据 dev.ps1 的 Deploy-Portable(便携部署的权威定义): 程序文件 + data/ + 便携标记。
+# 【不含 userdata/】—— 那是便携版的用户数据目录(配置/词频/用户词库), 打进包等于把打包机
+# 的个人数据分发给所有人。
+# 缺 aurora_setting.exe / aurora_portable.exe 时照常出包: build_setting/build_portable 在伴生仓
+# 缺失时自行跳过(见其函数首行), 此处不二次判定 —— 这也让没有伴生仓的环境能出便携包。
+do_portable_zip() {
+    local skip="${1:-}"
+    if [ "$skip" = "skip" ]; then
+        say "\n跳过构建，直接打包现有 $BUILD_DIR/"
+        [ -f "$BUILD_DIR/aurora_input.exe" ] || {
+            err "build/ 无产物；请先运行 'dev.sh portable-zip'（不带 skip）或 'dev.sh 1'。"; return 1; }
+    else
+        do_full release || return 1
+    fi
+    command -v zip >/dev/null 2>&1 || { err "需要 zip 命令（Debian/Ubuntu: apt install zip）"; return 1; }
+
+    local dist="$PRODUCT_ROOT/dist"
+    local name="WindInput-$VERSION"                       # zip 内顶层目录, 避免解压散落
+    local zipfile="$dist/WindInput-Portable-$VERSION.zip"
+    local stage="$dist/.portable-stage"
+
+    say "\n=== 打包便携版 → $zipfile ==="
+    rm -rf "$stage"; mkdir -p "$stage/$name" "$dist"
+    cp -a "$BUILD_DIR/." "$stage/$name/" || { err "复制 build/ 失败"; return 1; }
+    rm -rf "$stage/$name/userdata"        # 用户数据目录, 绝不入包
+    rm -f  "$stage/$name"/*.old*          # 部署残留
+
+    # 便携标记: 内容与 wind-portable 的 ensure_portable_layout 一致(同 dev.ps1 Write-PortableMarker)。
+    # 有它 aurora_input.exe 才把 userdata 落在自身目录; 缺了会退化成安装版行为写 %APPDATA%,
+    # 那样"便携"就名不副实了。
+    # 文件名与安装器清单 [app] portable_marker 及 aurora-config PORTABLE_MARKER_NAME 统一为
+    # portable_mode (旧名 wind_portable_mode 仅保留读取兼容, 新包不再写)。
+    printf 'aurora_portable=1\n' > "$stage/$name/portable_mode"
+
+    rm -f "$zipfile" "$zipfile.sha256"
+    ( cd "$stage" && zip -qr "$zipfile" "$name" ) || { err "zip 打包失败"; return 1; }
+    ( cd "$dist" && sha256sum "$(basename "$zipfile")" > "$(basename "$zipfile").sha256" )
+
+    local has_launcher=0
+    [ -f "$stage/$name/aurora_portable.exe" ] && has_launcher=1
+    rm -rf "$stage"
+    say "便携版打包完成: $zipfile ($(fsize "$zipfile"))"
+    if [ "$has_launcher" = 1 ]; then
+        gray "使用: 解压后运行 aurora_portable.exe（注册组件并拉起服务）"
+    else
+        gray "使用: 包内无便携启动器 —— 需管理员 regsvr32 注册 wind_tsf.dll"
+        gray "      (x86 版用 %SystemRoot%\\SysWOW64\\regsvr32.exe)，再手动运行 aurora_input.exe"
+    fi
+}
+
+# ---------- 发布中转产物 (stage) ----------
+# 「Linux 交叉编译 → 本机签名打包」的载体, 与 dev.ps1 的 Do-Stage 是同一件事的两侧:
+# 编译在别处, 签名和打包必须在本机同一次里做完。还原侧 (unstage) 只有 dev.ps1 有。
+#
+# ⚠️ 为什么不能在这边直接出包、本机只补签外壳:
+#    签名【夹在打包中间】—— PE 签在封进压缩块之前, Setup.exe 签在 pack 之后、
+#    New-UpdateManifest 之前。对成品补签只能签到外壳, 包内 5 个 PE 仍是全裸的, 而
+#    signtool verify 验 Setup.exe 照样通过 —— 从外面完全看不出来。所以中转的必须是
+#    打包【之前】的散件。
+#
+# 包内结构必须与 Do-Stage 一致, 否则本机 unstage 的版本硬校验直接拦下:
+#   build/      全构建产物; 内容 == 安装内容, 是安装包与便携包的共同上游
+#   installer/  wind-installer 的 stub / packer / uninstaller
+#   stage.json  版本号等清单, unstage 时硬校验
+# 带上 installer/ 是为了让本机【一行代码都不编译】—— Do-Installer 见三件套已在, 会给
+# pack.ps1 透传 -SkipBuild; 少了它们本机仍会 cargo build 一遍安装器。
+#
+# ⚠️ 与 dev.sh 里其它 stage 无关: do_portable_zip 的 .portable-stage 是便携包的临时组装
+#    目录, 不是发布中转产物。
+STAGE_MANIFEST_NAME="stage.json"
+
+# 安装器三件套的路径 (名字|路径)。
+#
+# 落点是 .cache/installer-bins/ —— 由 `dev.sh instbins` 从【编译机】取回的原生 MSVC 版。
+# ★ 为什么不能在 Linux 上交叉编它们, 以及为什么落点不放在 cargo 的 target 里, 见
+#   do_instbins 头部那段。简言之: wind-installer.exe 是 Setup.exe 的外壳、
+#   wind-uninstaller.exe 装到用户机器上, 两者都进最终产物, 受 6dbc8595 约束必须原生
+#   MSVC; 而放进 target/ 会被下一次本地 cargo xwin build 悄悄覆盖成交叉编版本。
+installer_binaries() {
+    printf '%s\n' "wind-installer.exe|$INSTALLER_BIN_DIR/wind-installer.exe" \
+                  "wind-packer.exe|$INSTALLER_BIN_DIR/wind-packer.exe" \
+                  "wind-uninstaller.exe|$INSTALLER_BIN_DIR/wind-uninstaller.exe"
+}
+
+# 单个 PE 是不是【原生 MSVC】链接器产出的。
+#
+# 判据 = Rich header: cl.exe/link.exe 一定在 DOS stub 尾部写这段(记录参与链接的各 obj
+# 的编译器版本与数量), lld-link 一定不写。双向实测过 —— MSVC 编的
+# Microsoft.VisualC.STLCLR.dll 有, clang-19+lld-link 交叉编的 x64/x86 DLL 都没有。
+# 纯字节检测, 只用 head/od/grep, 不引入新依赖。
+#
+# 返回: 0=原生 MSVC, 1=交叉编译, 2=不是 PE 或读不出(不做判定)
+pe_is_native_msvc() {
+    local f="$1" lfanew
+    [ "$(head -c 2 "$f" 2>/dev/null)" = "MZ" ] || return 2
+    # e_lfanew: 0x3c(=60) 处 4 字节小端; od 按 host 字节序读, x86 上即小端。
+    # Rich header 夹在 DOS stub 与 PE 头之间, 即 [0, e_lfanew) 区间内。
+    lfanew=$(od -An -tu4 -j 60 -N 4 "$f" 2>/dev/null | tr -d ' ')
+    [ -n "$lfanew" ] && [ "$lfanew" -gt 0 ] 2>/dev/null && [ "$lfanew" -lt 4096 ] || return 2
+    head -c "$lfanew" "$f" | LC_ALL=C grep -qa 'Rich'
+}
+
+# ★ 发版产物必须是原生 MSVC 编的 —— stage 的消费侧硬闸门。
+#
+# 原委 (6dbc8595): 交叉编译(clang+lld-link)的 wind_tsf.dll 在部分启用进程级缓解策略的
+# 宿主中 COM 激活失败。实测两份 DLL 的 PE 安全元数据(DllCharacteristics/SafeSEH)【逐位
+# 相同】, 差异落在【工具链代码生成层】(clang vs cl.exe) —— 换 cargo-xwin 的用法或版本
+# 都解决不了, 也不是 32 位专有(SafeSEH 那条线当时查过, 被排除了)。故 release.yml 的整个
+# Windows job 已钉死 windows-2022 + dev.ps1(CMake / "Visual Studio 17 2022")。
+#
+# ⚠️ 为什么必须拦死而不是警告: 签名只是给产物盖章, 不改变代码生成; 而 unstage 只硬校验
+#    版本号, 验不出产物是谁编的。一个拿交叉编译产物做的中转包, 从解包到签名到 signtool
+#    verify 全程无任何异常 —— 与「对成品补签」是同一类静默坏包。
+#
+# 构建端转发 Win VM 之后本闸门自动放行; 长期保留作防回归。
+# 闸门里显示用的短路径: build/ 下的去掉 outdir 前缀, 三件套标成 installer-bins/xxx ——
+# 否则三件套会打印成一长串绝对路径, 看不出它跟 build/ 里的产物不是一回事。
+rel_for_gate() {
+    case "$1" in
+        "$INSTALLER_BIN_DIR"/*) printf 'installer-bins/%s\n' "${1##*/}" ;;
+        *) printf '%s\n' "${1#"$2"/}" ;;
+    esac
+}
+
+check_native_msvc() {
+    local outdir="$1" f cross=() unknown=() extra
+    # 除 build/ 外, 安装器三件套也要查 —— 它们是在闸门【之后】才拷进包的(见 do_stage),
+    # 不在这里一并查就会原样穿过去。三件套同样是要分发给用户的 PE。
+    while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        pe_is_native_msvc "$f"
+        case $? in
+            1) cross+=("$(rel_for_gate "$f" "$outdir")") ;;
+            # ⚠️ fail-closed: find 只挑 *.exe/*.dll, 一个「读不出 PE 头的 .dll」本身就是可疑
+            #    对象。一道拦发版坏包的闸门在自己解析失败时放行, 与它存在的理由相反。
+            #    逃生口已经有了(AURORA_STAGE_ALLOW_CROSS=1), 不需要在这里再留一个。
+            2) unknown+=("$(rel_for_gate "$f" "$outdir")") ;;
+        esac
+    done < <( { find "$outdir" -type f \( -name '*.exe' -o -name '*.dll' \) | sort
+                while IFS='|' read -r _n extra; do printf '%s\n' "$extra"; done < <(installer_binaries); } )
+
+    if [ "${#unknown[@]}" -gt 0 ]; then
+        err "有 ${#unknown[@]} 个 PE 读不出文件头, 无法判定工具链, 拒绝出中转包:"
+        for f in "${unknown[@]}"; do err "    $f"; done
+        gray "  逃生口(明知此包不用于发版时): AURORA_STAGE_ALLOW_CROSS=1 ./scripts/dev.sh stage"
+        return 1
+    fi
+    [ "${#cross[@]}" -eq 0 ] && return 0
+
+    err "发版产物不是原生 MSVC 编的, 拒绝出中转包。交叉编译产物 ${#cross[@]} 个:"
+    for f in "${cross[@]}"; do err "    $f"; done
+    err "  判据: PE 无 Rich header ⇒ lld-link 链接(cargo-xwin / clang), 不是 cl.exe。"
+    err "  原委: 6dbc8595 —— 交叉编的 wind_tsf.dll 在加固宿主 COM 激活失败, 根因在工具链"
+    err "        代码生成层; 签名不改变代码生成, unstage 也验不出来, 故在此拦死。"
+    err "  出路: build/ 下的 → 须来自编译机 (dev.sh 1/d1); 本机 dev.sh 1 的产物只能自测。"
+    err "        installer-bins/ 下的 → dev.sh instbins 重取 (那条路就是去编译机原生编的)。"
+    gray "  逃生口(明知此包不用于发版时): AURORA_STAGE_ALLOW_CROSS=1 ./scripts/dev.sh stage"
+    return 1
+}
+
+do_stage() {
+    local profile="${1:-release}"
+    local outdir suffix="" full_cmd="1"
+    outdir="$(out_for "$profile")"
+    [ "$profile" = dev ] && { suffix="_dev"; full_cmd="d1"; }
+
+    if [ ! -f "$outdir/aurora_input$suffix.exe" ]; then
+        err "无 $outdir 产物; 先跑全构建 ('$full_cmd')。"
+        return 1
+    fi
+    command -v zip >/dev/null 2>&1 || { err "需要 zip 命令（Debian/Ubuntu: apt install zip）"; return 1; }
+
+    # 闸门放在打印标题之前: 早失败, 不先报「正在打包 → xxx.zip」再翻脸。
+    if [ "${AURORA_STAGE_ALLOW_CROSS:-}" = 1 ]; then
+        warn "AURORA_STAGE_ALLOW_CROSS=1: 跳过原生 MSVC 闸门 —— 此包【不可用于发版】。"
+    else
+        check_native_msvc "$outdir" || return 1
+    fi
+
+    local base="AuroraInput"
+    [ "$profile" = dev ] && base="AuroraInputDev"
+    local zipfile="$DIST_DIR/$base-Stage-$VERSION.zip"
+    local stage="$DIST_DIR/.stage-pack"
+
+    say "\n========== 打包中转产物 ($profile) → $zipfile =========="
+    rm -rf "$stage"; mkdir -p "$stage/build" "$DIST_DIR"
+    cp -a "$outdir/." "$stage/build/" || { err "复制 $outdir/ 失败"; rm -rf "$stage"; return 1; }
+
+    # 安装器三件套缺失不算硬错误 —— 本机 unstage 后 pack.ps1 会自行编译, 只是「本机零
+    # 编译」这个目标达不成。故明确警告而不是静默放过。
+    local missing=() name path
+    while IFS='|' read -r name path; do
+        [ -f "$path" ] || missing+=("$name")
+    done < <(installer_binaries)
+
+    local has_installer=false
+    if [ "${#missing[@]}" -eq 0 ]; then
+        mkdir -p "$stage/installer"
+        while IFS='|' read -r name path; do
+            cp -f "$path" "$stage/installer/$name" || { err "复制安装器二进制失败: $path"; rm -rf "$stage"; return 1; }
+        done < <(installer_binaries)
+        has_installer=true
+        gray "  安装器: 3 个二进制"
+    else
+        warn "wind-installer 二进制不全 (缺: ${missing[*]}), 中转包不含安装器"
+        warn "  → 本机还原后 pack.ps1 会自行编译安装器, 不再是零编译"
+        gray "  → 要凑齐: dev.sh instbins (在编译机上原生编好再回传, 约 1~2 分钟)"
+    fi
+
+    # 清单字段与 Do-Stage 逐个对齐; unstage 读 version(硬校验) 与 profile。
+    cat > "$stage/$STAGE_MANIFEST_NAME" <<EOF
+{
+  "version": "$VERSION",
+  "profile": "$profile",
+  "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "installer": $has_installer
+}
+EOF
+
+    rm -f "$zipfile"
+    ( cd "$stage" && zip -qr9 "$zipfile" ./* ) || { err "zip 打包失败"; rm -rf "$stage"; return 1; }
+    rm -rf "$stage"
+
+    say "\n中转产物打包完成: $zipfile ($(fsize "$zipfile"))"
+    gray "  拷到本机: scp '$zipfile' <user>@<靶机>:/<路径>/"
+    gray "  本机还原: .\\scripts\\dev.ps1 unstage <zip>, 再 dev.ps1 sign 8s / sign 9s"
+    gray "  ⚠️ unstage 硬校验版本: 本机那份代码须 git checkout 到同一 tag, 别用文件镜像"
+}
+
+
+# ---------- 远程诊断 (靶机上的文件 / 日志 / 进程) ----------
+# 日志与现场都在实测靶机上, 而开发在 Linux —— 没有这组命令就只能每次临时拼
+# ssh+powershell, 每次都要重新对付编码与多层引号。
+#
+# ⚠️ 路径一律【原样】传给 PowerShell 的单引号字符串, 因此:
+#   · 正反斜杠都认 (PowerShell 两者通用), 不必转换;
+#   · 含空格的 C:\Program Files\... 不用加引号 —— dispatch 已把剩余参数合成一个串;
+#   · 唯一需要转义的是路径里的单引号 (PowerShell 里 '' 表示一个 ')。
+ps_quote() { printf "%s" "${1//\'/\'\'}"; }
+
+# 未配 deploy.local 时这组命令没有意义, 提前说清楚而不是让 ssh 报一句空主机名。
+require_diag_remote() {
+    [ -n "$AURORA_REMOTE" ] && return 0
+    err "未配置 AURORA_REMOTE（scripts/deploy.local）—— 远程诊断命令需要靶机地址。"
+    err "  cp scripts/deploy.local.example scripts/deploy.local 然后填 AURORA_REMOTE"
+    return 1
+}
+
+# 缺参时给出可直接抄的例子, 而不是一句"用法错误"。
+diag_need_path() {
+    [ -n "$1" ] && return 0
+    err "用法: dev.sh $2 <靶机路径>"
+    gray "  例: dev.sh $2 'C:/Users/me/AppData/Local/WindInputDev/logs/aurora_input.log'"
+    gray "  常用位置见 'dev.sh rwhere'"
+    return 1
+}
+
+# rcat <路径>  读靶机上的文本文件 (全文)
+do_rcat() {
+    require_diag_remote || return 1; diag_need_path "$1" rcat || return 1
+    remote_ps "if (-not (Test-Path '$(ps_quote "$1")')) { [Console]::Error.WriteLine('文件不存在: $(ps_quote "$1")'); exit 1 }; \
+Get-Content -LiteralPath '$(ps_quote "$1")' -Raw -Encoding UTF8"
+}
+
+# rtail <路径>  读末尾 N 行 (默认 100, 用 N=<行数> 覆盖)。日志动辄几十 MB, 默认别全拉。
+do_rtail() {
+    require_diag_remote || return 1; diag_need_path "$1" rtail || return 1
+    local n="${N:-100}"
+    gray "(末尾 $n 行; 用 N=500 dev.sh rtail <路径> 改行数)"
+    remote_ps "if (-not (Test-Path '$(ps_quote "$1")')) { [Console]::Error.WriteLine('文件不存在: $(ps_quote "$1")'); exit 1 }; \
+Get-Content -LiteralPath '$(ps_quote "$1")' -Tail $n -Encoding UTF8"
+}
+
+# rls <路径>  列目录 (按修改时间倒序 —— 找"最新那个日志"是这条命令的主要用途)
+do_rls() {
+    require_diag_remote || return 1; diag_need_path "$1" rls || return 1
+    remote_ps "if (-not (Test-Path '$(ps_quote "$1")')) { [Console]::Error.WriteLine('路径不存在: $(ps_quote "$1")'); exit 1 }; \
+Get-ChildItem -LiteralPath '$(ps_quote "$1")' -Force | Sort-Object LastWriteTime -Descending | \
+ForEach-Object { '{0}  {1,10}  {2}' -f \$_.LastWriteTime.ToString('MM-dd HH:mm:ss'), \
+(\$(if (\$_.PSIsContainer) { '<DIR>' } else { \$_.Length })), \$_.Name }"
+}
+
+# rgrep <模式>  在靶机日志里搜; 默认搜【当前 profile 的整个 logs 目录】。
+# 用 Select-String 而不是把文件拉回来 grep: 日志几十 MB, 而命中通常只有几行。
+#
+# ⚠️ 路径走 P= 环境变量而不是第二个位置参数: 参数已被 dispatch 合成【一个】串, 再按
+#    空格切一刀的话 `rgrep 'COM activation'` 就会把 activation 当成路径, 而报错只会是
+#    「路径不存在」, 完全看不出是模式被截断了。与 N= 同风格。
+do_rgrep() {
+    require_diag_remote || return 1
+    local pat="$1" path="${P:-}"
+    if [ -z "$pat" ]; then
+        err "用法: dev.sh rgrep <模式>            # 搜当前 profile 的 logs/"
+        gray "  例: dev.sh rgrep panic"
+        gray "  例: dev.sh rgrep 'COM activation failed'   # 模式含空格要加引号"
+        gray "  指定路径: P='C:/xxx.log' dev.sh rgrep panic"
+        gray "  改条数:   N=200 dev.sh rgrep panic"
+        return 1
+    fi
+    [ -n "$path" ] || path="${AURORA_LOCAL_DIR:+$AURORA_LOCAL_DIR/logs}"
+    [ -n "$path" ] || { err "未配置 AURORA_LOCAL_DIR（deploy.local）且未给 P=<路径>"; return 1; }
+    local n="${N:-80}"
+    say "\n在 $path 搜 '$pat' (最多 $n 条)"
+    remote_ps "if (-not (Test-Path '$(ps_quote "$path")')) { [Console]::Error.WriteLine('路径不存在: $(ps_quote "$path")'); exit 1 }; \
+Get-ChildItem -LiteralPath '$(ps_quote "$path")' -File -Recurse -EA SilentlyContinue | \
+Sort-Object LastWriteTime -Descending | \
+Select-String -Pattern '$(ps_quote "$pat")' -Encoding UTF8 -EA SilentlyContinue | \
+Select-Object -First $n | ForEach-Object { '{0}:{1}: {2}' -f \$_.Filename, \$_.LineNumber, \$_.Line.Trim() }"
+}
+
+# rproc  靶机上 WindInput 相关进程 + 两个变体的部署时间戳。
+# ★ 判「部署到底生效没有」看的是 exe 的 LastWriteTime 与进程启动时间, 不是 push 那句
+#   "已推送" —— 二进制被占用时改名让路会失败, 而 scp 仍然报成功。
+do_rproc() {
+    require_diag_remote || return 1
+    remote_ps "
+'--- 进程 ---'
+\$p = Get-Process -EA SilentlyContinue | Where-Object { \$_.ProcessName -like 'wind*' }
+if (\$p) { \$p | ForEach-Object { '  {0,-22} pid={1,-7} 启动={2}' -f \$_.ProcessName, \$_.Id, \$_.StartTime.ToString('MM-dd HH:mm:ss') } }
+else { '  (无 wind* 进程)' }
+'--- 部署产物时间戳 ---'
+foreach (\$d in @('$(ps_quote "${AURORA_REMOTE_DIR_RELEASE:-}")','$(ps_quote "${AURORA_REMOTE_DIR_DEV:-}")')) {
+  if (\$d -and (Test-Path \$d)) {
+    \"  \$d\"
+    Get-ChildItem -LiteralPath \$d -Filter '*.exe' -EA SilentlyContinue |
+      ForEach-Object { '    {0,-26} {1}  {2}' -f \$_.Name, \$_.LastWriteTime.ToString('MM-dd HH:mm:ss'), \$_.Length }
+    Get-ChildItem -LiteralPath \$d -Filter '*.dll' -EA SilentlyContinue |
+      ForEach-Object { '    {0,-26} {1}  {2}' -f \$_.Name, \$_.LastWriteTime.ToString('MM-dd HH:mm:ss'), \$_.Length }
+  }
+}"
+}
+
+# rwhere  打印靶机上的常用路径 (存在性已核过), 省得每次问"日志到底在哪"。
+do_rwhere() {
+    require_diag_remote || return 1
+    say "\n靶机 $AURORA_REMOTE 上的常用位置"
+    remote_ps "
+foreach (\$x in @(
+  @('release 安装目录','$(ps_quote "${AURORA_REMOTE_DIR_RELEASE:-}")'),
+  @('dev 安装目录    ','$(ps_quote "${AURORA_REMOTE_DIR_DEV:-}")'),
+  @('配置 (当前 profile)','$(ps_quote "${AURORA_DATA_DIR:-}")'),
+  @('日志 (当前 profile)','$(ps_quote "${AURORA_LOCAL_DIR:-}")/logs')
+)) {
+  if (\$x[1] -and \$x[1] -ne '/logs') {
+    \$mark = if (Test-Path \$x[1]) { '✓' } else { '✗' }
+    '  {0} {1}  {2}' -f \$mark, \$x[0], \$x[1]
+  }
+}
+'--- %APPDATA% / %LOCALAPPDATA% 下的全部 WindInput* ---'
+Get-ChildItem \$env:APPDATA,\$env:LOCALAPPDATA -Filter 'WindInput*' -Directory -EA SilentlyContinue |
+  ForEach-Object { '    ' + \$_.FullName }"
+}
+
+
+# ---------- 安装器三件套: 从编译机取原生 MSVC 版 ----------
+# stage 包要带上 wind-installer 的三件套, 好让本机 unstage 后【一行代码都不编译】。
+#
+# ★★ 为什么必须从编译机取, 而不是在 Linux 上交叉编:
+#    本机 unstage 后 `sign 8s` 会给 pack.ps1 透传 -SkipBuild, 直接拿这三个 exe 打包 ——
+#    其中 wind-installer.exe 就是【Setup.exe 的外壳】, wind-uninstaller.exe 会【装到用户
+#    机器上】。两者都进最终产物、都要签名、都被杀软扫, 因此和 wind_tsf.dll 一样受
+#    6dbc8595 约束: 必须原生 MSVC。交叉编它们等于把已判死的工具链重新放回发版链,
+#    而 check_native_msvc 闸门正会在出口拦下 —— 那时「三件套齐了」反而变成出不了包。
+#    (三个里只有 wind-packer.exe 是纯打包工具、不进产物, 但既然另外两个必须从编译机来,
+#     顺手一起取最省事, 也免得三个文件来路不一。)
+#
+# 落点刻意【不是】cargo 的 target 目录: 放进去的话, 下一次本地 `cargo xwin build` 会把
+# 它们覆盖成交叉编版本, 而同一个路径此前是原生、此后是交叉编, 肉眼分不出来。独立目录
+# 的语义是明确的 ——「这里放的是从编译机取回的原生 MSVC 三件套」。
+# 在编译机上编三件套并回传。走 rbuild_* (编译机通道), 不是 remote_* (靶机通道)。
+do_instbins() {
+    rbuild_require_ready instbins || return 1
+    command -v scp >/dev/null 2>&1 || { err "需要 scp"; return 1; }
+
+    local sibRoot rdir
+    sibRoot="$(dirname "$AURORA_BUILD_ROOT")"
+    rdir="$sibRoot/wind-installer"
+
+    say "\n========== 取安装器三件套 @ $AURORA_BUILD_REMOTE =========="
+    rbuild_trap_on
+    rbuild_lock || { rbuild_trap_off; return 1; }
+
+    gray "[1/3] 同步 wind-installer → $rdir"
+    rbuild_sync_tree "$INSTALLER_DIR" "$rdir" "wind-installer" \
+        || { rbuild_cleanup; rbuild_trap_off; return 1; }
+
+    # 原生编 (不带 --target): 与 pack.ps1 的 -SkipBuild 判据同一落点 <target>/release/。
+    # packer 要 --features packer (editpe 写 EXE 图标), 另外两个不要 —— 照搬 pack.ps1。
+    gray "[2/3] 编译 (原生 MSVC)"
+    rbuild_ps "\$env:AURORA_NO_REMOTE='1'; \$LASTEXITCODE=0
+Set-Location -LiteralPath '$rdir' -EA Stop
+\$env:RUSTFLAGS='-C target-feature=+crt-static'
+cargo build --release --bin wind-installer --bin wind-uninstaller
+if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }
+cargo build --release --bin wind-packer --features packer
+if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }
+# 产物目录向 cargo 自己要 —— 编译机若设了共享 target-dir, 硬拼出来的路径是个空壳。
+\$j = cargo metadata --format-version 1 --no-deps 2>\$null | ConvertFrom-Json
+\$t = if (\$j) { \$j.target_directory } else { Join-Path '$rdir' 'target' }
+\$t = Join-Path \$t 'release'
+foreach (\$n in @('wind-installer.exe','wind-packer.exe','wind-uninstaller.exe')) {
+  if (-not (Test-Path (Join-Path \$t \$n))) { [Console]::Error.WriteLine('编出来了但找不到: ' + \$n); exit 4 }
+}
+\$t" || { err "编译机上编安装器失败"; rbuild_cleanup; rbuild_trap_off; return 1; }
+
+    # 上面那段的最后一行输出就是产物目录; 单独再问一次省得解析混在编译日志里的路径。
+    local rt
+    rt="$(rbuild_ps "\$j = cargo metadata --format-version 1 --no-deps --manifest-path '$rdir/Cargo.toml' 2>\$null | ConvertFrom-Json
+if (\$j) { Join-Path \$j.target_directory 'release' } else { '$rdir/target/release' }" 2>/dev/null | tr -d '\r' | tail -1)"
+    [ -n "$rt" ] || { err "取不到编译机上的产物目录"; rbuild_cleanup; rbuild_trap_off; return 1; }
+
+    gray "[3/3] 回传 → $INSTALLER_BIN_DIR"
+    mkdir -p "$INSTALLER_BIN_DIR"
+    local n ok=1
+    for n in wind-installer.exe wind-packer.exe wind-uninstaller.exe; do
+        rbuild_scp "$AURORA_BUILD_REMOTE:${rt//\\//}/$n" "$INSTALLER_BIN_DIR/$n" "回传 $n" || { err "回传 $n 失败"; ok=0; }
+    done
+    rbuild_cleanup; rbuild_trap_off
+    [ "$ok" = 1 ] || return 1
+
+    say "\n三件套已就位:"
+    for n in wind-installer.exe wind-packer.exe wind-uninstaller.exe; do
+        gray "  $n  $(fsize "$INSTALLER_BIN_DIR/$n")"
+    done
+    gray "  下一步: dev.sh stage —— 中转包这次会带上 installer/, 本机 unstage 后零编译"
+}
+# ---------- GUI 验证: 设置界面离屏截图 ----------
+# 设置程序在 Linux 【编都编不过】(aurora-ui-rust 的 platform/mod.rs 有 compile_error!),
+# 于是 UI 改动在这台机器上没有任何自查手段 —— 只能编好推过去、人眼去看。
+#
+# auroraui 自带的截图通路补上了这个缺口, 而且不止是出图: --click/--rclick/--drag/--hover/
+# --type/--key 可重复且【按出现顺序混合回放】, --size 还会把 min_size 的下限一并放开
+# (要测的正是下限处的布局)。
+# ★★ 这些是【进程内合成事件】, 不走 SendInput —— 所以在 SSH 会话里可用。靶机的 SSH 会话
+#    拿不到交互桌面, SendInput 那条路是死的([[project_e2e_realmachine_test]]), 而离屏渲染
+#    实测可行(Start-Process -Wait, exit=0, 出图 1100x760)。
+#
+# AURORA_RPC_MOCK=1 让设置程序自带假数据, 不需要 core 在跑 —— 因此 VM 上也能截, 不必先部署。
+#
+# 落点二选一 (SHOT_ON):
+#   target  靶机上【已部署】的那份 (默认): 真实配置、真实 DPI/字体/主题
+#   vm      编译机 build_dev/ 里【刚编出来】的那份: 不用部署、不打扰靶机, 适合改完 UI 立刻看
+do_shot() {
+    local on="${SHOT_ON:-target}" prof="${SHOT_PROFILE:-dev}"
+    local sfx=""; [ "$prof" = dev ] && sfx="_dev"
+    local exe rhost rtmp
+    case "$on" in
+        target)
+            require_diag_remote || return 1
+            resolve_remote_dir "$prof" || return 1
+            exe="$REMOTE_DIR/aurora_setting${sfx}.exe"; rhost="$AURORA_REMOTE" ;;
+        vm)
+            rbuild_require_ready shot || return 1
+            local od; od="$([ "$prof" = dev ] && echo build_dev || echo build)"
+            exe="$AURORA_BUILD_ROOT/$od/aurora_setting${sfx}.exe"; rhost="$AURORA_BUILD_REMOTE" ;;
+        *)  err "SHOT_ON 只能是 target 或 vm (给的是 '$on')"; return 1 ;;
+    esac
+
+    # 参数直通 aurora_setting。按空格拆 —— dispatch 已把它们合成一个串, 原始引号边界没了,
+    # 故 --type 的文本别带空格(要打空格用 --key Space)。
+    local extra=() a
+    for a in $1; do extra+=("$a"); done
+    [ "${#extra[@]}" -gt 0 ] || extra=(--size 1100 760)
+
+    local ts name lo
+    ts="$(date +%H%M%S)"; name="setting-$prof-$ts.png"
+    rtmp="C:/Windows/Temp/wi-shot-$ts.png"
+    lo="$PRODUCT_ROOT/.remote/shots/$name"
+    mkdir -p "$(dirname "$lo")"
+
+    say "\n=== 截设置界面 @ $on ($prof) ==="
+    gray "  $exe ${extra[*]}"
+    local ps="\$ErrorActionPreference='Stop'
+\$exe='$(ps_quote "$exe")'
+if (-not (Test-Path \$exe)) { [Console]::Error.WriteLine('设置程序不存在: ' + \$exe); exit 2 }
+Remove-Item '$rtmp' -Force -EA SilentlyContinue
+\$env:AURORA_RPC_MOCK='1'
+\$p = Start-Process -FilePath \$exe -ArgumentList @('--screenshot','$rtmp',$(ps_list "${extra[@]}")) -Wait -PassThru -NoNewWindow
+if (-not (Test-Path '$rtmp')) { [Console]::Error.WriteLine('没有产出截图 (设置程序退出码 ' + \$p.ExitCode + ')'); exit 3 }
+'ok ' + (Get-Item '$rtmp').Length"
+
+    if [ "$on" = vm ]; then rbuild_ps "$ps" || return 1; else remote_ps "$ps" || return 1; fi
+    scp "${RBUILD_SSH_OPTS[@]}" -q "$rhost:$rtmp" "$lo" || { err "回传截图失败"; return 1; }
+    ssh "${RBUILD_SSH_OPTS[@]}" "$rhost" "del \"${rtmp//\//\\}\"" >/dev/null 2>&1 || true
+
+    say "截图已回传: $lo ($(fsize "$lo"))"
+    gray "  换尺寸/加交互: dev.sh shot --size 1400 900 --click 120 300"
+    gray "  可用: --click X Y  --rclick X Y  --drag X0 Y0 X1 Y1  --hover X Y  --type <文本>  --key <键名>"
+    gray "  换落点: SHOT_ON=vm dev.sh shot   (编译机上刚编的那份, 不用先部署)"
+}
+show_menu() {
+    clear 2>/dev/null || true
+    printf '%b============================================%b\n' "$C_CYAN" "$C_RESET"
+    printf '%b  WindInput 开发菜单  v%s  (Linux→Win, MSVC)%b\n' "$C_CYAN" "$VERSION" "$C_RESET"
+    printf '%b============================================%b\n\n' "$C_CYAN" "$C_RESET"
+    printf '%b  构建 → %s (原生 MSVC; 产物回传本机)%b\n' "$C_GRAY" "${AURORA_BUILD_REMOTE:-未配置 build.local}" "$C_RESET"
+    printf '\n'
+    printf '%b  全构建 (→ 项目根 build/，内容 == 安装到 Program Files):%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    1    Release 全构建: aurora_input + tsf(x64/x86) + setting + portable + 词库数据"
+    echo  "    d1   Debug 全构建 (→ build_dev/)"
+    printf '\n%b  单模块构建 (前缀 d = dev):%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    m1   仅 tsf (x64+x86)        dm1"
+    echo  "    m2   仅 aurora_input (核心)     dm2"
+    echo  "    m3   仅 aurora_setting (aurora_core/apps/setting)    dm3"
+    echo  "    m4   仅 aurora_portable (../wind-portable)  dm4"
+    printf '\n%b  安装包:%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    8    生成安装包 (= 1 + 打包 → Setup.exe + sha256)"
+    echo  "    8s   跳过编译, 直接打包现有 build/"
+    echo  "    9    生成便携包 (= 1 + 打包 → dist/WindInput-Portable-<版本>.zip + sha256)"
+    echo  "    9s   跳过编译, 直接打包现有 build/"
+    printf '\n%b  发布中转 (→ 本机签名打包):%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    stage   打中转产物 → dist/WindInput-Stage-<版本>.zip   dstage (dev)"
+    echo  "    instbins  从编译机取安装器三件套(原生 MSVC), 让中转包零编译"
+    printf '\n%b  部署 → Windows (deploy.local 配 RELEASE/DEV 路径; SSH → %s):%b\n' "$C_YELLOW" "${AURORA_REMOTE:-未配置}" "$C_RESET"
+    echo  "    p1   push 全部 (release)        pd1   push 全部 (dev)"
+    echo  "    pm1/pm2  push 模块(tsf/核心)    pdm1/pdm2 (dev)"
+    printf '\n%b  代码质量:%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    k=check  l=clippy  t=test  f=fmt  ci=fmt+clippy+test"
+    printf '\n%b  远程数据 / 实测:%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    r=repl(本机)  dl=pull-data  pc=pull-config  pl=pull-log(pla=全部)"
+    printf '\n%b  远程诊断 (靶机现场; 路径直接给 Windows 路径, 含空格不用加引号):%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    rwhere  常用位置一览      rproc  进程 + 部署产物时间戳"
+    echo  "    rls <路径>  列目录(按时间倒序)     rcat <路径>  读全文"
+    echo  "    rtail <路径>  末尾100行(N=500 改)  rgrep <模式>  搜日志(P=路径 指定)"
+    printf '\n%b  GUI 验证 (设置界面离屏截图 → .remote/shots/):%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    shot                        截当前部署的设置界面"
+    echo  "    shot --size 1400 900 --click 120 300    带尺寸/交互 (还有 --type/--key/--hover/--drag)"
+    echo  "    SHOT_ON=vm shot             截编译机上刚编的那份 (不用先部署)"
+    printf '\n%b  杂项:%b\n' "$C_YELLOW" "$C_RESET"
+    echo  "    gd=gen-data  clean  q=退出"
+    echo  "    sk/st/sg  设置程序 (apps/setting): 检查 / 测试 / 重生成检入产物 (st,sg 经 wine)"
+    printf '%b============================================%b\n' "$C_CYAN" "$C_RESET"
+}
+
+pause() { printf '\n'; read -e -r -p "按回车继续..." _; }
+
+# 统一分发：菜单与命令行直调共用，命令已转小写。返回 1 表示无效命令。
+DISPATCH_UNKNOWN=0
+dispatch() {
+    DISPATCH_UNKNOWN=0
+    # 构建类命令一律推到 Windows 编译机 —— 拦在 case 之前, 菜单与命令行直调因此共用
+    # 同一条转发路径, 不会漏掉其中一条。分类与理由见 lib/remote-build.sh。
+    if rbuild_is_forwarded "$1"; then
+        rbuild_run "$1"; return $?
+    fi
+    case "$1" in
+        1|release)        do_full release ;;
+        d1|dev)         do_full dev ;;
+        m1)               build_tsf_all release ;;
+        dm1)              build_tsf_all dev ;;
+        m2)               build_core release ;;
+        dm2)              build_core dev ;;
+        m3)               build_setting release ;;
+        dm3)              build_setting dev ;;
+        m4)               build_portable release ;;
+        dm4)              build_portable dev ;;
+        8|installer|pack) do_installer ;;
+        8s|installer-skip) do_installer skip ;;
+        9|portable-zip)   do_portable_zip ;;
+        9s|portable-zip-skip) do_portable_zip skip ;;
+        stage)            do_stage release ;;
+        dstage)           do_stage dev ;;
+        p1)               do_push_full release ;;
+        pd1)              do_push_full dev ;;
+        pm1)              do_push_module release tsf ;;
+        pm2)              do_push_module release core ;;
+        pdm1)             do_push_module dev tsf ;;
+        pdm2)             do_push_module dev core ;;
+        k|check)          do_check ;;
+        l|clippy)         do_clippy ;;
+        t|test)           do_test ;;
+        sk|setting-check) do_setting_check ;;
+        st|setting-test)  do_setting_test ;;
+        sg|setting-regen) do_setting_regen ;;
+        f|fmt)            do_fmt ;;
+        fmt-check)        do_fmt_check ;;
+        ci)               do_ci ;;
+        hooks)            do_hooks_install ;;
+        clean)            do_clean ;;
+        gd|gen-data)      do_gen_data ;;
+        r|repl)           do_repl "${2:-}" ;;
+        dl|pull-data)     do_pull_data "${2:-}" ;;
+        pc|pull-config)   do_pull_config ;;
+        pl|pull-log)      do_pull_log "${2:-}" ;;
+        pla)              do_pull_log all ;;
+        rcat)             do_rcat  "${2:-}" ;;
+        rtail)            do_rtail "${2:-}" ;;
+        rls)              do_rls   "${2:-}" ;;
+        rgrep)            do_rgrep "${2:-}" ;;
+        rproc)            do_rproc ;;
+        rwhere)           do_rwhere ;;
+        shot)             do_shot  "${2:-}" ;;
+        instbins)         do_instbins ;;
+        # 「未知命令」不能再用某个退出码当哨兵: rbuild_run 会把【编译机上任意进程的
+        # 退出码】原样透传上来(ssh 透传远端状态), 撞上哨兵值就会把一次远程构建失败报成
+        # 「未知命令, 请看 --help」—— 最大化误导。改用独立标志, 与退出码空间彻底分开。
+        *)                DISPATCH_UNKNOWN=1; return 1 ;;
+    esac
+}
+
+menu_loop() {
+    set -o history 2>/dev/null || true
+    while true; do
+        show_menu
+        printf '\n'
+        read -e -r -p "请输入选项: " line
+        [ -n "$line" ] && history -s "$line"
+        # 只把【命令词】转小写, 其余原样保留 —— 远程诊断命令的参数是 Windows 路径,
+        # 整串小写化会让 'C:/Users/Me/...' 变成找不到的路径(NTFS 不区分大小写,
+        # 但经 PowerShell 传回的文件名与 grep 模式是区分的)。
+        local choice rest
+        choice="$(printf '%s' "${line%% *}" | tr '[:upper:]' '[:lower:]')"
+        rest=""; [ "$line" != "${line%% *}" ] && rest="${line#* }"
+        rest="${rest#"${rest%%[![:space:]]*}"}"   # 剥前导空白: 菜单里 `pl  all`(双空格)
+                                                 # 会让 rest=" all" 而与 all 不等, 静默走错分支
+        case "$choice" in
+            q) exit 0 ;;
+            "") ;;
+            *)
+                dispatch "$choice" "$rest"; local rc=$?
+                if [ "$DISPATCH_UNKNOWN" = 1 ]; then
+                    err "无效选项: $choice"; sleep 1     # 未知命令:短暂提示后刷新菜单
+                else
+                    [ "$rc" -ne 0 ] && err "\n命令 '$choice' 失败 (退出码 $rc)"
+                    pause                                # 已知命令:无论成败都停下，让你看到输出/错误
+                fi
+                ;;
+        esac
+    done
+}
+
+# ---------- 命令行直调 ----------
+# 与菜单同一套命令（如 './dev.sh 1'、'./dev.sh p1'、'./dev.sh m2'）；命令转小写以容错。
+# 支持连续命令: './dev.sh d1 pd1' —— 前者失败则后者不执行（对齐 dev.ps1 的 $Commands）。
+
+# 哪些命令要【吃参数】。这是「多个命令」与「命令+参数」的唯一区分方式, 与 dev.ps1 同法
+# (它列的是 r/repl/unstage)。
+# ⚠️ 白名单里的命令吃掉【剩余全部】而不是只吃一个 token: 远程诊断的参数是可能含空格的
+#    Windows 路径 (C:\Program Files\...), 只吃一个 token 会在第一个空格处断开。因此它们
+#    只能放在整条链的末尾 —— 'd1 rtail <路径>' 可以, 'rtail <路径> d1' 不行。
+cmd_takes_arg() {
+    case "$1" in
+        r|repl|dl|pull-data|pl|pull-log|rcat|rtail|rls|rgrep|shot) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    ""|menu) menu_loop ;;
+    -h|--help|help)
+        grep '^#' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        ;;
+    *)
+        rc=0
+        while [ $# -gt 0 ]; do
+            cmd="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+            if cmd_takes_arg "$cmd"; then
+                shift
+                dispatch "$cmd" "$*"; rc=$?
+                set --                      # 参数已被吃光, 链到此为止
+            else
+                dispatch "$cmd"; rc=$?
+                shift
+            fi
+            if [ "$DISPATCH_UNKNOWN" = 1 ]; then
+                err "未知命令: $cmd"
+                echo "运行 './scripts/dev.sh --help' 查看可用命令"
+                exit 1
+            fi
+            # ★ 前者失败则后者不执行: 'd1 pd1' 里构建没成功就去部署, 推上去的是【上一次】
+            #   的旧产物, 而部署本身会报成功 —— 正是「改了没生效」最难查的那种成因。
+            [ "$rc" -ne 0 ] && exit "$rc"
+        done
+        exit "$rc"   # 透传命令真实退出码（CLI/CI 用）
+        ;;
+esac

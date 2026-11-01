@@ -1,0 +1,52 @@
+[package]
+name = "aurora_service"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "aurora_input"
+path = "src/main.rs"
+
+[build-dependencies]
+# 仅 Windows 目标嵌入图标/版本信息/manifest（DPI 感知等）
+winresource = "0.1"
+
+[features]
+default = []
+# Linux 发行形态：协调器/UI/桥接全部按外部宿主（Fcitx5 addon）呈现。
+linux-host = ["aurora-coordinator/linux-host", "aurora-ui/linux-host", "aurora-bridge/linux-host"]
+
+[dependencies]
+aurora-ipc = { path = "../../crates/aurora-ipc" }
+aurora-coordinator = { path = "../../crates/aurora-coordinator" }
+aurora-webdata = { path = "../../crates/aurora-webdata" }
+aurora-bridge = { path = "../../crates/aurora-bridge" }
+aurora-config = { path = "../../crates/aurora-config" }
+aurora-store = { path = "../../crates/aurora-store" }
+aurora-dict = { path = "../../crates/aurora-dict" }
+aurora-engine = { path = "../../crates/aurora-engine" }
+aurora-ui = { path = "../../crates/aurora-ui" }
+aurora-theme = { path = "../../crates/aurora-theme" }
+aurora-rpc = { path = "../../crates/aurora-rpc" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+file-rotate = { workspace = true }
+chrono = "0.4"
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# 单例（flock）
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,208 @@
+#include "ShmFrame.h"
+
+#include "ExtProtocol.h"
+#include "Protocol.h"
+
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+namespace windlinux {
+
+uint32_t ShmFrameReader::currentUid()
+{
+    return uint32_t(::getuid());
+}
+
+bool ShmFrameReader::open(const std::string& name, size_t maxSize, uint32_t owner)
+{
+    close();
+    int fd = ::shm_open(name.c_str(), O_RDONLY, 0);
+    if (fd < 0) {
+        lastError_ = std::string("shm_open: ") + std::strerror(errno);
+        return false;
+    }
+    struct stat st {};
+    if (::fstat(fd, &st) != 0) {
+        lastError_ = std::string("fstat: ") + std::strerror(errno);
+        ::close(fd);
+        return false;
+    }
+    if (uint32_t(st.st_uid) != owner) {
+        lastError_ = "段的属主是 uid " + std::to_string(st.st_uid) + "，不是本用户，拒绝映射";
+        ::close(fd);
+        return false;
+    }
+    if (st.st_size < off_t(sizeof(SharedRenderHeader))) {
+        lastError_ = "段只有 " + std::to_string(st.st_size) + " 字节（服务端还没定长），下一帧再试";
+        ::close(fd);
+        return false;
+    }
+    const size_t size = std::min(size_t(st.st_size), maxSize);
+    void* p = ::mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        lastError_ = std::string("mmap: ") + std::strerror(errno);
+        ::close(fd);
+        return false;
+    }
+    fd_ = fd;
+    ptr_ = p;
+    size_ = size;
+    lastError_.clear();
+    return true;
+}
+
+void ShmFrameReader::close()
+{
+    if (ptr_) {
+        ::munmap(ptr_, size_);
+        ptr_ = nullptr;
+    }
+    if (fd_ >= 0) {
+        ::close(fd_);
+        fd_ = -1;
+    }
+}
+
+bool ShmFrameReader::snapshot(SharedFrame& out) const
+{
+    if (!ptr_ || size_ < sizeof(SharedRenderHeader)) {
+        return false;
+    }
+    SharedRenderHeader h;
+    std::memcpy(&h, ptr_, sizeof(h)); // packed 结构，拷出来再读，免得未对齐访问
+    if (h.magic != SHARED_RENDER_MAGIC || h.width > kMaxFrameDim || h.height > kMaxFrameDim) {
+        return false;
+    }
+    out.sequence = h.sequence;
+    out.flags = h.flags;
+    out.screenX = h.x;
+    out.screenY = h.y;
+    out.width = h.width;
+    out.height = h.height;
+    out.stride = h.stride;
+    out.bgra.clear();
+    if (h.dataSize == 0) {
+        return true;
+    }
+    // 头里的尺寸自相矛盾或越出映射范围：宁可丢这一帧，也别越界读。
+    uint64_t need = uint64_t(h.stride) * h.height;
+    if (h.stride < uint64_t(h.width) * 4 || need > h.dataSize
+        || sizeof(SharedRenderHeader) + uint64_t(h.dataSize) > size_) {
+        return false;
+    }
+    const auto* pix = static_cast<const uint8_t*>(ptr_) + sizeof(SharedRenderHeader);
+    out.bgra.assign(pix, pix + need);
+    return true;
+}
+
+Rect placePanel(int32_t x, int32_t y, int32_t w, int32_t h, const Rect& wa, bool absolute)
+{
+    constexpr int32_t kCaretHeight = 18; // 同 macOS：拿不到真实光标高时的估值
+    Rect r{x, y, w, h};
+    int32_t right = wa.x + wa.w;
+    int32_t bottom = wa.y + wa.h;
+    if (r.x + w > right) {
+        r.x = right - w;
+    }
+    if (r.x < wa.x) {
+        r.x = wa.x;
+    }
+    if (!absolute && r.y + h > bottom) {
+        r.y = y - kCaretHeight - h; // 翻到光标上方
+    }
+    if (r.y + h > bottom) {
+        r.y = bottom - h;
+    }
+    if (r.y < wa.y) {
+        r.y = wa.y;
+    }
+    return r;
+}
+
+Rect placeOverlay(const OverlayFramePayload& p, const Rect& wa, int32_t shiftX, int32_t shiftY)
+{
+    const int32_t cw = p.contentW ? int32_t(p.contentW) : int32_t(p.width);
+    const int32_t ch = p.contentH ? int32_t(p.contentH) : int32_t(p.height);
+    const int32_t left = wa.x;
+    const int32_t top = wa.y;
+    const int32_t right = wa.x + wa.w;
+    const int32_t bottom = wa.y + wa.h;
+    int32_t x = p.x;
+    int32_t y = p.y;
+    if (p.place == OVERLAY_PLACE_EXACT) {
+        // 菜单：落位已在服务端按本端报去的工作区做完，命中测试也按这个位置——一个像素都不能挪。
+        return Rect{x - p.contentX, y - p.contentY, int32_t(p.width), int32_t(p.height)};
+    }
+    switch (p.place) {
+    case OVERLAY_PLACE_FOLLOW_CANDIDATE:
+    case OVERLAY_PLACE_FLIP: {
+        const bool follow = p.place == OVERLAY_PLACE_FOLLOW_CANDIDATE;
+        const int32_t dx = follow ? shiftX : 0;
+        const int32_t dy = follow ? shiftY : 0;
+        x = p.x + dx;
+        y = p.y + dy;
+        if (x + cw > right) {
+            x = p.altX + dx;
+        }
+        if (y + ch > bottom) {
+            int32_t alt = p.altY + dy;
+            y = alt >= top ? alt : bottom - ch;
+        }
+        break;
+    }
+    case OVERLAY_PLACE_ANCHOR: {
+        const int32_t m = p.margin;
+        const int32_t cx = (left + right) / 2 - cw / 2;
+        const int32_t cy = (top + bottom) / 2 - ch / 2;
+        const int32_t l = left + m;
+        const int32_t r = right - m - cw;
+        const int32_t t = top + m;
+        const int32_t b = bottom - m - ch;
+        switch (p.anchor) {
+        case OVERLAY_ANCHOR_TOP_LEFT: x = l; y = t; break;
+        case OVERLAY_ANCHOR_TOP_RIGHT: x = r; y = t; break;
+        case OVERLAY_ANCHOR_BOTTOM_LEFT: x = l; y = b; break;
+        case OVERLAY_ANCHOR_BOTTOM_RIGHT: x = r; y = b; break;
+        case OVERLAY_ANCHOR_TOP_CENTER: x = cx; y = t; break;
+        case OVERLAY_ANCHOR_BOTTOM_CENTER: x = cx; y = b; break;
+        case OVERLAY_ANCHOR_CENTER:
+        default: x = cx; y = cy; break;
+        }
+        break;
+    }
+    case OVERLAY_PLACE_ABSOLUTE:
+    default:
+        break;
+    }
+    // 夹回：先右/下再左/上，内容比工作区还大时保住左上角可见。
+    if (x + cw > right) {
+        x = right - cw;
+    }
+    if (x < left) {
+        x = left;
+    }
+    if (y + ch > bottom) {
+        y = bottom - ch;
+    }
+    if (y < top) {
+        y = top;
+    }
+    return Rect{x - p.contentX, y - p.contentY, int32_t(p.width), int32_t(p.height)};
+}
+
+int32_t hitTest(const std::vector<CandidateHitRect>& rects, int32_t px, int32_t py)
+{
+    for (const auto& r : rects) {
+        if (r.contains(px, py)) {
+            return r.index;
+        }
+    }
+    return kNoHit;
+}
+
+} // namespace windlinux

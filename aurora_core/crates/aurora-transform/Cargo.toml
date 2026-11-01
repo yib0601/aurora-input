@@ -1,0 +1,11 @@
+[package]
+name = "aurora-transform"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-config = { path = "../aurora-config" }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

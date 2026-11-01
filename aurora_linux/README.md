@@ -1,0 +1,96 @@
+# wind_linux — 极光输入法 Fcitx5 前端
+
+极光输入法在 Linux 上以 [Fcitx5](https://fcitx-im.org) 输入法引擎的形式工作：本目录是 Fcitx5
+addon（`libaurorainput.so`），负责把按键交给极光输入法服务（`aurora_input`，Rust）、把上屏与预编辑
+写回应用。输入逻辑、词库、候选全部在服务里。
+
+## 构建
+
+依赖：Fcitx5 5.x 开发包（`libfcitx5core-dev` `libfcitx5utils-dev` `libfcitx5config-dev`）、
+`libxcb1-dev` `libxcb-shape0-dev` `libxcb-randr0-dev`（候选窗 / 工具栏）、CMake ≥ 3.16、C++17 编译器。较新的 Fcitx5 头文件（如 Arch 的 5.1.23）
+要 C++20，配置时会自动探测并把 addon 升到 C++20，此时需要支持 C++20 的编译器；也可用 `-DCMAKE_CXX_STANDARD=20` 指定。
+Wayland 候选窗另要 `libwayland-client` 与 `wayland-scanner`。GNOME 光标扩展的客户端还要 `libglib2.0-dev`
+（`gio-2.0`）：只在 Wayland 那一路探测，没有它其余 addon 照常编，只是不问 Shell 扩展。
+
+```bash
+cmake -S wind_linux -B aurora_linux/build/cmake -G Ninja
+cmake --build aurora_linux/build/cmake
+cmake --install aurora_linux/build/cmake --prefix /usr     # 需要 root；或装到 ~/.local 并设 FCITX_ADDON_DIRS
+```
+
+服务：
+
+```bash
+cd aurora_core && cargo build --release -p wind_service --features linux-host
+```
+
+没有 root 的开发机用 `scripts/linux/bootstrap-sdk.sh` 把 Fcitx5 SDK 解到用户目录。
+
+## 安装包（Ubuntu/Debian）
+
+```bash
+scripts/linux/package-deb.sh          # 在 22.04 容器里构建，产物 dist/linux/windinput_<版本>_amd64.deb
+sudo apt install ./aurora-input_*.deb     # 会带上 fcitx5 及 GTK/Qt 前端
+```
+
+装完不需要任何额外脚本，按 Fcitx5 的标准用法：
+
+1. 系统的输入法框架用 Fcitx5（Deepin 默认就是；Ubuntu 桌面用系统的「语言支持」把键盘输入法系统设为
+   Fcitx5，或 `im-config -n fcitx5`——这是所有 Fcitx5 输入法共同的前提，不是本包的额外步骤），
+   注销并重新登录；
+2. 打开「Fcitx5 配置」（fcitx5-configtool），把「极光输入法」加进输入法列表；
+3. Shift 单击切中英开箱可用（addon 自己接管，不必改 Fcitx5 的全局配置）。
+
+升级只需 `fcitx5 -rd`（或重新登录）。
+
+包里带图形设置程序（`/usr/lib/aurora-input/aurora_setting`）：应用菜单「极光输入法设置」，或输入时按
+`Ctrl+Shift+]`。构建时需要兄弟仓库 `../wind-setting` 与 `../aurora-ui-rust`（`SETTING_REPO` 可指定）。
+设置程序的文件对话框依赖 xdg-desktop-portal，弹不出时退 zenity 或 kdialog（包已 Recommends）。
+
+必须在 22.04 上构建：更新的发行版编出的产物带 GLIBC_2.38+ 符号和更新的 fcitx5 ABI，22.04 上加载不了。
+服务由 addon 在连不上时自动拉起（`/usr/lib/aurora-input/aurora_input`，可用 `AURORA_INPUT_SERVICE` 覆盖），
+服务自己持 flock 单例。
+
+## 已知限制
+
+- **GNOME（Wayland）**：没有 input-method-v2，Wayland 原生应用的光标要靠 Shell 扩展
+  `windinput-caret@windinput` 补窗口原点。扩展声明 Shell 47–50；42 与 46（含 Ubuntu 22.04 / 24.04
+  的桌面）装不上。安装、启用，以及「哪一次观察不能算实测」见
+  [gnome-shell-extension/README.md](gnome-shell-extension/README.md)。KDE / treeland 不走这条折算。
+- **GNOME（Wayland）下 Fcitx5 的「Wayland 诊断」通知已由包内默认值关掉**：fcitx5 5.1.2 起，
+  Wayland 会话 + GNOME + 当前面板不是 kimpanel 时，它会在启动约 10 秒后弹一条提示，让用户装
+  [kimpanel Shell 扩展](https://extensions.gnome.org/extension/261/kimpanel/)，以便在 GNOME Shell
+  的活动界面搜索框里有输入法弹窗。那条提示对清风不成立（候选窗走本 addon 自己的 X11 /
+  layer-shell 面板，不经 Fcitx5 的 `InputPanel`），所以安装包在
+  `/etc/xdg/fcitx5/conf/notifications.conf` 里预置了 `HiddenNotifications=wayland-diagnose-gnome`。
+  这只是**默认值**：你自己点过「不要再显示」、或改过 `~/.config/fcitx5/conf/notifications.conf`，
+  用户目录那份整份生效、本文件被忽略（Fcitx5 的 `readAsIni` 走 `StandardPath::open`，命中即停、
+  不合并）。想恢复那条提示，删掉 `/etc/xdg/fcitx5/conf/notifications.conf` 后 `fcitx5 -rd` 即可。
+- **KDE Plasma（Wayland）**：要在「系统设置 → 键盘 → 虚拟键盘」里选「Fcitx 5」并重新登录——KWin
+  只把输入法协议（input-method-v1）交给它自己拉起的 Fcitx5，否则 Wayland 原生应用里没有候选窗。
+  并按 Fcitx5 的建议**不要**设 `QT_IM_MODULE` / `GTK_IM_MODULE`：设了的 Wayland 原生应用走 D-Bus、
+  报的是窗口内坐标，候选窗会落到屏幕左上角。
+- Fcitx5 默认每个应用各记各的输入法状态，新开的应用从键盘布局起步；想全局一致，在 Fcitx5 配置的
+  「全局选项」里把「共享输入状态」设为「所有」（Deepin 出厂即如此）。
+
+## 使用
+
+1. 服务由 addon 在连不上时自动拉起；手动启动 `aurora_input`（exe 同目录要有 `data/` 词库目录）仅用于开发。
+   socket 在 `$XDG_RUNTIME_DIR/WindInput/`。
+2. 在 Fcitx5 配置里把「极光输入法」加入输入法组。
+3. 设置：应用菜单或 Fcitx5 托盘菜单里的「极光输入法设置」、Fcitx5 输入法配置里清风的「配置」，
+   或在输入时按 `Ctrl+Shift+]`（开发时设置程序路径可用
+   `AURORA_INPUT_SETTING` 覆盖，默认 `/usr/lib/aurora-input/aurora_setting`）。
+   主菜单：Fcitx5 托盘菜单里的「极光输入法菜单」（弹在指针处），或组字时右键候选窗。
+4. Shift 单击切中英：Fcitx5 出厂把左 Shift 配成「临时在当前和第一个输入法之间切换」
+   （`AltTriggerKeys`），会在引擎之前截走。addon 在更早的阶段把 Shift 单击接过来
+   （`WindEngine::claimShiftTap`），用户不必改配置；清空了该项或当前不是清风时不插手。
+
+## 测试
+
+```bash
+make -C wind_linux test      # 单测（不需要 Fcitx5）
+scripts/linux/e2e.sh         # 端到端：真服务 + 真 fcitx5 + DBus 模拟应用打字
+```
+
+开发约定与架构说明见 [AGENTS.md](AGENTS.md)。

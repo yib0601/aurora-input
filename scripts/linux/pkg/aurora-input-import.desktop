@@ -1,0 +1,13 @@
+[Desktop Entry]
+# 双击方案包（.wpkg）/ 主题包（.wtheme）导入：设置程序按扩展名认包路径参数
+# （设置端 cli.rs::parse_import_file）。与 aurora-input-setting.desktop 分开是因为
+# 文件要 %f（本地路径）、协议要 %u（URL），一条 Exec 只能写一种；本条不进应用菜单。
+Type=Application
+Name=极光输入法导入
+Name[en]=Aurora Input Import
+Exec=/usr/lib/aurora-input/aurora_setting %f
+Icon=windinput
+Terminal=false
+NoDisplay=true
+MimeType=application/x-aurora-input-package;application/x-aurora-input-theme;
+StartupWMClass=aurora_setting

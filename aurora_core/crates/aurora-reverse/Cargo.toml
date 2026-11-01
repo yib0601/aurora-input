@@ -1,0 +1,12 @@
+[package]
+name = "aurora-reverse"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-utils = { path = "../aurora-utils" }
+aurora-dict = { path = "../aurora-dict" }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

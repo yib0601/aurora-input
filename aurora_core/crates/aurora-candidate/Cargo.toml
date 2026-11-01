@@ -1,0 +1,12 @@
+[package]
+name = "aurora-candidate"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+aurora-utils = { path = "../aurora-utils" }
+unicode-segmentation = { workspace = true }
+
+[lints]
+workspace = true

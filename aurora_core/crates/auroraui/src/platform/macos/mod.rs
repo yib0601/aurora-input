@@ -1,0 +1,201 @@
+//! macOS 平台后端（Cocoa/AppKit + Core Text）。
+//!
+//! 对外暴露与 `win32` 同形的 API：`run` / `open_url` / `Tray`·`TrayCtx`·`TrayMenuItem` /
+//! `clipboard::MacClipboard`。上层只依赖 `crate::platform::*`，不直接触碰本后端。
+//!
+//! 模块划分：
+//! - `window`：`NSApplication` + `NSWindow` + 自定义翻转 `NSView`。渲染走 CPU（tiny-skia
+//!   `Pixmap`），`drawRect:` 中经 `CGBitmapContext`→`CGImage`→`CGContextDrawImage` blit；
+//!   鼠标/键盘/滚轮/光标/HiDPI/无边框拖动/文件拖放/输入法（`NSTextInputClient`）均在此。
+//!   多窗口也在此：登记表 `WINDOWS` 兼任子窗 `NSWindow` 的所有者（对照 win32 那张只存
+//!   `HWND` 的名册——差别的来由见该常量的说明）。
+//! - `clipboard`：`NSPasteboard`。
+//! - `tray`：`NSStatusItem` 托盘（图标 + 左键/双击 + 原生右键菜单）。
+//! - 文字渲染见 `crate::text::coretext`（Core Text）。
+//!
+//! 逐项对照实现见 `docs/MACOS_PORTING.md` 与 `platform/win32/mod.rs`。
+
+pub mod clipboard;
+pub mod hotkey;
+pub mod open_files;
+pub mod tray;
+pub mod url_scheme;
+pub mod window;
+
+use super::{AppHandler, NewWindow, WindowConfig};
+
+/// 运行应用：截屏模式离屏渲染存盘；否则创建窗口进入事件循环。
+pub(crate) fn run(
+    cfg: WindowConfig,
+    mut handler: Box<dyn AppHandler>,
+    waker: Option<std::sync::Arc<crate::sync::WakerShared>>,
+    single: Option<crate::single_instance::SingleInstance>,
+) {
+    super::apply_motion_level(&cfg, os_reduce_motion);
+    // 光标闪烁走**插入符**设置（`NSTextInsertionPointBlinkPeriod*`），不跟"减弱动态效果"
+    // 走：两者在系统里本就是分开的开关。应用把动效强制关死时连它一起关。
+    crate::ui::caret::set_blink_period_ms(if super::motion_forced_off(&cfg) {
+        None
+    } else {
+        os_caret_blink_half_ms()
+    });
+
+    if let Some(path) = cfg.screenshot.clone() {
+        // 离屏渲染走平台无关的共享实现（与 win32 后端共用）。
+        super::run_offscreen(&cfg, &mut handler, &path);
+        return;
+    }
+    // TODO(macOS): 零窗口常驻模式（`App::run_resident`）尚未实现。
+    //
+    // 缺的是平台落地，核心层（`TrayCtx::open_window` / `HotkeyCtx::open_window` 与
+    // 应用级开窗工厂）已经就位。要补的三件事与 win32 侧对称：
+    //   1. `window::run_windowed` 支持不建主窗直接进 `NSApp::run`（托盘与热键本就挂在
+    //      应用上，NSStatusItem 不需要窗口）；
+    //   2. 最后一个 NSWindow 关闭时不终止应用（`applicationShouldTerminateAfterLastWindowClosed`
+    //      要回 false），并确认 `TrayAction::Quit` 的 `NSApp::terminate` 在零窗口下仍有效；
+    //   3. `tray.rs` 的 `run_actions` 落地 `TrayAction::OpenWindow`（见那里的 TODO）。
+    //
+    // 在此之前**明确拒绝而不是退化成开一个窗口**：那样跑起来像是成功了，用户要等到
+    // 发现桌面上多了个空窗才知道模式没生效。
+    if cfg.resident {
+        eprintln!(
+            "[auroraui] 常驻模式（App::run_resident）目前仅支持 Windows，macOS 尚未实现，进程退出"
+        );
+        return;
+    }
+    // 单实例仲裁（应用若已在 main 里 claim_instance 过，这里直接放行）：二次实例把 argv
+    // 转发给首实例后直接返回、不建窗口。
+    //
+    // ⚠ macOS 的 `.app` 由 LaunchServices 保证不会启第二个进程，但它**丢弃**第二次启动
+    // 带的 arguments、只把窗口拉到前台——深链（如「打开设置的词库页」）因此在程序已开着
+    // 时失效。argv 的转发必须由这一层自己做，不能指望系统的单实例语义。
+    if let Some(si) = &single {
+        if !crate::single_instance::arbitrate(&si.app_id) {
+            return;
+        }
+    }
+    window::run_windowed(cfg, handler, waker, single);
+}
+
+/// 把应用带到前台。**所有激活都必须走这里，不要直接 `app.activate()`。**
+///
+/// 无参的 `-[NSApplication activate]` 是 macOS 14 才有的 selector，而 objc2 的绑定不做
+/// 运行时版本检查、直接 `msg_send`：13 及以下会 `doesNotRecognizeSelector:` 抛
+/// `NSInvalidArgumentException`。Objective-C 异常穿不过 Rust 栈——它一路 unwind 到
+/// `main` 的 `catch_unwind`，被判成 foreign exception 后直接 `abort()`，崩溃日志里
+/// 只剩一句 "abort() called"，连异常名都没有（WindInput #67 就是这么崩的，且因为
+/// `run_windowed` 在 `app.run()` 前无条件激活，13 及以下是**启动必崩**）。
+///
+/// 故先问过 `respondsToSelector:`，老系统回落到 10.0 就有的
+/// `activateIgnoringOtherApps:`（14 起才标 deprecated，至今仍可用）。
+pub(crate) fn activate_app(app: &objc2_app_kit::NSApplication) {
+    use objc2::sel;
+    use objc2_foundation::NSObjectProtocol;
+
+    if app.respondsToSelector(sel!(activate)) {
+        app.activate();
+    } else {
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+    }
+}
+
+/// 系统是否要求减弱动态效果（辅助功能 › 显示 › 减弱动态效果）。
+fn os_reduce_motion() -> bool {
+    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+}
+
+/// 查询系统**插入符**闪烁半周期（ms）。`None` = 用户关掉了闪烁。
+///
+/// macOS 把它放在 `NSUserDefaults` 的 `NSTextInsertionPointBlinkPeriodOn/Off`（单位**秒**）：
+/// 两者都显式设为 0 才是"不闪"；键不存在（绝大多数机器）则用系统默认 500ms。
+/// 与"减弱动态效果"无关——那个管的是窗口/控件过渡。
+fn os_caret_blink_half_ms() -> Option<u32> {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let d = NSUserDefaults::standardUserDefaults();
+    let read = |k: &str| -> Option<f64> {
+        let key = NSString::from_str(k);
+        // objectForKey 为 None 即"用户没设过"，与"设成了 0"必须区分开。
+        d.objectForKey(&key)?;
+        Some(d.doubleForKey(&key))
+    };
+    let on = read("NSTextInsertionPointBlinkPeriodOn");
+    let off = read("NSTextInsertionPointBlinkPeriodOff");
+    match (on, off) {
+        (None, None) => Some(crate::ui::caret::BLINK_HALF_MS as u32),
+        (a, b) => {
+            let on = a.unwrap_or(0.5).max(0.0);
+            let off = b.unwrap_or(0.5).max(0.0);
+            if on <= 0.0 && off <= 0.0 {
+                return None; // 用户显式关掉闪烁
+            }
+            // 本库的相位模型是对称半周期，取亮/灭时长的平均。
+            Some((((on + off) / 2.0) * 1000.0).round().max(1.0) as u32)
+        }
+    }
+}
+
+/// 系统是否偏好暗色外观（见 [`crate::event::system_prefers_dark`]）。
+///
+/// macOS 把它放在 `NSUserDefaults` 的 `AppleInterfaceStyle`：暗色时值为 `"Dark"`，
+/// 亮色时**这个键根本不存在**——不是空串也不是 `"Light"`，故只能按「读得到且等于 Dark」
+/// 来判定。对照 win32 那边读的 `AppsUseLightTheme` DWORD。
+///
+/// 读不到按亮色处理，理由同 win32 侧：那是出厂默认，且暗色界面配亮色系统更容易被当成
+/// 程序坏了。
+///
+/// 尚未接运行期跟随（`AppHandler::on_system_theme_changed` 在本平台不触发）：那要监听
+/// `NSApp.effectiveAppearance` 的 KVO 或 `AppleInterfaceThemeChangedNotification`，
+/// 与本函数是两件事。启动时读一次已经可用。
+pub(crate) fn system_prefers_dark() -> bool {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let d = NSUserDefaults::standardUserDefaults();
+    d.stringForKey(&NSString::from_str("AppleInterfaceStyle"))
+        .is_some_and(|s| s.to_string().eq_ignore_ascii_case("dark"))
+}
+
+/// 拖出到外部程序。macOS 侧（`NSDraggingSession`）尚未接入：暂时什么都不做、
+/// 返回 [`DragEffect::None`](crate::platform::DragEffect::None)，让调用方按"没落到任何
+/// 地方"处理，API 形状与 win32 一致，下游不必按平台分支。
+pub fn drag_files(
+    _paths: &[impl AsRef<std::path::Path>],
+    _allow_move: bool,
+) -> crate::platform::DragEffect {
+    crate::platform::DragEffect::None
+}
+
+/// 见 win32 `drag_files_with`。拖出未接入，`before_drop` 不会被调。
+pub fn drag_files_with(
+    _paths: &[impl AsRef<std::path::Path>],
+    _allow_move: bool,
+    _before_drop: Option<Box<dyn FnOnce() -> bool>>,
+) -> crate::platform::DragEffect {
+    crate::platform::DragEffect::None
+}
+
+/// 用户偏好的界面语言（BCP-47，按优先级排序）。对照 win32 `GetUserPreferredUILanguages`。
+///
+/// `NSLocale::preferredLanguages` 给的就是「系统设置 → 语言与地区」里那张有序表，
+/// 已经是 BCP-47（`zh-Hans-CN`、`en-US`），无需再折算。注意它与
+/// `NSLocale::currentLocale` 不是一回事：后者是**区域格式**（数字/日期的写法），
+/// 把语言设成英文、区域留在中国的机器上读它会判错。
+pub fn system_locales() -> Vec<String> {
+    use objc2_foundation::NSLocale;
+
+    NSLocale::preferredLanguages()
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// 用系统默认程序打开 URL/路径（链接点击）。对照 win32 `ShellExecuteW`。
+pub fn open_url(url: &str) {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSString, NSURL};
+
+    let ns = NSString::from_str(url);
+    if let Some(nsurl) = NSURL::URLWithString(&ns) {
+        // fire-and-forget，忽略结果。
+        let _ = NSWorkspace::sharedWorkspace().openURL(&nsurl);
+    }
+}

@@ -1,0 +1,26 @@
+[package]
+name = "aurora-dict"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-utils = { path = "../aurora-utils" }
+aurora-candidate = { path = "../aurora-candidate" }
+aurora-wdict = { path = "../aurora-wdict" }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+memmap2 = "0.9"
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+
+# build_guard 判活：proc_pidinfo 取进程启动时间。
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true

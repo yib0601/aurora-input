@@ -1,0 +1,37 @@
+[package]
+name = "aurora-webdata"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# 依赖方向是本 crate → coordinator（反过来会把 aurora-transfer/fontdb 拉回
+# Android 闭包）；移动端形态（aurora-mobile）不依赖本 crate。
+aurora-coordinator = { path = "../aurora-coordinator", default-features = false }
+aurora-config = { path = "../aurora-config" }
+aurora-engine = { path = "../aurora-engine" }
+aurora-aux-code = { path = "../aurora-aux-code" }
+aurora-store = { path = "../aurora-store" }
+# 短语分发导入的能力分级（`phrase.previewImportText`）读 cmdbar 的函数 registry。
+aurora-cmdbar = { path = "../aurora-cmdbar" }
+aurora-reverse = { path = "../aurora-reverse" }
+aurora-theme = { path = "../aurora-theme" }
+aurora-candidate = { path = "../aurora-candidate" }
+aurora-keys = { path = "../aurora-keys" }
+aurora-transfer = { path = "../aurora-transfer" }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+chrono = "0.4"
+fontdb = "0.22"
+
+[dev-dependencies]
+# 只供测试对照内置格式表条数（quick.list 不该漏条目）。
+aurora-quick-input = { path = "../aurora-quick-input" }
+aurora-bridge = { path = "../aurora-bridge" }
+# 手工构造 .wpkg 用（export_package 写不出带说明的 package.toml）；
+# 与 aurora-transfer 同一版本、同一组 feature（取舍理由见那边）。
+zip = { version = "2", default-features = false, features = ["deflate", "time"] }
+
+[lints]
+workspace = true

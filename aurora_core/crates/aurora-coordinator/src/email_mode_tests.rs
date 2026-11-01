@@ -1,0 +1,749 @@
+//! 邮箱模式与两模式共用补全候选源的 crate 内行为测试（白盒，零 RPC、零词库）。
+//!
+//! 刻意用 `new_headless_with_store`（不传 data_dir）而不是集成测试里的
+//! `new_headless(cfg, Some(&data_dir()))`：后者在没有 `build_dev/data` 的 worktree 里
+//! 会走 `has_schemas()` 的跳过分支，**整族静默变绿**（AGENTS.md 那条「0.0x 秒全绿＝假绿」）。
+//! 邮箱模式不依赖任何词库——它的候选来自预置后缀表与学习数据——所以没有理由把测试
+//! 绑在词库上。
+
+use std::sync::Arc;
+
+use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
+use aurora_config::Config;
+use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
+use aurora_store::Store;
+use aurora_store::completion::CompletionKind;
+
+use crate::coordinator::Coordinator;
+
+/// 带临时 store 的无头 Coordinator。`cfg` 由调用方调好开关。
+fn coord_with(tag: &str, cfg: Config) -> (Arc<Coordinator>, Arc<Store>) {
+    let path = std::env::temp_dir().join(format!(
+        "wind_email_mode_{}_{}_{:?}.redb",
+        std::process::id(),
+        tag,
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let store = Arc::new(Store::open(&path).unwrap());
+    let c = Coordinator::new_headless_with_store(cfg, None, Arc::clone(&store));
+    (c, store)
+}
+
+/// 开了邮箱模式的默认配置。
+fn email_cfg() -> Config {
+    let mut c = Config::default();
+    c.input.email.enabled = true;
+    c
+}
+
+fn key(key_code: u32, modifiers: u32) -> KeyEventData {
+    KeyEventData {
+        key_code,
+        scan_code: 0,
+        modifiers,
+        event_type: EVENT_KEY_DOWN,
+        toggles: 0,
+        event_seq: 0,
+        prev_char: 0,
+    }
+}
+
+fn press_letter(c: &Coordinator, ch: char) -> KeyAction {
+    c.handle_key_event(&key((ch.to_ascii_uppercase() as u32) & 0xFF, 0))
+}
+
+fn press_digit(c: &Coordinator, ch: char) -> KeyAction {
+    c.handle_key_event(&key(ch as u32, 0))
+}
+
+/// `@` = Shift+2。C++ 侧把它归 Punctuation，中文模式无条件吃键，故这一帧一定到得了 Rust。
+///
+/// 从 `VK_0` 派生而不是写 `0x32`：keymap 只导出区间端点（`VK_0`/`VK_9`），而 AGENTS.md
+/// 那条「禁止裸十六进制」管的是**从哪里得到这个数**，不是算不算术。
+fn press_at(c: &Coordinator) -> KeyAction {
+    c.handle_key_event(&key(aurora_keys::keymap::VK_0 + 2, MOD_SHIFT))
+}
+
+fn press(c: &Coordinator, vk: u32) -> KeyAction {
+    c.handle_key_event(&key(vk, 0))
+}
+
+fn composition(action: &KeyAction) -> Option<String> {
+    match action {
+        KeyAction::UpdateComposition { text, .. } => Some(text.clone()),
+        _ => None,
+    }
+}
+
+fn committed(action: &KeyAction) -> Option<String> {
+    match action {
+        KeyAction::InsertText { text, .. } => Some(text.clone()),
+        _ => None,
+    }
+}
+
+// ───────────────────────── 触发判据 ─────────────────────────
+
+#[test]
+fn at_sign_hijacks_only_when_buffer_is_not_empty() {
+    let (c, _s) = coord_with("enter", email_cfg());
+    press_letter(&c, 'a');
+    press_letter(&c, 'b');
+    let act = press_at(&c);
+    assert_eq!(
+        composition(&act).as_deref(),
+        Some("ab@"),
+        "缓冲非空时按 @ 应夺取进入邮箱模式，组合区带上用户名与 @，实际 {act:?}"
+    );
+    assert_eq!(c.debug_active_mode(), Some("email"));
+}
+
+#[test]
+fn at_sign_on_empty_buffer_does_not_enter() {
+    let (c, _s) = coord_with("empty", email_cfg());
+    let act = press_at(&c);
+    assert_ne!(
+        c.debug_active_mode(),
+        Some("email"),
+        "空缓冲按 @ 不该进邮箱模式（否则用户再也没法单独打一个 @），实际 {act:?}"
+    );
+}
+
+#[test]
+fn disabled_email_mode_never_hijacks() {
+    // 出厂态：邮箱模式关闭 ⇒ @ 照常走标点流水线，一切与加这个功能之前相同。
+    let (c, _s) = coord_with("off", Config::default());
+    press_letter(&c, 'a');
+    press_at(&c);
+    assert_eq!(c.debug_active_mode(), None, "关闭时不该进任何 overlay 模式");
+}
+
+// ───────────────────────── 缓冲与光标 ─────────────────────────
+
+#[test]
+fn suffix_accumulates_including_digits_and_dots() {
+    let (c, _s) = coord_with("accum", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    press_letter(&c, 'q');
+    press_letter(&c, 'q');
+    // `.` 与数字都是合法邮箱字符，必须入缓冲而不是被当成翻页/选词键。
+    let act = press(&c, aurora_keys::keymap::VK_PERIOD);
+    assert_eq!(composition(&act).as_deref(), Some("a@qq."));
+    press_letter(&c, 'c');
+    let act = press_digit(&c, '1');
+    assert_eq!(
+        composition(&act).as_deref(),
+        Some("a@qq.c1"),
+        "数字键在邮箱模式里是字符而非序号选词 —— 否则打不出 163.com 这类后缀"
+    );
+}
+
+#[test]
+fn backspace_at_the_hijack_boundary_rewinds_to_normal_input() {
+    let (c, _s) = coord_with("rewind", email_cfg());
+    press_letter(&c, 'a');
+    press_letter(&c, 'b');
+    press_at(&c); // 缓冲 "ab@"，这就是夺取边界
+    press_letter(&c, 'q'); // "ab@q"
+
+    // 第一次退格：删掉 q，退回边界，仍在邮箱模式内。
+    let act = press(&c, aurora_keys::keymap::VK_BACK);
+    assert_eq!(composition(&act).as_deref(), Some("ab@"));
+    assert_eq!(c.debug_active_mode(), Some("email"));
+
+    // 第二次退格：已在边界 ⇒ 撤销夺取，把 "ab" 放回正常码表输入流。
+    let act = press(&c, aurora_keys::keymap::VK_BACK);
+    assert_eq!(
+        c.debug_active_mode(),
+        None,
+        "退到夺取边界再按退格应回退出模式，实际 {act:?}"
+    );
+}
+
+#[test]
+fn escape_abandons_without_committing() {
+    let (c, _s) = coord_with("esc", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    press_letter(&c, 'q');
+    let act = press(&c, aurora_keys::keymap::VK_ESCAPE);
+    assert_eq!(committed(&act), None, "Esc 不该上屏任何东西");
+    assert_eq!(c.debug_active_mode(), None, "Esc 应退出邮箱模式");
+}
+
+// ───────────────────────── 候选与上屏 ─────────────────────────
+
+#[test]
+fn space_commits_the_highlighted_completion() {
+    let (c, _s) = coord_with("commit", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    // 预置表以 qq.com 打头 ⇒ 首选就是 a@qq.com。
+    let act = press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("a@qq.com"),
+        "有候选时空格应上屏高亮候选，实际 {act:?}"
+    );
+    assert_eq!(c.debug_active_mode(), None, "上屏后应退出模式");
+}
+
+#[test]
+fn typed_suffix_filters_the_candidates() {
+    let (c, _s) = coord_with("filter", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    press_letter(&c, 'g');
+    let act = press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("a@gmail.com"),
+        "打了 g 之后候选只剩 g 开头的后缀，实际 {act:?}"
+    );
+}
+
+#[test]
+fn unmatched_suffix_commits_the_raw_buffer() {
+    let (c, _s) = coord_with("raw", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    // 预置表里没有 z 开头的后缀 ⇒ 无候选 ⇒ 空格上屏缓冲原文（自定义域名走这条路）。
+    for ch in ['z', 'z', 'z'] {
+        press_letter(&c, ch);
+    }
+    let act = press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("a@zzz"),
+        "无候选时空格上屏缓冲原文，实际 {act:?}"
+    );
+}
+
+#[test]
+fn empty_suffix_list_still_lets_the_user_type_freely() {
+    // 用户在设置里把预置后缀删干净 ⇒ 没有候选，但模式照常可用。
+    let mut cfg = email_cfg();
+    cfg.input.email.suffixes = vec![];
+    let (c, _s) = coord_with("nosuffix", cfg);
+    press_letter(&c, 'a');
+    press_at(&c);
+    for ch in ['q', 'q'] {
+        press_letter(&c, ch);
+    }
+    let act = press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(committed(&act).as_deref(), Some("a@qq"));
+}
+
+/// **回车恒上屏缓冲原文**，即使候选里有更"完整"的那一条。
+///
+/// 这是实机反馈修出来的：一期把空格与回车并成一条路，于是打了一半的邮箱再也上不了屏
+/// ——打 `abc@gm` 想就这么上屏，回车却给出 `abc@gmail.com`。回车是用户**否决候选**的
+/// 出口，补全猜错时他手上必须还有一个键能拿回原文。
+#[test]
+fn enter_commits_the_raw_buffer_even_when_a_candidate_is_highlighted() {
+    let (c, _s) = coord_with("enter_raw", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    press_letter(&c, 'g');
+    // 此刻候选首位是 a@gmail.com（空格会上屏它）——回车必须给出原文。
+    assert_eq!(
+        c.debug_page_texts().first().map(String::as_str),
+        Some("a@gmail.com")
+    );
+
+    let act = press(&c, aurora_keys::keymap::VK_RETURN);
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("a@g"),
+        "回车应上屏缓冲原文而不是高亮候选，实际 {act:?}"
+    );
+}
+
+/// 同一个缓冲状态下，空格与回车必须给出**不同**的结果。
+///
+/// 分开写这一条是因为上一条单独看会被「候选恰好等于原文」蒙混过去：两个键都返回
+/// `a@g` 时它也是绿的。这里把两条路并排跑，直接钉住「它们不是同一条路」。
+#[test]
+fn space_and_enter_diverge_on_the_same_buffer() {
+    let mut out = Vec::new();
+    for (tag, vk) in [
+        ("space", aurora_keys::keymap::VK_SPACE),
+        ("enter", aurora_keys::keymap::VK_RETURN),
+    ] {
+        let (c, _s) = coord_with(tag, email_cfg());
+        press_letter(&c, 'a');
+        press_at(&c);
+        press_letter(&c, 'g');
+        out.push(committed(&press(&c, vk)).unwrap_or_default());
+    }
+    assert_eq!(out[0], "a@gmail.com", "空格选候选");
+    assert_eq!(out[1], "a@g", "回车上原文");
+    assert_ne!(
+        out[0], out[1],
+        "两个键并回一条路就会在这里失败 —— 那正是实机上「打一半上不了屏」的成因"
+    );
+}
+
+/// 网址模式同一套分工（两模式共用 `mode_completion.rs` 的上屏收尾，不该分叉）。
+#[test]
+fn url_enter_also_commits_the_raw_buffer() {
+    let (c, store) = coord_with("url_enter", url_cfg(true));
+    store
+        .record_completion(CompletionKind::UrlHistory, "www.example.com")
+        .unwrap();
+    enter_url(&c);
+    press_letter(&c, 'e');
+    assert_eq!(c.debug_page_texts(), vec!["www.example.com".to_string()]);
+
+    let act = press(&c, aurora_keys::keymap::VK_RETURN);
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("www.e"),
+        "网址模式回车同样上屏原文，实际 {act:?}"
+    );
+}
+
+/// 无候选时两个键殊途同归（都上屏原文）——出厂态走的就是这条。
+#[test]
+fn without_candidates_both_keys_commit_the_raw_buffer() {
+    for vk in [aurora_keys::keymap::VK_SPACE, aurora_keys::keymap::VK_RETURN] {
+        let (c, _s) = coord_with("nocand", url_cfg(false));
+        enter_url(&c);
+        press_letter(&c, 'z');
+        assert_eq!(
+            committed(&press(&c, vk)).as_deref(),
+            Some("www.z"),
+            "历史关闭 ⇒ 恒无候选 ⇒ 两个键都与加补全之前逐字相同"
+        );
+    }
+}
+
+// ───────────────────────── 学习 ─────────────────────────
+
+#[test]
+fn committing_learns_the_suffix_without_the_username() {
+    let (c, store) = coord_with("learn", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    press(&c, aurora_keys::keymap::VK_SPACE); // 上屏 a@qq.com
+
+    let rec = store
+        .get_completion(CompletionKind::EmailSuffix, "qq.com")
+        .unwrap()
+        .expect("上屏后应学下后缀");
+    assert_eq!(rec.count, 1);
+    // 学的是域名，不含用户名 —— 这正是邮箱学习不需要第二道隐私开关的理由。
+    assert_eq!(
+        store
+            .list_completions(CompletionKind::EmailSuffix, "", 0, 0)
+            .unwrap()
+            .1,
+        1,
+        "只该学下一条（后缀），不该把整个邮箱地址也记一份"
+    );
+}
+
+/// 回车上屏半截后缀时**不学**它 —— 否则下次补全会先递一条垃圾。
+///
+/// 「打一半就上屏」是回车带来的正常用法（见 `mode_completion.rs` 文件头分工表）。
+/// 若把 `gm` 也学进去，下次打 `x@g` 时它会作为「学过的」排在 `gmail.com` 前面，
+/// 而用户根本没有 `@gm` 这个邮箱。
+#[test]
+fn a_half_typed_suffix_is_committed_but_not_learned() {
+    let (c, store) = coord_with("halflearn", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    press_letter(&c, 'g');
+    press_letter(&c, 'm');
+    let act = press(&c, aurora_keys::keymap::VK_RETURN);
+
+    // 上屏不受影响：用户要的就是这五个字符。
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("a@gm"),
+        "半截后缀照样原样上屏"
+    );
+    // 但它不该进学习数据。
+    assert_eq!(
+        store
+            .list_completions(CompletionKind::EmailSuffix, "", 0, 0)
+            .unwrap()
+            .1,
+        0,
+        "「gm」不像域名，不该被学成后缀"
+    );
+}
+
+/// 反过来：回车上屏一个**表外的完整域名**时必须学 —— 这正是「自定义后缀也能学」的场景。
+#[test]
+fn a_custom_full_domain_committed_by_enter_is_learned() {
+    let (c, store) = coord_with("customlearn", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    for ch in ['m', 'y', 'c', 'o', 'r', 'p'] {
+        press_letter(&c, ch);
+    }
+    press(&c, aurora_keys::keymap::VK_PERIOD);
+    press_letter(&c, 'c');
+    press_letter(&c, 'n');
+    let act = press(&c, aurora_keys::keymap::VK_RETURN);
+
+    assert_eq!(committed(&act).as_deref(), Some("a@mycorp.cn"));
+    assert_eq!(
+        store
+            .get_completion(CompletionKind::EmailSuffix, "mycorp.cn")
+            .unwrap()
+            .map(|r| r.count),
+        Some(1),
+        "表外的完整域名必须学得下来，否则「自定义后缀也能学」就废了"
+    );
+}
+
+/// 域名判据的边界：点在首尾、重复点、无点一概不算。
+#[test]
+fn domain_shape_rejects_malformed_suffixes() {
+    let (c, store) = coord_with("shape", email_cfg());
+    for bad in ["gm", "com.", ".com"] {
+        press_letter(&c, 'a');
+        press_at(&c);
+        for ch in bad.chars() {
+            if ch == '.' {
+                press(&c, aurora_keys::keymap::VK_PERIOD);
+            } else {
+                press_letter(&c, ch);
+            }
+        }
+        press(&c, aurora_keys::keymap::VK_RETURN);
+    }
+    assert_eq!(
+        store
+            .list_completions(CompletionKind::EmailSuffix, "", 0, 0)
+            .unwrap()
+            .1,
+        0,
+        "首尾带点或无点的串都不该被学成后缀"
+    );
+}
+
+#[test]
+fn a_learned_suffix_outranks_the_preset_table() {
+    let (c, store) = coord_with("rank", email_cfg());
+    // 手工喂两次「公司域名」，模拟用户用过。
+    store
+        .record_completion(CompletionKind::EmailSuffix, "mycorp.cn")
+        .unwrap();
+    store
+        .record_completion(CompletionKind::EmailSuffix, "mycorp.cn")
+        .unwrap();
+
+    press_letter(&c, 'a');
+    press_at(&c);
+    let act = press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("a@mycorp.cn"),
+        "学过的后缀应排到预置表之前 —— 这是自动学习的全部意义，实际 {act:?}"
+    );
+}
+
+#[test]
+fn a_suffix_present_in_both_sources_appears_once() {
+    let (c, store) = coord_with("dedup", email_cfg());
+    store
+        .record_completion(CompletionKind::EmailSuffix, "qq.com")
+        .unwrap();
+    press_letter(&c, 'a');
+    press_at(&c);
+    let hits = c
+        .debug_page_texts()
+        .into_iter()
+        .filter(|t| t == "a@qq.com")
+        .count();
+    assert_eq!(
+        hits, 1,
+        "qq.com 既在预置表又已学过，候选里只该出现一次（否则用户怎么用都消不掉其中一条）"
+    );
+}
+
+#[test]
+fn learning_stops_when_the_mode_is_switched_off_mid_session() {
+    // 闸门在写入侧也要有：开关是运行时可改的，不能只在进入模式时判一次。
+    let (c, store) = coord_with("offlearn", email_cfg());
+    press_letter(&c, 'a');
+    press_at(&c);
+    c.refresh_config_in_memory(|cfg| cfg.input.email.enabled = false);
+    press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(
+        store
+            .list_completions(CompletionKind::EmailSuffix, "", 0, 0)
+            .unwrap()
+            .1,
+        0,
+        "关掉邮箱模式后不该再学新后缀"
+    );
+}
+
+// ───────────────────────── 切分工具 ─────────────────────────
+
+#[test]
+fn split_helpers_use_the_last_at_sign() {
+    assert_eq!(Coordinator::email_user_part("abc@qq.com"), "abc");
+    assert_eq!(Coordinator::email_suffix_part("abc@qq.com"), "qq.com");
+    assert_eq!(Coordinator::email_suffix_part("abc@"), "");
+    // 手滑打出第二个 @ 时按最后一个切，才能让用户把后半截打完；按第一个切会拿
+    // "b@" 去查后缀，一条也匹配不上。
+    assert_eq!(Coordinator::email_user_part("a@b@"), "a@b");
+    assert_eq!(Coordinator::email_suffix_part("a@b@qq"), "qq");
+    // 没有 @ 时整串是用户名，后缀为空（缓冲被退格删到只剩用户名的中间态）。
+    assert_eq!(Coordinator::email_user_part("abc"), "abc");
+    assert_eq!(Coordinator::email_suffix_part("abc"), "");
+}
+
+// ═════════════════════ 网址模式：历史补全（§5.1） ═════════════════════
+//
+// 与邮箱共用 `mode_completion.rs` 的候选源与上屏语义，故并在同一个文件里测——两者
+// 分叉正是那份共用代码要防的事，测试分家等于把对照关系也拆了。
+
+/// 开了网址模式的配置。`history` 控制第二道开关。
+fn url_cfg(history: bool) -> Config {
+    let mut c = Config::default();
+    c.input.url.enabled = true;
+    c.input.url.prefixes = vec!["www.".into()];
+    c.input.url.history_enabled = history;
+    c
+}
+
+/// 打满 `www.` 进入网址模式（`.` 是补满前缀的那一键）。
+fn enter_url(c: &Coordinator) -> KeyAction {
+    press_letter(c, 'w');
+    press_letter(c, 'w');
+    press_letter(c, 'w');
+    press(c, aurora_keys::keymap::VK_PERIOD)
+}
+
+#[test]
+fn url_history_off_keeps_the_old_behaviour_exactly() {
+    // 出厂态：历史关着 ⇒ 恒无候选 ⇒ 空格上屏缓冲原文，与加补全之前逐字相同。
+    // 这是「不惊动既有用户」那半条承诺的守护测试。
+    let (c, store) = coord_with("url_off", url_cfg(false));
+    // 库里先埋一条历史，证明关着时**连查都不查**，而不是查出来再丢掉。
+    store
+        .record_completion(CompletionKind::UrlHistory, "www.example.com")
+        .unwrap();
+
+    let act = enter_url(&c);
+    assert_eq!(composition(&act).as_deref(), Some("www."));
+    assert!(c.debug_page_texts().is_empty(), "历史关闭时不该有候选");
+
+    press_letter(&c, 'e');
+    let act = press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("www.e"),
+        "无候选时空格上屏缓冲原文，实际 {act:?}"
+    );
+    assert_eq!(
+        store
+            .list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            .unwrap()
+            .1,
+        1,
+        "历史关闭时上屏不该新增记录（库里只剩预先埋的那条）"
+    );
+}
+
+#[test]
+fn url_history_on_completes_from_the_past() {
+    let (c, store) = coord_with("url_on", url_cfg(true));
+    store
+        .record_completion(CompletionKind::UrlHistory, "www.example.com")
+        .unwrap();
+
+    enter_url(&c);
+    press_letter(&c, 'e');
+    assert_eq!(
+        c.debug_page_texts(),
+        vec!["www.example.com".to_string()],
+        "打过的网址应作为补全候选出现"
+    );
+    let act = press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(
+        committed(&act).as_deref(),
+        Some("www.example.com"),
+        "有候选时空格上屏高亮候选，实际 {act:?}"
+    );
+}
+
+#[test]
+fn url_commit_records_history_when_enabled() {
+    let (c, store) = coord_with("url_rec", url_cfg(true));
+    enter_url(&c);
+    for ch in ['a', 'b'] {
+        press_letter(&c, ch);
+    }
+    press(&c, aurora_keys::keymap::VK_SPACE); // 上屏 www.ab
+
+    let rec = store
+        .get_completion(CompletionKind::UrlHistory, "www.ab")
+        .unwrap()
+        .expect("开着历史时上屏应记一条");
+    assert_eq!(rec.count, 1);
+}
+
+#[test]
+fn a_candidate_identical_to_the_buffer_is_not_offered() {
+    // 与缓冲逐字相同的那条不该占掉首选位：选它与不选它上屏结果完全一样，
+    // 摆在那里只会让用户以为自己在选什么东西。
+    let (c, store) = coord_with("url_same", url_cfg(true));
+    store
+        .record_completion(CompletionKind::UrlHistory, "www.")
+        .unwrap();
+    store
+        .record_completion(CompletionKind::UrlHistory, "www.a.com")
+        .unwrap();
+    enter_url(&c);
+    assert_eq!(
+        c.debug_page_texts(),
+        vec!["www.a.com".to_string()],
+        "只该给出与缓冲不同的补全项"
+    );
+}
+
+/// 达到上限后**仍然学得进新网址**，被挤掉的是除它以外最冷的那条。
+///
+/// ⚠️ 这条用例最初把相反的行为钉成了预期（「刚上屏的 count=1，该出局」），审查时才发现
+/// 那等于把一个结构性缺陷写成契约：调用方是「先记一条、再裁到上限」，而新条目次数恒为
+/// 1、在次数降序里垫底，于是表一满就**每次上屏都把自己刚写的那条删掉**——历史从此冻结，
+/// 还每次白付一次写事务加一次全表排序。
+///
+/// ★ 判据：一条断言「符合当前实现」不等于「符合应有行为」。把行为钉成契约之前先问一句
+/// 「这个行为一直持续下去，用户会得到什么」。
+#[test]
+fn a_full_history_still_learns_new_urls() {
+    let mut cfg = url_cfg(true);
+    cfg.input.url.history_max = 2;
+    let (c, store) = coord_with("url_prune", cfg);
+    // 先把表塞满两条高频的。
+    for text in ["www.hot1", "www.hot2"] {
+        for _ in 0..5 {
+            store
+                .record_completion(CompletionKind::UrlHistory, text)
+                .unwrap();
+        }
+    }
+    enter_url(&c);
+    press_letter(&c, 'z');
+    press(&c, aurora_keys::keymap::VK_SPACE); // 上屏 www.z
+
+    let (rows, total) = store
+        .list_completions(CompletionKind::UrlHistory, "", 0, 0)
+        .unwrap();
+    assert_eq!(total, 2, "仍裁到上限，实际 {rows:?}");
+    assert!(
+        rows.iter().any(|(t, _)| t == "www.z"),
+        "刚上屏的网址必须学得进去，否则表一满历史就永远冻结了：{rows:?}"
+    );
+}
+
+/// 退出网址模式后**不得**留下幽灵候选。
+///
+/// 加历史补全之前 `exit_url_mode` 漏清 `candidates` 是无害的（那时恒无候选）；接上
+/// `update_url_candidates` 之后，残留候选会在候选窗已隐藏的情况下被下一次空格命中
+/// 「有候选则选词」分支，凭空再上屏一条历史网址。数字选词键、翻页键与
+/// `has_input_session` 同样会被这批看不见的候选骗过。
+#[test]
+fn leaving_url_mode_leaves_no_ghost_candidates() {
+    let (c, store) = coord_with("ghost", url_cfg(true));
+    store
+        .record_completion(CompletionKind::UrlHistory, "www.example.com")
+        .unwrap();
+
+    // ① 上屏退出
+    enter_url(&c);
+    press_letter(&c, 'e');
+    assert!(!c.debug_page_texts().is_empty(), "前提：此刻确实有候选");
+    press(&c, aurora_keys::keymap::VK_SPACE);
+    assert!(
+        c.debug_page_texts().is_empty(),
+        "上屏退出后候选必须清空，否则下一次空格会再上屏一条：{:?}",
+        c.debug_page_texts()
+    );
+
+    // ② Esc 退出
+    enter_url(&c);
+    press_letter(&c, 'e');
+    press(&c, aurora_keys::keymap::VK_ESCAPE);
+    assert!(c.debug_page_texts().is_empty(), "Esc 退出后候选必须清空");
+
+    // ③ 退格删空退出 —— 这条最狠：空缓冲时列的是**整张**历史表。
+    enter_url(&c);
+    for _ in 0..4 {
+        press(&c, aurora_keys::keymap::VK_BACK);
+    }
+    assert_eq!(c.debug_active_mode(), None, "前提：退格已删空并退出模式");
+    assert!(
+        c.debug_page_texts().is_empty(),
+        "退格删空退出后候选必须清空：{:?}",
+        c.debug_page_texts()
+    );
+}
+
+// ───────────────────────── 临时英文转交（GH#162）─────────────────────────
+
+/// Shift+字母：起手进临时英文（五笔用户名超过四码时，正常流早已顶字上屏，只能走这条）。
+fn press_shift_letter(c: &Coordinator, ch: char) -> KeyAction {
+    c.handle_key_event(&key((ch.to_ascii_uppercase() as u32) & 0xFF, MOD_SHIFT))
+}
+
+#[test]
+fn at_sign_in_temp_english_carries_the_whole_username() {
+    let (c, _s) = coord_with("te_enter", email_cfg());
+    press_shift_letter(&c, 'z');
+    for ch in "hangsan".chars() {
+        press_letter(&c, ch);
+    }
+    assert_eq!(
+        c.debug_active_mode(),
+        Some("temp_english"),
+        "前提：已在临英"
+    );
+    let act = press_at(&c);
+    assert_eq!(
+        composition(&act).as_deref(),
+        Some("Zhangsan@"),
+        "临英里按 @ 应带着完整用户名进邮箱模式，实际 {act:?}"
+    );
+    assert_eq!(c.debug_active_mode(), Some("email"));
+    let act = press(&c, aurora_keys::keymap::VK_SPACE);
+    assert_eq!(committed(&act).as_deref(), Some("Zhangsan@qq.com"));
+}
+
+#[test]
+fn backspace_at_boundary_returns_to_temp_english_not_code_buffer() {
+    let (c, _s) = coord_with("te_rewind", email_cfg());
+    press_shift_letter(&c, 'a');
+    press_letter(&c, 'b');
+    press_at(&c); // "Ab@"
+    let act = press(&c, aurora_keys::keymap::VK_BACK);
+    assert_eq!(
+        c.debug_active_mode(),
+        Some("temp_english"),
+        "回退应放回临英缓冲而不是码表缓冲，实际 {act:?}"
+    );
+    assert_eq!(composition(&act).as_deref(), Some("Ab"));
+}
+
+#[test]
+fn temp_english_at_sign_is_untouched_when_email_disabled() {
+    let (c, _s) = coord_with("te_off", Config::default());
+    press_shift_letter(&c, 'a');
+    press_letter(&c, 'b');
+    press_at(&c);
+    assert_ne!(
+        c.debug_active_mode(),
+        Some("email"),
+        "关闭时不该转交邮箱模式"
+    );
+}

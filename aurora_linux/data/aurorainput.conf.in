@@ -1,0 +1,8 @@
+[InputMethod]
+Name=AuroraInput
+Name[zh_CN]=极光输入法
+Icon=aurorainput
+Label=光
+LangCode=zh_CN
+Addon=aurorainput
+Configurable=True

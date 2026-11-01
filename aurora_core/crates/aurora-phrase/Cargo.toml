@@ -1,0 +1,18 @@
+[package]
+name = "aurora-phrase"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-cmdbar = { path = "../aurora-cmdbar" }
+# 中文数字读法（${YC}/${MC}/${DC}）：与快捷输入的日期候选共用一份实现
+aurora-quick-input = { path = "../aurora-quick-input" }
+# `${APP_DIR}` 等内部目录变量：与命令栏字符串同源，见 aurora_config::dir_var
+aurora-config = { path = "../aurora-config" }
+tracing = { workspace = true }
+chrono = "0.4"
+serde = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

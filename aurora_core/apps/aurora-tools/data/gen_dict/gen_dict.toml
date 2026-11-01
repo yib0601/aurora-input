@@ -1,0 +1,183 @@
+# gen_dict 配置：五笔主词库生成与扩展词库拆分
+#
+# 只放算法参数与输入/输出文件名；目录由命令行给出：
+#   --cache <dir>   源数据目录（对应 .cache/）
+#   --out   <dir>   词库输出目录（对应 data/schemas/wubi86/）
+#   --report <dir>  分析报告输出目录，省略则不写报告
+#
+# 本文件由 WindInput-Go 的 tools/dictgen/dictgen.yaml 移植而来，
+# 所有数值参数与原版保持一致——改动会直接改变发行词库的候选顺序。
+
+# ── 输入（相对 --cache）─────────────────────────────────
+jidian_path = "rime-wubi/wubi86_jidian.dict.yaml"
+unigram_path = "pinyin-frost/unigram.txt"
+
+# ── 输出（相对 --out）───────────────────────────────────
+# 扩展库文件名由 output_name 派生：wubi86_jidian_{extra,emoji,english,symbols}.dict.yaml
+output_path = "wubi86_jidian.dict.yaml"
+output_name = "wubi86_jidian"
+
+# ── 原样透传（相对 --cache，输出同名到 --out）───────────
+# 这类词库的条目顺序本身就是数据（district 按行政区划层级排列），按词频重排会毁掉它。
+# 故只复制 + 清洗头部的 sort: 键，内容一字不改。
+passthrough = ["rime-wubi/wubi86_jidian_extra_district.dict.yaml"]
+
+# ── 人工维护的补充数据（相对本配置文件）─────────────────
+custom_words_path = "custom_words.txt"
+custom_emoji_path = "custom_emoji.txt"
+boosts_path = "boost_words.txt"
+
+# emoji 中文命名表（CLDR 反查五笔码，「⚽ 足球」→ khgf）。
+#
+# ⚠ 研究中，**暂不启用**：留空即整条通路不生效。
+# 实测生成 8942 条、覆盖 1910 个 emoji，但它们散布在 5356 个编码上，其中大量落在
+# 简码/二简的前缀子树里——五笔按前缀匹配，打 `ew` 会连带命中 `ewgi`/`ewxx`… 全部
+# 后代，日常打字被 emoji 严重污染。要实装必须先解决前缀污染（限制码长、只保留
+# tts、或给 emoji 库单独的前缀策略），不是调 stopwords 能解决的。
+#
+# 研究用法（产物不入库，落在 gitignore 的 .cache/ 下）:
+#   cargo run -p wind-tools --bin gen_emoji_names -- \
+#     --cldr .cache/cldr --out .cache/cldr/custom_emoji_named.txt
+# 然后把下面的路径临时指向该文件即可单独测试。
+custom_emoji_named_path = ""
+
+# ── 分析报告（相对 --report，未传 --report 则不写）───────
+dropped_path = "wubi86_jidian.dict.filtered.tsv"
+conflict_report_path = "wubi86_jidian.shortcode_conflicts.tsv"
+demotion_report_path = "wubi86_jidian.demotion_candidates.tsv"
+# 候选顺序变化：上游原序 vs 产物最终序。第一列 against_upstream=Y 表示上游用不同优先级
+# 明确安排过次序而我们翻了它（如 tgyn 上游「重启 20 > 生词 10」，补权后「生词 > 重启」），
+# =N 表示上游整组同档、没表过态。修正候选顺序前先看这份，boost_words.txt 是它的下游。
+order_report_path = "wubi86_jidian.order_changes.tsv"
+
+# ── 权重归一化 ─────────────────────────────────────────
+target_median = 1000    # unigram 中位词频映射到此权重
+weight_max = 9999
+weight_min = 1
+char_boost_factor = 1.3 # 单字权重倍增，让高频单字优先于低频词组
+
+# 普通词条权重上限，须低于 [shortcodes].level3_base_weight
+# （顶层键必须写在所有 [段] 之前，否则会被当成前一个段的字段）
+regular_weight_max = 8999
+
+# 生僻字保底权重（无 unigram 命中时按 jidian 原始优先级给底线）
+[fallback]
+priority_30 = 180
+priority_20 = 150
+priority_10 = 120
+
+# ── 简码优先级分层 ─────────────────────────────────────
+# 识别规则：单字 + 码长 ≤ 3，级别 = 码长；简码表直接从 jidian 原词库提取。
+# 权重区间参考极爽词库比例（一简≈99.7% 最大值）：简码占权重顶部，普通词条严格在下方。
+[shortcodes]
+enabled = true
+level1_weight = 9999      # 一级简码（25 个，每码唯一）
+level2_base_weight = 9950 # 二级简码基础权重，组内按 jidian 顺序递减
+level3_base_weight = 9000 # 三级简码基础权重，组内按 jidian 顺序递减（900 个槽）
+
+# ── 组内权重重排（回归极点上游序）─────────────────────
+# 把同码候选的次序换回上游原序，**不改变该码在权重轴上的高度**：只把这些条目当前持有的
+# 权重值按上游序重新发一遍。跨码可比性因此完全不受影响——五笔按前缀匹配，打 `tg` 会召出
+# `tgyn`/`tgab` 全部后代，它们必须在同一根轴上比，而上游 weight 列是码内局部优先级
+# （值域 5~890、86% 是最低档 10），跨码不可比。
+#
+# 现场：tgyn 上游「重启 20 > 生词 10」，补权后变成「生词 1497 > 重启 1479」。
+#
+# 护栏（两道，任一命中即保持词频序）：
+#   ① 上游首选不在 unigram 里 —— 上游序混着大量随手排的低频词（川崎 / SD卡 / 滨州学院）
+#   ② 当前首选词频 / 上游首选词频 > max_freq_ratio
+[upstream_order]
+enabled = true
+# 26 由实测样本夹定：生效 24.7× 与 梗概 25.3× 回归、大路 26.2× 与 鸽子 29.1× 拦下。
+# ⚠ 这一带极不敏感（24× 到 30× 只差 17 个码），真正的分水岭在 3×（+169）与 10×（+49），
+# 要调先看那一段，别在 25/26/28 之间纠结。
+max_freq_ratio = 26
+
+# ── 简码降权策略（已退役，勿重新开启）─────────────────────
+# 当一个字同时占据简码和 4 码全码首选时，按第二候选的权重决定是否给简码字降权。
+#
+# ⛔ **已由运行时的「出简让全」取代**（`schema.codetable.short_code_yield_level`，
+# 见 aurora-coordinator/src/short_code_yield.rs 与 docs/design/codetable-short-code-yields-full.md）。
+# 两处同时生效会让位两次——算法层把字降到第 2 位，词库层再把它压到词后面。
+#
+# 退役的两条理由：
+#   ① 判定烘进权重，用户关不掉，而这该是个开关；
+#   ② 语义不是标准的出简让全，是「第二候选权重 ≥800/1000 且 gap 比例合格」的有条件降权，
+#      且允许让给另一个**单字**（本意是让给词语）。
+#
+# 下面的参数保留仅为记录当初的标定值；重新开启会与算法层叠加。
+[demotion]
+enabled = false
+filter_threshold = 200        # 第二候选权重低于此值直接忽略（极低频词/生僻字）
+single_char_promote_wt = 1000 # 单字第二候选权重 ≥ 此值时触发降权
+word_promote_wt = 800         # 词组第二候选权重 ≥ 此值时触发降权
+max_gap_ratio_single = 0.60   # 单字：gap/首字权重 > 此比例则保留（首字优势太大）
+max_gap_ratio_word = 0.65     # 词组：gap/首字权重 > 此比例则保留
+
+# ── 扩展词库拆分 ───────────────────────────────────────
+# 把 jidian_extra.dict.yaml 按字符类型拆成 4 个独立文件。
+# 中文条目（CJK 桶）按 unigram 加权；emoji/english/symbols 桶保留原权重。
+[extra]
+enabled = true
+input_path = "rime-wubi/wubi86_jidian_extra.dict.yaml" # 相对 --cache
+default_weight = 100 # emoji/english/symbols 桶里无原始权重时的兜底值
+# CJK 桶权重上限：补权后线性压缩到 [weight_min, 本值]，使扩展库整库排在主库之后
+# （须 < [fallback].priority_10，由 validate 强制）。
+#
+# 为什么必须在这里压、而不是在方案里配 base_order：引擎排序是
+# `weight 降 → base_order 升`，base_order 在 weight 之后，只是等权时的 tiebreaker。
+# 补权后扩展库「品」(1523) 高于主库「又」(1318)，base_order = 1 压不住它。
+# 0 = 不压缩（保留补权原值）。
+weight_max = 119
+
+# ── 上游编码约定保护 ───────────────────────────────────
+# 这些码整体跳过 unigram 补权，权重 = base_weight + 极点原始优先级，
+# 从而完整保留上游对该码位的候选排序。
+#
+# 背景：词频补全回答的是「这个词多常用」，而上游对这些码的排序表达的是「这个码位约定谁
+# 排第一」，两套语义不可通约。五笔 86 的 25 个键名汉字码（aaaa=工 cccc=又 dddd=大…）即
+# 典型：补权前上游把键名汉字放首位（kkkk/uuuu/wwww/xxxx 四个码上游本就另有安排，故此处
+# 保留原序而非强制键名汉字第一），补权后 26 个里有 14 个被同码词组反超。
+#
+# ⚠️ 作用域已收窄为「词库权重」这一层。退役的 [demotion] 曾一并跳过这些码，理由是
+# 「有简码的字让位给词组」对键位约定不成立；取代它的运行时出简让全**不设这层豁免**
+# （规则统一，见 short_code_yield.rs），故开启该功能后 dddd 首选会是「大厦」而非「大」。
+# 本段保住的是权重与上游序，不再保「谁排第一」。
+#
+# base_weight 须高于 [extra].weight_max，且加上原始优先级后仍低于 level3_base_weight
+# （两侧均由 validate 强制）。不必高于 regular_weight_max：保护按**码**施加，同码内不存在
+# 带补权权重的未保护条目，跨码之间引擎不比权重。8000 落在普通带高位只是额外保险
+# （补权公式实际产不出这个量级：最高的「又」也只到 3010）。
+[protected_codes]
+enabled = true
+base_weight = 8000
+codes = [
+    "aaaa", "bbbb", "cccc", "dddd", "eeee", # 工 子 又 大 月
+    "ffff", "gggg", "hhhh", "iiii", "jjjj", # 土 王 目 水 日
+    "kkkk", "llll", "mmmm", "nnnn", "oooo", # 口 田 山 已 火
+    "pppp", "qqqq", "rrrr", "ssss", "tttt", # 之 金 白 木 禾
+    "uuuu", "vvvv", "wwww", "xxxx", "yyyy", # 立 女 人 纟 言
+]
+
+# ── 内置过滤 ───────────────────────────────────────────
+[filter]
+drop_z_code = true     # 过滤 z 开头的编码（反查占位码）
+drop_dollar = true     # 过滤 $ 开头的词条
+drop_emoji = true      # 过滤含 emoji 的词条
+drop_pure_latin = true # 过滤纯 ASCII 词条
+drop_pua = false       # 不过滤 PUA 字符（五笔字根字，属合法生僻字）
+require_cjk = false    # 不强制要求含 CJK（允许标点等）
+max_code_len = 4       # 最大编码长度
+max_text_len = 16      # 最大词条长度（Unicode 字符数）
+
+# ── 手动过滤规则 ───────────────────────────────────────
+# code_prefix 优先于 code；except_codes 是前缀范围内保留的例外；
+# reason 会出现在 .filtered.tsv 里。
+[[drop_rules]]
+code_prefix = "co"
+reason = "co_shortcut"
+except_codes = [
+    "cogw", # 驜
+    "coqh", # 驎
+    "coaw", # 鸡米花
+]

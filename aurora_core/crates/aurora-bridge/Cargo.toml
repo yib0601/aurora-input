@@ -1,0 +1,24 @@
+[package]
+name = "aurora-bridge"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aurora-ipc = { path = "../aurora-ipc" }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+bytes = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+# Linux 上作为外部宿主（Fcitx5 addon）的服务端：见 build.rs 的 `ext_presenter` 别名。默认关。
+linux-host = []
+
+[lints]
+workspace = true

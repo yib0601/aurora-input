@@ -1,0 +1,718 @@
+{
+ "debug": {
+  "log_level": "info",
+  "log_max_files": 10,
+  "log_max_size_mb": 10
+ },
+ "input": {
+  "add_word": {
+   "candidate_layout": "vertical"
+  },
+  "alt_commit": "off",
+  "association": {
+   "backspace_cancels_only": true,
+   "bigram": true,
+   "enter_cancels_only": false,
+   "hide_after_ms": 5000,
+   "hint": "联想输入",
+   "history": true,
+   "kind": "off",
+   "max_count": 9,
+   "mode": "one_shot",
+   "prefix": true,
+   "punct": false,
+   "select_keys_commit": true,
+   "space_commits": true
+  },
+  "auto_pair": {
+   "chinese": false,
+   "chinese_pairs": [
+    "（）",
+    "【】",
+    "｛｝",
+    "《》",
+    "〈〉"
+   ],
+   "english": false,
+   "english_pairs": [
+    "()",
+    "[]",
+    "{}",
+    "<>"
+   ],
+   "jump_out_keys": [
+    "right_symbol"
+   ],
+   "state_ttl_secs": 120
+  },
+  "buffer_symbol_chars": "-",
+  "capslock": {
+   "cancel_on_mode_switch": false,
+   "commit_upper": false,
+   "mode_after_cancel": "chinese"
+  },
+  "caret": {
+   "add_word_via_composition": false,
+   "rare_char_via_composition": true,
+   "special_via_composition": true,
+   "temp_pinyin_via_composition": true
+  },
+  "cmdbar": {
+   "candidate_prefix": "⚡",
+   "enabled": false
+  },
+  "commit_newline": "keep",
+  "correction": {
+   "custom": [],
+   "enabled": true,
+   "hint": {
+    "correction": false,
+    "enabled": false,
+    "fuzzy": true,
+    "misread": true,
+    "scope": "first",
+    "tone": false
+   },
+   "marker": "*",
+   "rules": {
+    "ai_ia": false,
+    "gn_ng": false,
+    "h_misplaced": false,
+    "legacy_spelling": false,
+    "mg_ng": false,
+    "n_before_g": false,
+    "on_ong": true,
+    "vowel_swap": true
+   }
+  },
+  "default": {
+   "chinese_mode": true,
+   "chinese_punct": true,
+   "full_width": false,
+   "remember_last_state": false,
+   "state_scope": "global"
+  },
+  "email": {
+   "candidate_layout": "follow",
+   "enabled": false,
+   "suffixes": [
+    "qq.com",
+    "163.com",
+    "126.com",
+    "foxmail.com",
+    "sina.com",
+    "sina.cn",
+    "sohu.com",
+    "139.com",
+    "189.cn",
+    "aliyun.com",
+    "yeah.net",
+    "21cn.com",
+    "tom.com",
+    "gmail.com",
+    "outlook.com",
+    "hotmail.com",
+    "yahoo.com",
+    "icloud.com",
+    "live.com",
+    "me.com",
+    "proton.me",
+    "protonmail.com",
+    "aol.com",
+    "gmx.com"
+   ]
+  },
+  "emoji": {
+   "block_auto_commit": false,
+   "categories": false,
+   "enabled": false,
+   "max_hosts": 1,
+   "max_per_word": 3,
+   "min_word_chars": 2,
+   "modules": {
+    "frost_chem": false,
+    "frost_diezi": false,
+    "frost_emoji": true,
+    "frost_greek": false,
+    "frost_keys": false,
+    "frost_misc": false,
+    "frost_month": false,
+    "frost_radicals": false,
+    "frost_sitcom": false
+   },
+   "scope": "exact",
+   "show_as": "after"
+  },
+  "english_case_cycle_key": "",
+  "enter_behavior": "commit",
+  "filter_mode": "smart",
+  "numpad_behavior": "direct",
+  "numpad_half_width": false,
+  "password_force_english": true,
+  "phrase": {
+   "min_prefix": 2
+  },
+  "punct": {
+   "custom_enabled": false,
+   "custom_mappings": {},
+   "follow_mode": false,
+   "smart_after_digit": true,
+   "smart_list": ".,:"
+  },
+  "punct_on_empty_behavior": "clear",
+  "rare_char": {
+   "include_blocks": [],
+   "trigger_keys": []
+  },
+  "rare_phrase": "keep",
+  "reverse": {
+   "candidate_layout": "follow",
+   "lookup_disabled_dicts": false
+  },
+  "s2t": {
+   "enabled": false,
+   "variant": "s2t"
+  },
+  "scope_relax": {
+   "page_end_key": true,
+   "prefix": "·"
+  },
+  "space_on_empty_behavior": "commit",
+  "symbol": {
+   "english_chars": ".,?!:;",
+   "english_mode": false,
+   "english_punct_mode": false,
+   "smart_chars": "。，？！：；、～￥·……——",
+   "smart_method": "delete_replace",
+   "smart_mode": false,
+   "smart_timeout_ms": 500
+  },
+  "t2s": {
+   "enabled": false
+  },
+  "temp_english": {
+   "allow_symbols": false,
+   "candidate_layout": "follow",
+   "case_follow_input": true,
+   "case_variants": true,
+   "commit_space": false,
+   "enabled": true,
+   "phrase_seg": false,
+   "raw_candidate": "always",
+   "shift_behavior": "temp_english",
+   "shift_when_composing": "buffer",
+   "show_candidates": true,
+   "space_as_input": false,
+   "symbol_chars": "0123456789+-_.@#/",
+   "trigger_keys": []
+  },
+  "temp_pinyin": {
+   "candidate_layout": "follow",
+   "code_hint_source": "auto",
+   "enabled": true,
+   "hotkey": "",
+   "trigger_keys": [
+    "backtick"
+   ]
+  },
+  "top_commit_learn": true,
+  "top_commit_mode": "direct_commit",
+  "unicode": {
+   "candidate_layout": "follow",
+   "enabled": false,
+   "prefixes": [
+    "u+",
+    "U+"
+   ]
+  },
+  "url": {
+   "candidate_layout": "follow",
+   "enabled": false,
+   "history_enabled": false,
+   "history_max": 200,
+   "prefixes": [
+    "www.",
+    "http",
+    "https",
+    "ftp."
+   ]
+  }
+ },
+ "keys": {
+  "activate_ime": "ctrl+shift+[",
+  "add_word": "ctrl+equal",
+  "commit_on_switch": true,
+  "ctrl_space_toggle": true,
+  "delete_candidate": "ctrl+shift+number",
+  "global_hotkeys": [],
+  "highlight_keys": [
+   "arrows",
+   "tab"
+  ],
+  "key_actions": {},
+  "open_add_word_dialog": "ctrl+shift+equal",
+  "open_dictionary": "none",
+  "open_settings": "ctrl+shift+]",
+  "overflow": {
+   "number_key": "ignore",
+   "page_key": "ignore",
+   "page_key_overrides": {},
+   "select_char_key": "ignore",
+   "select_key": "ignore"
+  },
+  "page_keys": [
+   "pageupdown",
+   "minus_equal"
+  ],
+  "pin_candidate": "ctrl+number",
+  "quick_input_select": "ctrl+number",
+  "select_char_keys": [],
+  "select_key_groups": [
+   "semicolon_quote"
+  ],
+  "session_actions": {},
+  "softkeyboard": "ctrl+shift+k",
+  "switch_engine": "ctrl+shift+e",
+  "take_screenshot": "ctrl+shift+f11",
+  "toggle_full_width": "shift+space",
+  "toggle_mode_keys": [
+   "lshift",
+   "rshift"
+  ],
+  "toggle_punct": "ctrl+.",
+  "toggle_s2t": "ctrl+shift+j",
+  "toggle_t2s": "none",
+  "toggle_toolbar": "ctrl+shift+\\"
+ },
+ "mobile": {
+  "association": {
+   "kind": "smart",
+   "mode": "continuous",
+   "punct": true,
+   "space_commits": false
+  },
+  "grammar": {
+   "enabled": true,
+   "model": "wanxiang-mini.gram",
+   "weight": 0.5
+  }
+ },
+ "schema": {
+  "active": "wubi86",
+  "available": [
+   "wubi86",
+   "pinyin_simp"
+  ],
+  "codetable": {
+   "auto_commit_at_full": false,
+   "auto_commit_min_len": 0,
+   "auto_phrase": {
+    "draft_flush_batch": 64,
+    "draft_max_entries": 50000,
+    "draft_ttl_hours": 24,
+    "enabled": false,
+    "idle_timeout_ms": 0,
+    "max_phrase_len": 5,
+    "min_phrase_len": 2,
+    "promote_count": 3,
+    "temp_max_entries": 5000
+   },
+   "clear_on_empty_max": false,
+   "english_merge": {
+    "block_commit": true,
+    "block_commit_on_word": true,
+    "complete_min_length": 0,
+    "complete_position": 2,
+    "enable": false,
+    "exact_position": 1,
+    "max_count": 2,
+    "min_length": 3
+   },
+   "frequency": {
+    "enabled": false,
+    "half_life": 0.0,
+    "promote_prefix": "all",
+    "protect_top_n": 0,
+    "protect_top_n_len1": 1,
+    "protect_top_n_len2": 1,
+    "protect_top_n_len3": 0,
+    "record_always": false,
+    "strategy": "top"
+   },
+   "input_chars": "",
+   "leading_chars": "",
+   "punct_commit": true,
+   "short_code_yield_level": 0,
+   "show_code_hint": true,
+   "single_char": false,
+   "single_code_complete": true,
+   "single_code_input": false,
+   "top_code_commit": true,
+   "wildcard": false,
+   "wildcard_key": "z",
+   "wildcard_single_only": false,
+   "z_key_action": "",
+   "z_key_repeat": true
+  },
+  "english": {
+   "auto_learn": {
+    "enabled": false,
+    "promote_count": 3,
+    "temp_max_entries": 5000
+   },
+   "case_follow_input": true,
+   "case_variants": false,
+   "commit_space": false,
+   "frequency": {
+    "code_scope": "candidate",
+    "enabled": false,
+    "half_life": 0.0,
+    "promote_prefix": "all",
+    "record_always": false,
+    "strategy": "position"
+   },
+   "phrase_seg": false,
+   "raw_candidate": "always"
+  },
+  "frequency": {
+   "exclude_blocks": []
+  },
+  "keep_all_loaded": false,
+  "mix": {
+   "auto_commit_block_on_english": false,
+   "auto_commit_block_on_pinyin": true,
+   "block_commit_on_english_word": true,
+   "block_commit_on_pinyin_word": true,
+   "enable_english": false,
+   "enable_pinyin_abbrev": false,
+   "english_complete_min_length": 0,
+   "english_complete_position": 2,
+   "english_exact_position": 1,
+   "english_max_count": 2,
+   "min_english_length": 3,
+   "min_pinyin_length": 2,
+   "pinyin_code_hint": true,
+   "pinyin_only_overflow": true,
+   "pinyin_partial_candidates": false,
+   "pinyin_partial_candidates_overflow": true,
+   "pinyin_word_min_weight": 0,
+   "show_source_hint": false,
+   "top_code_override_pinyin": false
+  },
+  "mix_modes": [
+   {
+    "candidate_layout": "vertical",
+    "free_input": "auto",
+    "free_input_takes_select_keys": true,
+    "id": "quick_mix",
+    "members": [
+     "quick_input.calc",
+     "quick_input.number",
+     "quick_input.date",
+     "quick_input.repeat",
+     "$primary_pinyin",
+     "english"
+    ],
+    "name": "快捷",
+    "numeric_letter_select": true,
+    "short_name": "快",
+    "trigger_keys": [
+     "semicolon"
+    ]
+   }
+  ],
+  "pinyin": {
+   "abbrev": {
+    "enabled": true
+   },
+   "auto_learn": {
+    "enabled": true,
+    "max_word_length": 10,
+    "min_word_length": 2,
+    "promote_count": 0
+   },
+   "aux_code": {
+    "direct": false,
+    "enabled": false,
+    "max_phrase_len": 0
+   },
+   "code_hint_source": "off",
+   "completion": {
+    "max_extra_syllables": 5,
+    "min_syllables": 4
+   },
+   "english_merge": {
+    "complete_min_length": 0,
+    "complete_position": 2,
+    "enable": false,
+    "exact_position": 0,
+    "max_count": 2,
+    "min_length": 3
+   },
+   "frequency": {
+    "base_scale": 0.0,
+    "enabled": true,
+    "half_life": 0.0,
+    "promote_prefix": "single",
+    "recency_peak": 0.0,
+    "record_always": false
+   },
+   "fuzzy": {
+    "an_ang": false,
+    "ch_c": false,
+    "en_eng": false,
+    "enabled": false,
+    "eng_ong": false,
+    "f_h": false,
+    "ian_iang": false,
+    "in_ing": false,
+    "n_l": false,
+    "r_l": false,
+    "sh_s": false,
+    "uan_uang": false,
+    "un_ong": false,
+    "zh_z": false
+   },
+   "grammar": {
+    "enabled": false,
+    "model": "wanxiang-mini.gram",
+    "weight": 0.5
+   },
+   "sentence_count": 1,
+   "sentence_cycle_key": "",
+   "sentence_max_count": 1,
+   "sentence_uses_user_words": true,
+   "separator": "auto",
+   "shuangpin": {
+    "allow_full_pinyin": false
+   },
+   "single_char": false,
+   "use_smart_compose": true
+  },
+  "primary_codetable": "",
+  "primary_pinyin": "",
+  "quick_input": {
+   "decimal_places": 6,
+   "history_max": 1000
+  }
+ },
+ "stats": {
+  "enabled": true,
+  "speed_factor": 0.8500000238418579,
+  "track_english": true
+ },
+ "system": {
+  "dota2_compat": false,
+  "dota2_compat_name": "拼音输入法"
+ },
+ "ui": {
+  "candidate": {
+   "auto_comment_dicts": true,
+   "comment_above": false,
+   "comment_enabled": true,
+   "comment_max_chars_horizontal": 0,
+   "comment_max_chars_vertical": 0,
+   "comment_template_horizontal": "${code_hint|code_rev|shuangpin}",
+   "comment_template_vertical": "${code_hint|code_rev|shuangpin}",
+   "custom_x": 0,
+   "custom_y": 0,
+   "double_click_screenshot": false,
+   "fast_first_show_fallback_ms": 25,
+   "fast_typing_window_ms": 100,
+   "first_show_mode": "fast",
+   "first_show_settle_ratio": 0.800000011920929,
+   "flip_when_above": false,
+   "font_size": 0.0,
+   "grid_categories": [
+    "all",
+    "single",
+    "phrase",
+    "rare"
+   ],
+   "grid_cell_max_chars": 6,
+   "grid_expand": false,
+   "grid_index_fill": "rows",
+   "grid_pageupdown_screen": true,
+   "grid_rows": 5,
+   "hide_window": false,
+   "index_labels": [],
+   "layout": "horizontal",
+   "max_chars": 16,
+   "min_rows": 0,
+   "min_window_height_horizontal": 0,
+   "min_window_height_vertical": 0,
+   "min_window_width_horizontal": 0,
+   "min_window_width_vertical": 0,
+   "offset_x": 0,
+   "offset_y": 0,
+   "page_number_display": "",
+   "pager_bar_display": "",
+   "pager_in_preedit": false,
+   "per_page": 7,
+   "per_page_extended": 0,
+   "position_mode": "follow_caret",
+   "preedit_display": "app_inline",
+   "shadow": "follow",
+   "swap_preedit_when_above": false
+  },
+  "comment_dicts": [],
+  "font": {
+   "fallback": [],
+   "family": "",
+   "path": "",
+   "render_mode": "directwrite",
+   "scripts": {},
+   "weight": 0
+  },
+  "labels": {
+   "caps_lock": "A",
+   "english": "英"
+  },
+  "langbar": {
+   "badge": "none",
+   "badge_alpha": 0.8799999952316284,
+   "badge_scale": 1.0,
+   "badges": [
+    {
+     "color_dark": "#2288E0",
+     "color_light": "#2288E0",
+     "corner": "bottom_right",
+     "enabled": true,
+     "scale": 1.0,
+     "state": "punct_cn"
+    },
+    {
+     "color_dark": "#EE9922",
+     "color_light": "#EE9922",
+     "corner": "bottom_right",
+     "enabled": true,
+     "scale": 1.0,
+     "state": "punct_en"
+    },
+    {
+     "color_dark": "#E0447A",
+     "color_light": "#E0447A",
+     "corner": "top_right",
+     "enabled": true,
+     "scale": 1.0,
+     "state": "full_width"
+    }
+   ],
+   "text_color_cn_dark": "",
+   "text_color_cn_light": "",
+   "text_color_en_dark": "",
+   "text_color_en_light": ""
+  },
+  "mode_indicator": {
+   "style": "short"
+  },
+  "status": {
+   "custom_x": 0,
+   "custom_y": 0,
+   "display_mode": "temp",
+   "duration": 800,
+   "enabled": true,
+   "fallback_position": "last",
+   "items": [
+    "schema",
+    "punct",
+    "full_width",
+    "s2t",
+    "caps"
+   ],
+   "offset_x": 0,
+   "offset_y": 0,
+   "position_mode": "follow_caret",
+   "schema_name_style": "full",
+   "show_on_focus": false
+  },
+  "theme": {
+   "name": "default",
+   "style": "system"
+  },
+  "toolbar": {
+   "auto_hide": false,
+   "auto_hide_delay": 5,
+   "auto_hide_hover_reveal": false,
+   "buttons": [],
+   "fullscreen_watch": true,
+   "hide_in_english": false,
+   "hide_in_fullscreen": true,
+   "items": [
+    "mode",
+    "punct",
+    "full_width",
+    "-s2t",
+    "-t2s",
+    "soft_keyboard",
+    "settings"
+   ],
+   "vertical": false,
+   "visible": true
+  },
+  "tooltip": {
+   "delay": 200,
+   "enabled": true,
+   "max_chars": 200,
+   "sections": [
+    {
+     "each": "",
+     "enabled": true,
+     "inline": false,
+     "label": "完整原文",
+     "promote": "",
+     "template": "${full_text}"
+    },
+    {
+     "each": "",
+     "enabled": true,
+     "inline": false,
+     "label": "编码{(${code_source})}",
+     "promote": "",
+     "template": "${word_code}"
+    },
+    {
+     "each": "han",
+     "enabled": true,
+     "inline": false,
+     "label": "拼音",
+     "promote": "",
+     "template": "${char}：${readings}"
+    },
+    {
+     "each": "han",
+     "enabled": false,
+     "inline": false,
+     "label": "拆字",
+     "promote": "",
+     "template": "${char}：${chaizi}{ [${chaizi_code}]}"
+    },
+    {
+     "each": "",
+     "enabled": true,
+     "inline": false,
+     "label": "释义",
+     "promote": "",
+     "template": "${dict_all:\n}"
+    },
+    {
+     "each": "char",
+     "enabled": false,
+     "inline": false,
+     "label": "Unicode",
+     "promote": "",
+     "template": "${char}：${unicode}"
+    },
+    {
+     "each": "",
+     "enabled": false,
+     "inline": false,
+     "label": "调试",
+     "promote": "",
+     "template": "${debug}"
+    }
+   ],
+   "wrap_width": 40
+  }
+ }
+}

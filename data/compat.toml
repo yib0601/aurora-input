@@ -1,0 +1,398 @@
+# 应用兼容性规则
+# 针对特定应用的候选框定位、光标获取等兼容性修正。
+# 用户可在 %APPDATA%\AuroraInput\compat.toml 中覆盖或添加规则。
+#
+# 叠加语义（整体原则）：每一层（本文件 < data_custom < 用户层）都是相对下一层的**差异**，
+# 同一条规则（身份见下）内**逐字段叠加**：
+#   - 写了的字段覆盖下层的值，没写的字段继承下层；
+#   - unset = ["字段名", …] 取消下层设定的字段（回到「没设置 / 跟随全局」）；
+#   - 想关掉下层打开的开关，显式写 false（不写只会继承）；
+#   - disabled = true 禁用整条规则，更高层可用 disabled = false 重新启用；
+#   - 没有「同名整条替换」，也没有哪个字段享有特殊的继承待遇。
+# 所以用户层里只需要写想改的那一两项，出厂对该进程的其它修正会自动保留，出厂以后新增的修正也会自动送达。
+#
+# 规则身份与窗口条件（仅 [[apps]]）：
+#   「同一条」= process + class + title 三者都相同（各自 trim、不区分大小写）。
+#   process 不写等同于 "*"（所有进程）；三者都不写的规则作废。
+#   class / title 是匹配顶层窗口类名 / 标题的模式：* 任意串，? 单个字符，不区分大小写，整串匹配。
+#   拿不到类名 / 标题的窗口，带对应条件的规则一律不命中（模式写 "*" 也一样）。
+#   一个窗口同时命中多条时按具体程度逐字段叠加，越具体越后叠（后叠的赢）：
+#     process = "*" < 仅窗口条件（仅 class < 仅 title < class + title）< 仅进程名 < 进程名 + 窗口条件；
+#     同一级里模式中非通配字符少的先叠，再按层（本文件 < data_custom < 用户层）与书写顺序。
+#   更具体那条里的 unset 也会取消更低级规则设下的字段（该窗口回到跟随全局），含 process = "*"
+#   设下的：某进程写 unset = ["first_show_mode"]，它就不再继承 "*" 的 first_show_mode；
+#   disabled 的规则不参与。拿不到进程名时任何规则（含 "*"）都不命中。
+#   [[initial_mode_scope]] / [[commit_newline]] 不支持窗口条件（写了不生效）。
+#   设置页「应用兼容性」可新增、修改带 class / title 的规则（出厂规则的匹配条件只读，可复制为新规则）。
+#   title 在焦点切换时判定（标题变化不重算初始中英态）；只对可能命中 title 规则的进程采集窗口标题
+#   （有不限进程的 title 规则时对所有进程），日志只记标题长度、不记原文。
+#
+# 可用字段:
+#   process:              进程名（不区分大小写）；不写 = "*"
+#   class:                顶层窗口类名模式（见上），如 "Chrome_WidgetWin_*"
+#   title:                顶层窗口标题模式（见上），如 "*- 记事本"
+#   comment:              说明（仅文档用途）
+#   caret_use_top:        使用 caret rect 的 top 而非 bottom 定位候选框
+#                         适用于 GetTextExt 返回的 height 不稳定的 WebView 应用
+#   stale_probe_guard:    拦截「组合期间上报的光标位置仍停在上一次组合」的宿主：probe 若与
+#                         组合前宿主主动上报的空闲坐标矛盾即不予采信，首显改用空闲坐标。
+#                         微信、飞书在线表格换单元格首键候选窗从旧位置跳到新位置就是它。
+#                         必须逐宿主开启：WindTerm 一类宿主正确答案相反（probe 才是新的）。
+#   password_force_english:
+#                         该应用的密码框是否强制英文；不写 = 跟随全局。宿主把普通输入框误
+#                         报成密码框时对它关掉，或全局关闭时只对某应用开启。
+#   schema:               该应用固定使用的输入方案 id；写 "@remember" 则记住它上次用的方案。
+#                         应用内手动切换只改本应用，不写全局方案。
+#   status_position_mode / status_x / status_y / status_fallback_position:
+#                         状态气泡定位：跟随光标 / 固定 / 屏幕或窗口锚点；固定模式下
+#                         status_x/y 是该应用自己的落点；status_fallback_position 是
+#                         光标不可信时的兜底位置。不写 = 跟随全局 ui.status.*。
+#   disabled:             仅用户层使用。写 disabled = true 即禁用同名的系统规则（该进程
+#                         合并后没有这条规则）；条目里的其它字段照常保留，去掉本行即恢复。
+#                         [[initial_mode_scope]] / [[commit_newline]] 同样支持。
+#   composition_start_pair_guard:
+#                         将 TSF_COMPOSITION（selection 无效、以组合起点降级）紧接
+#                         TSF_SELECTION 且 compStart 不变的两帧识别为同一次采样，禁止
+#                         把正常的“组合起点→当前插入点”跨度当成锚点整体错误。
+#                         只给已实测存在该交替序列的宿主开启；普通宿主保持原有大偏移
+#                         自愈，不能仅凭非零 compStart 全局开启。
+#   pin_anchor_when_start_drifts:
+#                         宿主报的组合起点跟着插入点漂移时，把候选窗锚点钉在首帧起点。
+#                         必须逐宿主开启（WPS 文字 / Word 需要；Excel / WPS 表格开了反而
+#                         回归），不能全局开。
+#   first_show_mode:      候选框首显策略，三档互斥；不写=跟随全局
+#                         config.toml 的 [ui.candidate] first_show_mode（出厂 "fast"）。
+#                         "fast"    默认。仍等坐标，但等到「可信」即放行。DLL 在首帧
+#                                   reflow 期间连发几条试探坐标，取第一条「与上一轮权威
+#                                   坐标不同」的采用——宿主未 reflow 时返回的正是上一轮
+#                                   那个位置，一旦变化即说明新位置已就绪。连续快速输入时
+#                                   更进一步：直接采信首条（连打不重排，跟手比精确更重要）。
+#                                   焦点切换或鼠标移动光标之后，手里的坐标属于别处，此时
+#                                   自动退回去等真坐标（首帧信任门），不会先错位再跳。
+#                         "wait"    等宿主 reflow 后的权威坐标才显示，代价是 85~95ms 首显
+#                                   延迟，快速连打时候选框只来得及显示几毫秒。留给
+#                                   "fast" 判据失灵的宿主兜底。
+#                         "instant" 完全不等，首帧沿用上一次的坐标。最快，但只要光标位置
+#                                   变动过（手动移动、换行、重排）那个位置就是错的。
+#   initial_mode:         进入本应用时的初始中英状态："english" | "chinese"｜不写=跟随全局。
+#                         典型用途：搜索框/终端类应用默认英文（如 Everything.exe）。
+#   initial_punct:        进入本应用时的初始中英标点，取值同上；不写=跟随全局。
+#                         显式值优先于 config.toml 的 input.punct.follow_mode 推导。
+#   host_render:          加入 HostRender 白名单（默认 false）。用于候选窗无法盖过宿主
+#                         Band 层级的受限宿主（如 Win11 开始菜单 SearchHost.exe）：候选窗
+#                         改由服务进程渲染后经共享内存转交宿主进程内的 DLL 上屏。
+#                         普通应用不要开启——多一层渲染路径，出问题时本地窗口路径更好排查。
+#   auto_pair:            本应用是否启用符号自动配对：true | false｜不写=跟随全局。
+#                         典型用途是表格类宿主（Excel / WPS 表格）：配对后需要把光标退回
+#                         两个符号之间，而它们在「输入态」（选中单元格直接打字，区别于
+#                         F2/双击进入的「编辑态」）下把方向键解释成「确认单元格并移动」，
+#                         于是配对内容当场被提交、光标跑到隔壁单元格。该限制无法绕开
+#                         （改用 TSF 设置光标位置的方案已实测失败：宿主报告成功但光标不动），
+#                         关掉配对是目前唯一可行的兼容策略。关闭后左符号照常上屏，
+#                         只是不再自动补右符号。
+#   smart_method:         本应用的智能符号替换方案："delete_replace" | "hold_composition"
+#                         ｜不写=跟随全局 input.symbol.smart_method。
+#                         delete_replace（全局默认）体感更好，但依赖对宿主做删改，在
+#                         Tabby 一类终端上会出严重错误；hold_composition 全程不做删改，
+#                         用 TSF 组合态承载待定符号，兼容性更好。
+#   candidate_position_mode:
+#                         本应用的候选框定位方式："follow_caret" | "fixed"｜不写=跟随全局
+#                         config.toml 的 [ui.candidate] position_mode。
+#                         给光标坐标本就报不准的宿主（自绘控件、坐标系不对、多进程窗口
+#                         偏移）：设为 fixed 后候选框不再跟随光标，位置由拖动候选框设定。
+#   candidate_x:          fixed 时本应用的候选框位置（屏幕坐标，物理像素，默认 0）。
+#   candidate_y:          同上。每个应用各记一份，互不影响；(0,0) = 尚未设定，首次显示
+#                         落在屏幕默认位置，拖动一次即记住。
+#   ignore_host_ime_close:
+#                         忽略本应用「关闭输入法」的请求：true | false｜不写=按出厂规则
+#                         （出厂未配即采纳）。
+#                         部分 .NET 应用（WinForms 的 ImeMode.Disable、WPF 的
+#                         IsInputMethodEnabled=False）在焦点落到按钮等控件时会关掉**全局**
+#                         中英状态，表现为「点一下按钮就变成英文，回到输入框也不恢复」。
+#                         开启后这类请求不再采纳，中文状态保持不变。
+#                         Ctrl+Space 不受影响（按住 Ctrl 时一律放行），仍可正常切中英。
+#   host_drawn_candidates:
+#                         这个宿主把候选串读走时，是否当它在自己画候选、从而收起我们的框：
+#                         不写=否（默认）｜true=是｜false=显式关闭。
+#                         ⚠ **`false` 与「不写」不是一回事**，两条机制让它们不同：
+#                           ① 用户层**不写**本字段 = 继承出厂同名规则的值；写了 `false`
+#                              才挡得住继承。出厂已给 MapleStory.exe 配了 true，
+#                              想关掉它就只能显式写 false —— 删掉那一行是没用的。
+#                           ② 写了 `false` 还会压过 process = "*" 的通配规则；不写则会
+#                              回落去查通配。
+#                         「宿主接管候选绘制」有两条来源，本字段只管后面那条：
+#                           ① 宿主**声明**接管（TSF 规范里的 UI-less，全屏游戏 / SDL、
+#                              Unreal 等引擎回 pbShow=FALSE）——宿主明说的，是事实，
+#                              照弹就是两头画，不给关；
+#                           ② 宿主没声明、却把候选串**读走了**（传统 IMM32 宿主经系统桥接
+#                              取候选自己画，老网游多是这一类）——这是**推断**，本字段管的
+#                              就是它。
+#                         ⚠ 为什么默认是「否」：读候选串的**不一定**在画。
+#                         实测 Notepad / Illustrator / EverEdit 都把候选串整串读走却都不画，
+#                         默认当它们自绘的话现象是**两个候选框都没有**、完全不能用，而用户
+#                         无从知道要来这里配什么。反过来判错（该收没收）最多多出一个框，
+#                         字照打，配一行即可。故默认站在「照弹我们的框」这一侧，需要收的
+#                         宿主写一行 true 开启。
+#                         可用 process = "*" 写一条通配规则套到所有应用：
+#                             [[apps]]
+#                             process = "*"
+#                             host_drawn_candidates = true
+#                         通配与其它规则一样逐字段叠加（对所有字段生效）；本进程自己的规则
+#                         叠在通配之上，写了的字段优先于通配。
+#   composition_placeholder:
+#                         组合区占位字符："space" | "zwsp" | "blank"｜不写=space（空格）。
+#                         编码不显示在软件里时（非嵌入模式、联想态、热键进入的加词/临拼等），
+#                         输入法要在软件的输入区里挂一个占位字符撑住组合。历来是空格。
+#                         ⚠ 网页里的受控输入框会把组合中的内容 trim() 后回写，空格一被去掉，
+#                         浏览器就终止组合，一个字都上不了屏。"zwsp" 改用零宽空格 U+200B，trim() 不去掉它。
+#                         "blank" 用盲文空白 U+2800：同样不被 trim() / \s 当空白，而且**有宽度**。
+#                         给「靠出现内容才进入编辑态」的宿主用——钉钉在线表格选中单元格直接打字
+#                         时，零宽空格被当成没有内容、不进编辑态，组合停在左上角的代理输入框里，
+#                         候选窗定位错；那里要的是看得见宽度、又不会被 trim 掉的字符。
+#                         出厂按窗口类名给 Chromium（含所有 Electron 应用）与 Firefox 开（见下方
+#                         两条 class 规则）。不要给 WPS 等软件改：它们靠那个空格才能给出有效的
+#                         光标位置。支持 process = "*" 通配与 class / title 窗口条件。
+#   multiline_commit:     含换行的上屏文本怎么交给软件："commit" | "paste"｜不写=commit（直接上屏）。
+#                         "paste" 先结束组合，再把文本写入剪贴板并模拟 Ctrl+V 粘贴；只影响含换行的上屏。
+#                         ⚠ 会覆盖剪贴板原有内容且不恢复（不进剪贴板历史）；终端等 Ctrl+V 不是粘贴的软件不要开。
+#   caret_offset_x:       光标坐标水平校正（dp，96dpi 基准逻辑像素，正=右，默认 0）。
+#   caret_offset_y:       光标坐标垂直校正（dp，96dpi 基准逻辑像素，正=下，默认 0）。
+#                         用于宿主报告的光标坐标**系统性偏移**的场景（如 Windows Terminal，
+#                         其它输入法同样偏）。注意与主题里的候选窗偏移不是一回事：那个调的
+#                         是候选窗相对光标的布局，这里修的是光标坐标本身，故候选窗、状态
+#                         提示气泡等所有跟随光标的元素会一起被校正。
+#                         单位是 dp 不是物理像素：会按目标点所在显示器的当前 DPI 换算成
+#                         物理像素后再叠加，故同一份数值在 100%/150%/200% 缩放的屏幕上
+#                         观感一致，多屏不同缩放也不必分别配置。
+#
+# 设置端「应用兼容性」页统一管理本文件与用户层 compat.toml（改写、禁用、还原、导入导出），
+# 逐字段的功能与解决的问题以 aurora-config 的 compat_schema 为准，帮助页读的也是它。
+#
+# first_show_mode / initial_mode / initial_punct / auto_pair / candidate_position_mode /
+# ignore_host_ime_close 对应右键菜单：「应用独立配置（<进程名>）」子菜单，各自单选。
+# （菜单切换会写入用户层 compat.toml，不改本文件）
+# smart_method、caret_offset_*、host_drawn_candidates 与 candidate_x/y 不进菜单：
+# 前三者按需手工编辑用户层 compat.toml，候选框位置由拖动候选框设定。
+#
+# ⚠ initial_mode / initial_punct 的语义是「初始值」而不是「锁定」：
+#   - 每次焦点**从别的应用**切进来时套用一次；停留在本应用期间用户可自由手动切换，
+#     同一应用内换输入框（如搜索框↔结果列表）不会重新套用。
+#   - 焦点**离开**规则应用时，下一个应用会重新按全局规则决定自己的状态。在出厂默认
+#     （input.default.state_scope = "global" 且 remember_last_state = false）下，这意味着
+#     它回到 input.default.chinese_mode 这个配置默认值，而不是它自己上次的状态。
+#     若希望每个应用各自精确记住上次状态，请另行设置 input.default.state_scope = "app"，
+#     两者可叠加（规则决定初始值，记忆负责其余应用）。
+#   - 没有配置任何 initial_* 规则的两个应用之间切换，状态一律不动，不受本功能影响。
+#
+# 与首显相关的三个内部选项在 config.toml 的 [ui.candidate] 下（不进设置页）：
+#   first_show_settle_ratio      首显用过非权威坐标时，权威坐标与它相差在「行高 × 本值」以内
+#                                就不再校正（默认 0.8）。校正动作本身才是抖动的观感来源。
+#   fast_typing_window_ms        两次按键间隔小于此值即视为连续输入，fast 档直接采信首条
+#                                试探坐标（默认 100）。0 = 关闭该快路径。
+#   fast_first_show_fallback_ms  fast 档等不到坐标时的兜底超时（默认 25）。不发
+#                                OnLayoutChange 的宿主（如 Word）靠它退化成 instant 而非干等。
+
+[[apps]]
+process = "MapleStory.exe"
+comment = "新枫之谷（台服）：宿主经 IMM32 自绘候选框，收起我们的框，避免两个框"
+host_drawn_candidates = true
+
+[[apps]]
+process = "Weixin.exe"
+comment = "微信：光标高度不稳定改用顶边定位；拦截陈旧坐标；多行文本用粘贴上屏"
+caret_use_top = true
+stale_probe_guard = true
+multiline_commit = "paste"
+
+[[apps]]
+process = "QQ.exe"
+comment = "QQNT：长组合时交替上报组合起点与插入点，不当作锚点错误"
+composition_start_pair_guard = true
+
+[[apps]]
+process = "Code.exe"
+comment = "VS Code：同 QQNT 的组合起点交替上报"
+composition_start_pair_guard = true
+
+[[apps]]
+process = "Feishu.exe"
+comment = "飞书：同 QQNT 的组合起点交替上报；在线表格换单元格首键坐标停在上一格"
+composition_start_pair_guard = true
+stale_probe_guard = true
+
+[[apps]]
+process = "SearchHost.exe"
+comment = "Win11 开始菜单 / 任务栏搜索：候选框盖不过其层级，改由宿主代理渲染"
+host_render = true
+
+[[apps]]
+process = "searchapp.exe"
+comment = "Win10 任务栏搜索：同上"
+host_render = true
+
+[[apps]]
+process = "startmenuexperiencehost.exe"
+comment = "Win10 开始菜单：同上"
+host_render = true
+
+[[apps]]
+process = "EXCEL.EXE"
+comment = "Excel：进单元格前先在编辑栏报坐标，fast 首显会落在编辑栏，改用 wait"
+first_show_mode = "wait"
+
+[[apps]]
+process = "et.exe"
+comment = "WPS 表格：同 Excel，fast 首显落在上一个单元格，改用 wait"
+first_show_mode = "wait"
+
+# 按顶层窗口类名认浏览器内核，而不是逐个列进程名（Edge / Chrome / 各家套壳浏览器的
+# 进程名数不完）。⚠ Chrome_WidgetWin_* 是整个 Chromium 家族的窗口类，**所有 Electron / CEF 应用
+# 一并命中**：VS Code（Code.exe）、飞书、QQ NT、新版微信等。它们的网页输入框同样可能 trim；
+# 上面给 Code.exe / Feishu.exe / QQ.exe 写的进程规则不含本字段，逐字段叠加后照样继承 blank。
+# 用 blank（U+2800 盲文空白）而不是 zwsp：钉钉在线表格选中单元格直接打字时靠「出现了内容」进入
+# 编辑态，零宽字符被当成没有内容、候选窗停在左上角代理输入框；blank 有宽度又不会被 trim。
+# 某个应用改用盲文空白后出了问题（光标位置不对等），在用户层给它写
+#   [[apps]]
+#   process = "Xxx.exe"
+#   composition_placeholder = "space"
+# 进程规则比仅类名规则更具体，写了的字段压过它。
+[[apps]]
+class = "Chrome_WidgetWin_*"
+comment = "Chromium 内核（含 Electron 应用）：网页输入框会 trim 占位空格导致上不了屏，改用盲文空白"
+composition_placeholder = "blank"
+
+[[apps]]
+class = "MozillaWindowClass"
+comment = "Firefox 内核：同上"
+composition_placeholder = "blank"
+
+# 示例：给「fast 判据失灵」的宿主退回 wait（本字段不写即跟随全局默认，无需逐个开启）
+# [[apps]]
+# process = "SomeApp.exe"
+# comment = "首帧坐标始终不更新，fast 的试探判据在此宿主上不成立"
+# first_show_mode = "wait"
+
+# 示例：搜索框类应用默认英文，用户仍可随时手动切中文（默认不启用）
+# 也可直接在该应用里右键输入法图标 →「应用独立配置」→「初始输入模式」→「英文」，
+# 菜单会把等效规则写进用户层 compat.toml，无需手工编辑本文件。
+# [[apps]]
+# process = "Everything.exe"
+# comment = "文件搜索框，默认英文"
+# initial_mode = "english"
+
+# 示例：表格类宿主关掉符号自动配对（默认不启用——是否需要由用户自己决定）
+# 同样可在该应用里右键 →「应用独立配置」→「符号自动配对」→「禁用」。
+# [[apps]]
+# process = "EXCEL.EXE"
+# comment = "输入态下方向键=移动单元格，配对光标无法退回符号之间"
+# auto_pair = false
+
+# 示例：终端类宿主改用组合态智能符号（不进菜单，需手工配置）
+# [[apps]]
+# process = "Tabby.exe"
+# comment = "delete_replace 的删改在此宿主上出错，改用不做删改的组合态方案"
+# smart_method = "hold_composition"
+
+# 示例：校正宿主报告的光标坐标偏移（不进菜单，需手工配置）
+# 数值单位是 dp（96dpi 基准逻辑像素），按实际观感微调：先估个方向，偏多少调多少，
+# 不必按显示器缩放折算——同一份数值换到不同缩放的屏幕上效果一致。
+# [[apps]]
+# process = "WindowsTerminal.exe"
+# comment = "宿主上报的 caret 位置系统性偏移，其它输入法同样偏"
+# caret_offset_x = 0
+# caret_offset_y = -2
+
+
+# ============================================================================
+# [[initial_mode_scope]] —— per-app 初始模式的「作用域窗口类」
+# ============================================================================
+# 解决的问题：上面的 [[apps]] 规则按**进程映像名**匹配，而 explorer.exe 一个名字同时
+# 承载语义相反的两类焦点：
+#   · 桌面 —— 用户配 initial_mode = "english" 冲的就是它。
+#   · 任务栏、Alt+Tab、任务视图、任务栏溢出区、资源管理器窗口 —— 点它是为了去别处，
+#     或者另有用途（资源管理器的搜索/重命名框反而常要中文）。
+# 后一类是每次切换应用的必经之路，被规则一并命中后，每切一次应用就会重算一次初始
+# 中英状态，表现为语言栏图标频繁闪「英」。
+#
+# 语义：**只有本段列出的窗口类才允许重算该进程的初始模式**，其余一律保持现状。
+# 只影响 per-app 初始中英/标点的重算，不影响该窗口的输入功能——任务栏搜索框照常
+# 可以打字，只是不再把当前模式改掉。
+#
+# ★ 为什么是白名单而不是黑名单（列出哪些窗口是「过渡型」）：黑名单有两个失效面，
+#   ① 拿不到窗口类时（explorer 新起 TSF 连接后的头一个 focus_gained，此刻连 caret
+#      都还没有）空类名不在黑名单里，被判成「不是过渡窗口」而放行，当场闪英；
+#   ② Windows 每个版本都在新增 XAML 岛窗口类，漏一个就套错一次。
+#   反过来做白名单，两种情况都自动落在作用域外 = 保持现状，而那正是唯一安全的答案。
+#
+# 字段:
+#   process:  进程映像名（不区分大小写）
+#   classes:  该进程下**允许重算初始模式**的顶层窗口类名（不区分大小写）
+#             空清单 = 该进程的初始模式规则在任何窗口上都不重算
+#
+# 合并语义：与 [[apps]] 一致，逐字段叠加。classes 是列表，按**整个字段**替换（不做元素级合并）：
+# 想增删其中一项时，请把下面的 classes 整份抄进用户层 compat.toml 再改，只写要加的那一项会让其余几项失效。
+# 例：想让资源管理器窗口也套用 explorer 的 initial_mode，就在用户层写
+#     classes = ["Progman", "WorkerW", "CabinetWClass"]
+#
+# 独立成段而不是 [[apps]] 的字段：它描述的是「规则在哪些窗口上生效」，是进程规则的适用范围，
+#   不是又一个行为开关；分开写也让本清单与 explorer.exe 的 [[apps]] 行为规则各自叠加、互不牵连。
+#
+# ⚠ 未在本段出现的进程**完全不受限制**（绝大多数应用），行为与本机制引入前一致。
+
+# 不可改成全局：Excel / WPS 表格的矩形形态相同，但每字换一次 docMgr，候选框本就该跟着单元格走。
+[[apps]]
+process = "wps.exe"
+comment = "WPS 文字：组合起点随插入点漂移，候选框锚点钉在首帧起点"
+pin_anchor_when_start_drifts = true
+
+[[apps]]
+process = "WINWORD.EXE"
+comment = "Word：同 WPS 文字，组合起点随插入点漂移"
+pin_anchor_when_start_drifts = true
+
+[[initial_mode_scope]]
+process = "explorer.exe"
+comment = "资源管理器：初始中英态只作用于桌面，任务栏与文件窗口保持现状"
+classes = [
+  "Progman", # 桌面（常规）
+  "WorkerW", # 桌面（壁纸切换 / 幻灯片放映期间的桌面顶层窗口）
+]
+
+# ============================================================================
+# [[commit_newline]] —— per-app 的「上屏换行用什么字符表达」
+# ============================================================================
+# 全局默认档在 config.toml 的 input.commit_newline（出厂 "keep" = 原样透传），
+# 本段按进程名覆盖它。取值：keep / cr / lf / crlf。
+#
+# 解决的问题：「换行」在不同宿主的文本模型里根本不是同一个东西。
+#   · 富文本模型（RichEdit / TOM 这条线）的文档存储里，段落边界**就是** CR。LF 在那里
+#     不是「另一种换行写法」，而是个不构成换行的控制字符：Word 里每个 LF 处渲染成
+#     一段类似 Tab 的空白。
+#   · 而 VS Code / 终端 / 浏览器输入框是「写进去什么就存什么」，在那里做任何转换都是在
+#     改写用户的数据。
+#
+# ★ 为什么出厂默认是 keep、名单只列需要转换的那几个：两个方向的漏配代价不对称。
+#   漏配一个富文本宿主 ⇒ 用户立刻看见换行显示不对，能反馈、加一行即可；
+#   反过来默认转换而漏配一个字节存储宿主 ⇒ 行尾被静默改写，用户根本不知道。
+#   可见的失败优于静默的失败。
+#
+# ⚠ 本段与 [[apps]] 各自独立合并，互不牵连：你给 WINWORD.EXE 写自己的 [[apps]] 规则，
+#   不会把这里的 cr 顶掉；反过来也一样。（为什么不做成 [[apps]] 的字段，见源码
+#   CommitNewlineRule 的文档——理由是值域与写回路径，不是合并语义。）
+#
+# ⚠ style 拼错或漏写不会让本文件失效，只会让那条规则退化成「跟随全局」。
+#
+# ⚠ 仅 Windows 生效。macOS 的 IMKit 用 LF，不参与本项。
+#
+# 遇到别的宿主换行显示不对（渲染成方块/空白、整段挤成一行），照下面的格式加一条即可。
+
+# wps.exe 刻意不在此列：记事本与 WPS 文字用 LF 即能正常分段。
+[[commit_newline]]
+process = "WINWORD.EXE"
+comment = "Word：段落边界是 CR，LF 不构成换行"
+style = "cr"
+
+[[commit_newline]]
+process = "QQ.exe"
+comment = "QQNT 聊天框：LF 换行的多行文本会乱序，CR 会丢换行，CRLF 正常"
+style = "crlf"
