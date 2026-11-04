@@ -46,7 +46,7 @@
 #       t/test 更是原生 cargo test。想在本机直接出二进制看看链接过不过: AURORA_BUILD_LOCAL=1
 #       (⚠️ 产物不能部署也不能发版, 见 lib/remote-build.sh)
 #   gd=gen-data  r=repl  dl=pull-data  pc=pull-config  pl=pull-log(pla=全部)
-#     ↑ gd 支持 AURORA_SLIM_DATA=1：剔除「出厂默认关」的那几组数据（瘦身包，包体约 −6.41 MiB）。
+#     ↑ gd 支持 AURORA_SLIM_DATA=1：剔除「出厂默认关」的那几组数据（瘦身包，包内约 −8.25 MiB）。
 #       默认不设 = 行为完全不变；清单、收益与后果见 assemble_data 上方的 SLIM_DATA_PATHS。
 #   远程诊断(靶机现场, 配置见 deploy.local):
 #     rwhere  常用位置    rproc  进程+部署产物时间戳    rls/rcat/rtail <路径>    rgrep <模式>
@@ -483,10 +483,6 @@ download_dicts() {
     download_file "$FROST_BASE/cn_dicts/others.dict.yaml"         "$rime_frost_cn/others.dict.yaml"         "容错词"
     download_file "$FROST_BASE/cn_dicts/corrections.dict.yaml"    "$rime_frost_cn/corrections.dict.yaml"    "错音词"
     download_file "$FROST_BASE/cn_dicts/tencent.dict.yaml"        "$rime_frost_cn/tencent.dict.yaml"        "腾讯词频 ~17MB"
-    # emoji / 符号表：emoji 附加模块的数据源（aurora-config 的 EMOJI_MODULES，出厂只开 emoji）
-    mkdir -p "$rime_frost/opencc"
-    download_file "$FROST_BASE/opencc/emoji.txt"  "$rime_frost/opencc/emoji.txt"  "emoji 表"
-    download_file "$FROST_BASE/opencc/others.txt" "$rime_frost/opencc/others.txt" "符号 / 杂项表"
     local cell
     mkdir -p "$rime_frost/cn_dicts_cell"
     for cell in $FROST_CELLS; do
@@ -564,21 +560,6 @@ download_dicts() {
     download_file "$HANZI_BASE/data-unicode/Unicode-CJK%20%E3%80%87.txt" \
         "$aux_code/charset/Unicode-CJK 〇.txt" "字集: 〇"
 
-    # Emoji 候选扩展（设计见 docs/design/emoji-suggestion.md，出厂关闭）。
-    # ⚠️ rime-emoji 是 LGPL-3.0，与本仓 GPL-3.0 不同。政策与 rime-stroke 一致 —— 只下载不入库；
-    #    但**分发方式刻意不同**：本表随发行版**原样**分发（不做构建期转换），我们分发的因此是
-    #    逐字副本而非衍生作品，LGPL 的修改版义务不触发。繁→简归一与二进制化都在**用户本机**
-    #    首次启用时进行，产物是本机缓存，从不离开用户机器 ⇒ 不构成 conveying。
-    #    详见 NOTICE.md 与设计文档 §3.5。⛔ 切勿 include_bytes! 嵌进 exe（会构成 LGPL §4
-    #    Combined Work，须另行提供重新链接机制）。
-    local rime_emoji="$CACHE_DIR/rime-emoji"
-    mkdir -p "$rime_emoji/opencc"
-    local EMOJI_BASE="https://raw.githubusercontent.com/rime/rime-emoji/master"
-    gray "rime-emoji (候选扩展):"
-    download_file "$EMOJI_BASE/opencc/emoji_word.txt"     "$rime_emoji/opencc/emoji_word.txt"     "词→emoji"
-    download_file "$EMOJI_BASE/opencc/emoji_category.txt" "$rime_emoji/opencc/emoji_category.txt" "分类→emoji"
-    # 许可证全文必须随数据一起分发（GPL-3.0 §4: give all recipients a copy of this License）。
-    download_file "$EMOJI_BASE/LICENSE"                   "$rime_emoji/LICENSE"                   "LGPL-3.0"
 }
 
 # 随包附带的 rime-frost 细胞词库（上游 cn_dicts_cell/ 下的文件名，组装到 schemas/pinyin/ext/）。
@@ -587,52 +568,58 @@ download_dicts() {
 #   里的 cell_* 词库声明同步。
 FROST_CELLS="exthot idiom place history name name2 sport geography animal computer music media industry_product inputmethod chess chess2"
 
-# rime-frost others.txt 里不随包的分组（按分组标题整组剔除）。「著名表演艺术家」是成人影星的
-# 中日文名对照，即便模块默认关也不该进安装包。
-# ⚠ 与 dev.ps1 的 $FrostOthersExclude、mac/dev.sh 的同名变量同步。
-FROST_OTHERS_EXCLUDE="著名表演艺术家"
-
 # 「瘦身数据包」开关：`AURORA_SLIM_DATA=1` 时把**出厂默认关闭**的那几组数据从随包数据里剔掉。
 # 默认不设 = 产物逐字节不变（发版走默认；只有明确要瘦身包时才设这个变量）。
-# 实测（对真实 rpm payload 的 147 个文件分组重压，tar + zstd19 单线程）：这 6 组在包里合计
-# 6.41 MiB = 包体的 24.7%；其中 grammar 一项就有 4.15 MiB。每一组都对应一个出厂 false 的开关：
-#   schemas/pinyin/grammar/                               拼音语法模型（pinyin.grammar 出厂关）
-#   schemas/pinyin/ext/                                   16 张细胞词库（方案设置里出厂不勾选）
-#   opencc/                                               简繁转换 .octrie（简繁出厂关）
-#   schemas/aux_code/                                     辅助码表（schema.pinyin.aux_code.enabled 出厂 false）
-#   emoji/                                                emoji 候选扩展（出厂关）
-#   schemas/wubi86/wubi86_jidian_extra_district.dict.yaml  行政区划扩展词库（出厂不勾选）
+#
+# 实测（对 build_dev/data 的每项单独 `tar -cf - | zstd -19 -T1` 重压，与 size-audit 的
+# 「对真实 rpm payload 分组重压」同法；跨组不共享字典，故略偏保守）：本清单 7 组（8 条）在
+# 包里合计 8,650,609 B = 8.25 MiB；按旧注释「6.41 MiB = 包体 24.7%」反推的包体（约 25.9 MiB）
+# 计，约占 32%。其中「整块出厂关数据」三项单独合计：原始 14,540,093 B（`du -sb` 求和）=
+# 13.87 MiB，压缩后 6,836,431 B = 6.52 MiB。
+# 逐项写法：`路径  原始→压缩  功能 + 开关；剔了会怎样`
+#   schemas/pinyin/grammar/           5.25→4.15 MiB  拼音整句语法模型 wanxiang-mini.gram。
+#       开关 [schema.pinyin.grammar].enabled（桌面出厂 false；关着不读文件、不占内存），
+#       移动端 [mobile.grammar].enabled = true。剔了：桌面本来关着，勾上开关后拿不到模型 →
+#       整句结果退回「无模型」那一版（不崩、不报错）；⚠ 移动端出厂默认开，瘦身包若用于
+#       移动端产物会丢掉整句语法。
+#   schemas/pinyin/ext/               3.55→1.22 MiB  16 张细胞词库（扩展词库，方案设置里出厂不勾选）。
+#   opencc/                           1.69→0.55 MiB  简繁 / 繁简转换 .octrie（[input.s2t] 与
+#       [input.t2s] 的 enabled 出厂 false）。剔了：开简繁后不转字，照常出简体。
+#   schemas/aux_code/                 1.24→0.40 MiB  辅助码表（[schema.pinyin.aux_code].enabled
+#       出厂 false）。整个目录被剔掉，连双拼出厂引用的 aux_code/flypy_full.txt 也没了 ⇒ 瘦身
+#       包里双拼辅助码会因空表走 passthrough（不筛候选），与「辅助码出厂关」的口径一致。
+#   schemas/wubi86/wubi86_jidian_extra_district.dict.yaml
+#                                      86→29 KiB     行政区划扩展词库（出厂不勾选）。
+#   schemas/stroke/ + schemas/stroke.schema.toml
+#                                      5.22→1.17 MiB  笔画码表方案（gen_aux_code 产物）。它不在
+#       出厂方案切换列表里，但全拼默认辅助码以 `files = ["schema:stroke"]` 引用它
+#       （data/schemas/pinyin.schema.toml）。剔了：辅助码筛不出候选（功能本身出厂 false）、
+#       笔画方案也不可用；开关仍是 [schema.pinyin.aux_code].enabled。
+#       ⚠ 方案文件本身**保留**在版本库与默认产物里：aurora-coordinator 的单测要对拍它与
+#       aux_code/stroke.txt 的筛选结果（handle_aux_code.rs::stroke_schema_source_filters_like_stroke_txt），
+#       只有瘦身包才连它一起剔。
+#   assoc/assoc_bigram.txt            2.00→0.73 MiB  智能联想「下一词」表（离线 n-gram 蒸馏）。
+#       开关 [input.association].kind（桌面出厂 off）+ 该段 bigram 来源位；移动端
+#       [mobile.association].kind = "smart" 出厂开。剔了：智能联想只剩 history / prefix 两个
+#       来源，「下一词」永不出现（不崩、不报错）；⚠ 移动端出厂默认开，瘦身包若用于移动端
+#       产物会丢掉下一词。
 # ⚠ 瘦身包里用户之后再打开上述功能会**拿不到数据**（不崩、不报错，只是功能不生效）；这些数据都
 #   能从用户目录的同名路径自行投放（覆盖解析优先用户目录，见根 AGENTS.md「自带数据文件一律经
 #   覆盖解析函数定位」）。所以这是「默认关、按需开」的开关，不能做成发版默认。
-#   具体到 `schemas/aux_code/`：整个目录被剔掉，连双拼出厂引用的 `aux_code/flypy_full.txt` 也没了
-#   ⇒ 瘦身包里双拼辅助码会因空表走 passthrough（不筛候选），与「辅助码出厂关」的口径一致。
-# ⚠ 断言侧要同步：本文件的 verify_dist_data、scripts/linux/verify-rpm.sh 与 verify-deb.sh 里
-#   对这组文件的检查会跟着跳过（校验瘦身包时也要带同一个变量），否则瘦身包在门禁上整体误报。
+# ⚠ 断言侧要同步：本文件的 verify_dist_data、scripts/linux/verify-rpm.sh 与 verify-deb.sh、
+#   scripts/mac/dev.sh 与 scripts/dev.ps1 的同名门禁里，对这组文件的检查会跟着跳过（校验瘦身
+#   包时也要带同一个变量），否则瘦身包在门禁上整体误报。
 SLIM_DATA_PATHS=(
     schemas/pinyin/grammar
     schemas/pinyin/ext
     opencc
-    emoji
     schemas/aux_code
     schemas/wubi86/wubi86_jidian_extra_district.dict.yaml
+    schemas/stroke
+    schemas/stroke.schema.toml
+    assoc/assoc_bigram.txt
 )
 slim_data_enabled() { [ "${AURORA_SLIM_DATA:-}" = 1 ]; }
-
-# 按分组标题过滤 rime-frost 的 OpenCC 杂项表：$1 源，$2 目标。标题行形如
-# `----------偏旁部首<Tab>----------`（OpenCC 无注释语法，rime-frost 借假词条写标题），
-# 被剔除的组从其标题到下一个标题整段去掉；其余行原样保留（运行时按分组取，见 emojidict::select_sections）。
-strip_frost_sections() {
-    awk -v excl="$FROST_OTHERS_EXCLUDE" '
-        BEGIN { n = split(excl, ex, " ") }
-        /^----------[^\t]*\t-+[ \t]*$/ {
-            name = $0; sub(/^-+/, "", name); sub(/\t.*$/, "", name)
-            skip = 0
-            for (i = 1; i <= n; i++) if (name == ex[i]) skip = 1
-        }
-        !skip { print }
-    ' "$1" > "$2"
-}
 
 # 把 rime 主表 import_tables 里**没随包**的子表、以及全部 cn_dicts_cell/ 细胞词库注释掉（就地改写）。
 #
@@ -787,40 +774,7 @@ assemble_data() {
     #   scripts/mac/dev.sh 的 assemble_data，Windows / macOS 包目前仍带这份重复文件。
     rm -f "$schemas/aux_code/stroke.txt"
 
-    # 8. Emoji 候选扩展表：**原样复制**，不做任何构建期转换（与 5/6/7 的生成物刻意不同）。
-    # 繁→简归一、撞键合并与二进制化全部推迟到用户本机首次启用时 —— 这样我们分发的是
-    # LGPL 原文的逐字副本，而非衍生作品（见 NOTICE.md 与 design/emoji-suggestion.md §3.5）。
-    # LICENSE 必须一并复制：缺了它这份分发就不合规。
-    # 功能出厂关闭，故缺表只是「emoji 扩展用不了」，用 warn 不中断构建。
-    local emoji_cache="$CACHE_DIR/rime-emoji"
-    if [ -f "$emoji_cache/opencc/emoji_word.txt" ]; then
-        gray "复制 emoji 扩展表 (原样) ..."
-        mkdir -p "$data/emoji"
-        cp -f "$emoji_cache/opencc/emoji_word.txt" "$data/emoji/"
-        # 分类表可缺（出厂关），缺了不影响主表。
-        [ -f "$emoji_cache/opencc/emoji_category.txt" ] \
-            && cp -f "$emoji_cache/opencc/emoji_category.txt" "$data/emoji/"
-        if [ -f "$emoji_cache/LICENSE" ]; then
-            cp -f "$emoji_cache/LICENSE" "$data/emoji/LICENSE"
-        else
-            warn "缺 rime-emoji LICENSE，该数据不得分发（重跑 gen-data）"
-        fi
-    else
-        warn "缺 .cache/rime-emoji/，emoji 扩展不可用（运行 gen-data 下载）"
-    fi
-
-    # 8b. rime-frost 的 emoji / 符号表（emoji 附加模块）。GPL-3.0，与上面的拼音词库同源同许可。
-    # others.txt 剔除不随包的分组（FROST_OTHERS_EXCLUDE），其余分组运行时按模块取。
-    if [ -f "$rime_frost/opencc/emoji.txt" ]; then
-        mkdir -p "$data/emoji"
-        cp -f "$rime_frost/opencc/emoji.txt" "$data/emoji/frost_emoji.txt"
-        [ -f "$rime_frost/opencc/others.txt" ] \
-            && strip_frost_sections "$rime_frost/opencc/others.txt" "$data/emoji/frost_others.txt"
-    else
-        warn "缺 .cache/rime-frost/opencc/，白霜 emoji 模块不可用（运行 gen-data 下载）"
-    fi
-
-    # 8c. 瘦身开关（默认关）：剔除出厂默认关闭的那几组数据，清单与理由见 SLIM_DATA_PATHS 处。
+    # 8. 瘦身开关（默认关）：剔除出厂默认关闭的那几组数据，清单与理由见 SLIM_DATA_PATHS 处。
     # 放在「组装完成」统计之前，让打印的文件数与实际随包内容一致。
     if slim_data_enabled; then
         say "AURORA_SLIM_DATA=1：剔除出厂默认关的数据…"
@@ -1381,7 +1335,8 @@ verify_dist_data() {
         "schemas/wubi86/wubi86_jidian_emoji.dict.yaml|1000"
         "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml|10000"
         # 笔画方案词库同为 gen_aux_code 生成物（实测约 1MB）；全拼默认辅助码经 schema:stroke
-        # 引用它，缺了则笔画方案与全拼辅助码都用不了，且用户只看得到「没反应」
+        # 引用它，缺了则笔画方案与全拼辅助码都用不了，且用户只看得到「没反应」。
+        # ⚠ 整组（schemas/stroke/ + 方案文件）在瘦身包里被剔，本项在下方按 slim_data_enabled 跳过。
         "schemas/stroke/stroke.dict.yaml|500000"
     )
     say "\n校验发布数据完整性 → $data"
@@ -1390,7 +1345,9 @@ verify_dist_data() {
         path="${entry%%|*}"; min="${entry##*|}"
         # 瘦身包（AURORA_SLIM_DATA=1）刻意不带出厂默认关的数据，对应断言跟着跳过——否则瘦身包
         # 永远过不了这道门禁。清单见 SLIM_DATA_PATHS。
-        if slim_data_enabled && [ "$path" = "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml" ]; then
+        # 行政区划词库与整目录被剔的笔画方案（schemas/stroke/ 连同方案文件）都要跳。
+        if slim_data_enabled && { [ "$path" = "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml" ] \
+            || [ "$path" = "schemas/stroke/stroke.dict.yaml" ]; }; then
             gray "  - $path（瘦身包已剔除,跳过）"; continue
         fi
         if [ ! -f "$data/$path" ]; then

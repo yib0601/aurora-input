@@ -123,7 +123,7 @@ install -Dm644 "$REPO/scripts/linux/pkg/fcitx5-notifications.conf" \
     "$S/etc/xdg/fcitx5/conf/notifications.conf"
 
 # 许可证与说明：GPL-3.0 §4 要求分发时附带许可证全文。NOTICE.md 是第三方词库的许可声明
-# （rime-frost / OpenCC / rime-stroke / rime-emoji 各有不同许可证，正文在数据文件旁）。
+# （rime-frost / OpenCC / rime-stroke 各有不同许可证，正文在数据文件旁）。
 # 源文件在仓库根，git 里带 CRLF（.gitattributes 声明本仓 core.autocrlf=true）。
 install -Dm644 "$REPO/LICENSE"   "$S/usr/share/licenses/aurora-input/LICENSE"
 install -Dm644 "$REPO/NOTICE.md" "$S/usr/share/licenses/aurora-input/NOTICE.md"

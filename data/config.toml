@@ -692,7 +692,7 @@ commit_newline = "keep"
 #   ——「跟随输入 → 全大写 → 全小写 → 跟随输入」，一次组合结束即复位。留空 = 关闭(出厂)。
 #   可用值：capslock / tab / enter / space / escape。**键即开关**，没有第二个开关。
 #   Windows 建议 capslock；macOS 上 CapsLock 到不了输入法(系统只传锁定态、不传按键)，建议 tab。
-#   ⚠️ 被夺取的键在英文输入期间用不出原本的语义(capslock 的大写锁定、tab 的辅助码/配对跳出/
+#   ⚠️ 被夺取的键在英文输入期间用不出原本的语义(capslock 的大写锁定、tab 的辅助码/
 #      会话动作)，其余时候一律照旧。撞车时启动会告警。
 english_case_cycle_key = ""
 # alt_commit：上屏注释 / 拼音——组合中按 Alt+数字 N 上屏第 N 个候选的拼音或注释，而不是候选字；
@@ -748,7 +748,7 @@ buffer_symbol_chars = "-"
 numpad_behavior = "direct"
 # 小键盘恒半角：开启后小键盘的 0-9 与 . + - * / 在全角态下仍输出半角，且不走中文标点与
 # 自定义标点映射。与 numpad_behavior 正交（follow_main 下照常选词，只改出字）。
-# 仅覆盖「单键直接上屏」的路径；临英/网址/快捷输入等先入缓冲的模式不受影响。
+# 仅覆盖「单键直接上屏」的路径；临英/快捷输入等先入缓冲的模式不受影响。
 numpad_half_width = false
 # 顶码上屏时「已确认文字」如何落到宿主（内部/实验项，设置页不暴露）：
 #   direct_commit（默认）= 顶码时真提交，余码的新组合延到触发键 keyup 才开，靠隔一拍
@@ -911,36 +911,6 @@ custom_enabled = false
 # 例：custom_mappings = { "." = ["。", "．", "。", "."] }
 custom_mappings = {}
 
-# 智能符号：同一标点在时限内连按两次，删前一字符替换为另一形态。
-# 三个总开关互相独立，各管一种上下文，都默认关：
-#   smart_mode         = 中文标点状态：连按 → 换英文（数字后智能标点方向相反，见下）
-#   english_punct_mode = 中文输入 + 标点切英文：连按 → 换中文
-#   english_mode       = 英文输入模式：连按 → 换中文
-# 后两者拆成两个开关而非一个，是因为场景不同：前者是「用英文标点写中文、偶尔要个中文句号」，
-# 后者是「正在打英文」。多数人只想要前者，英文态保持纯净。
-[input.symbol]
-smart_mode = false
-smart_timeout_ms = 500
-smart_chars = "。，？！：；、～￥·……——"
-# 替换方案（「体感」与「兼容性」的取舍，故两者都保留）：
-#   delete_replace（默认）= 首次按键直接上屏中文符号，再按一次删掉重打成英文。所见即所得、
-#                           无预览态中间状态，实际体感更好；代价是依赖对宿主做删改。
-#   hold_composition      = 首次按键开 TSF 组合态预览中文符号，再按一次替换组合提交英文；
-#                           超时后自动提交中文。全程不做删改，**兼容性更好**，适合在
-#                           delete_replace 下表现异常的宿主。
-smart_method = "delete_replace"
-# 英文标点状态（中文输入模式 + 工具栏标点切英文）下的智能符号
-english_punct_mode = false
-# 英文输入模式（整个输入法切英文）下的智能符号。开启会让 core 把下面 english_chars 里的键
-# 推给输入法 DLL 吃下转发——英文半角下这些键本来直接透传给宿主，不吃就到不了引擎。
-# 故此开关影响面比上一个大，默认关。
-english_mode = false
-# 参与英文智能符号的**源字符**集合（上面两个开关共用）。与 smart_chars 存中文产物不同，
-# 这里存键本身的 ASCII 标点（`.` 而非 `。`）。
-# 不建议放配对符（([{"' 等）：英文模式下这些键被吃走后配对改由引擎处理，而 DLL 的跳出栈是
-# 空的，Tab 跳出会失效。
-english_chars = ".,?!:;"
-
 # ── 候选窗定位方式（内部配置，不在设置界面暴露）────────────────────────────────
 # 下列模式的共同处境：**由热键激活、激活瞬间没有任何输入内容**，却要立刻显示候选窗/预览窗，
 # 因而需要一个光标坐标。做法是发一个占位 composition —— TSF 侧据此 StartComposition 并写入
@@ -1057,7 +1027,7 @@ candidate_layout = "follow"
 #   临英的典型用法（挂了英汉注释库时，只在打英文时显示释义）：
 # comment_template_vertical   = "${dict}"
 # comment_template_horizontal = "${dict}"
-# 同样的两个键在 [input.temp_pinyin]、[input.url]、[[schema.mix_modes]] 下也可用，
+# 同样的两个键在 [input.temp_pinyin]、[[schema.mix_modes]] 下也可用，
 # 特殊模式的那份在方案文件的 [overlay] 段里。
 # 注释模板共三层：模式级 → 方案级（方案文件 [candidate] 段）→ 全局（下方 [ui.candidate]）。
 # 上面两层都是「不写=跟随下一层」，所以给某个方案单独配注释不必动全局。
@@ -1088,21 +1058,6 @@ candidate_layout = "follow"
 # 临时拼音与快捷输入期间，拼音候选注释里的编码从哪来。值域同 [schema.pinyin] 的同名键，
 # 但两者独立：这里是码表用户借拼音反查编码的场景，出厂 auto；设 off 即不显示。
 code_hint_source = "auto"
-
-[input.auto_pair]
-chinese = false
-english = false
-chinese_pairs = ["（）", "【】", "｛｝", "《》", "〈〉"]
-english_pairs = ["()", "[]", "{}", "<>"]
-# 跳出配对的按键，可多选。"right_symbol" = 右符号键本身（打 ） 跳出已插入的 （）），
-# 其余为键名 tab / enter / space / escape。列表里没有就是没有，不做隐式补偿。
-# 引号等对称配对永不参与右符号跳出（按键不带「开/闭」信息），只能靠 tab / enter 跳出。
-jump_out_keys = ["right_symbol"]
-# 配对状态时效（秒），0 = 不过期。管的是同一个输入框内的状态陈旧：用户中途用鼠标点走、
-# 把括号退格删掉之后，很久之后的 Tab 不该再被当成跳出键吃掉。
-# 从最后一次按键算起，持续输入会不断刷新，在括号里打多久都不会误过期。
-# 跨焦点不归它管——失焦一律清空配对状态。
-state_ttl_secs = 120
 
 # 生僻字模式：用**当前方案**的编码输入，候选只留生僻字。找一个平时打不出来的字时用。
 #
@@ -1156,90 +1111,6 @@ candidate_layout = "follow"
 # 只管反查模式：行内通配、普通打字候选、候选注释里的编码反查都不受影响。
 lookup_disabled_dicts = false
 
-# Emoji 候选：打出词语后，把对应的 emoji 追加到候选列表（如「开心」→ 😄）。
-# 按候选文字查表，与编码无关，所有方案通用。词表见 data/emoji/（来自 rime-emoji，
-# LGPL-3.0），首次开启时在本机建立索引缓存。
-[input.emoji]
-# 总开关
-enabled = false
-
-# 适用范围：
-#   exact  仅完整匹配的词（默认）
-#   all    补全与部分匹配的候选也追加
-#   off    不追加
-scope = "exact"
-
-# 显示位置：
-#   after  紧随对应词之后，其后候选的序号顺延（默认）
-#   tail   追加在常用候选之后，原有序号不变
-show_as = "after"
-
-# 一个词最多追加的 emoji 个数
-max_per_word = 3
-
-# 只为列表前 N 个候选追加。1 = 仅首选
-max_hosts = 1
-
-# 候选少于此字数时不追加。2 = 不为单字追加
-min_word_chars = 2
-
-# 是否启用分类词表：「动物」「水果」等分类词会带出整组 emoji，数量受 max_per_word 约束
-categories = false
-
-# 候选里追加了 emoji 或附加模块的符号时，不做全码唯一自动上屏，留出选它的机会
-block_auto_commit = false
-
-# 附加模块：来自白霜拼音（rime-frost）的 emoji / 符号表，按模块单独开关。查询时排在上面的
-# 主表（与分类表）之后，同一个词多张表都有时依次拼接，再按 max_per_word 截断。
-[input.emoji.modules]
-frost_emoji = true       # 白霜 emoji（「右箭头」→ ➡️、「勾选」→ ☑️ 等，补主表没有的词）
-frost_radicals = false   # 偏旁部首（「提手旁」→ 扌）
-frost_greek = false      # 希腊字母（「阿尔法」→ alpha α Α）
-frost_misc = false       # 其他：单位上标（「平方米」→ m²）与杂项
-frost_keys = false       # 键盘符号（「command」→ ⌘）
-frost_diezi = false      # 叠字（「两个火」→ 炎 炏）
-frost_chem = false       # 化学式（「高锰酸钾」→ KMnO₄）
-frost_month = false      # 月份星期的英文（「一月」→ Jan. January）
-frost_sitcom = false     # 美剧人名（「谢耳朵」→ Sheldon）
-
-# URL 临时输入模式：正常输入下打出完整前缀（如 http / www.）即进入网址输入模式，
-# 模式内自由输入网址字符（不触发上屏），空格或回车上屏。默认关闭。
-[input.url]
-enabled = false
-prefixes = ["www.", "http", "https", "ftp."]
-# 是否把上屏过的网址记下来供下次补全。独立于上面那个开关：网址模式本身不产生任何
-# 持久数据，开了历史才开始把你打过的网址原文落盘。清空入口在设置的「词库」页。
-history_enabled = false
-# 历史条数上限，超出时按「次数少、用得旧」裁掉。
-# 0 = 不限；注意补全每按一键查一次库，条数无顶时逐键开销会随使用一直涨。
-history_max = 200
-candidate_layout = "follow"
-
-# 邮箱输入模式：正常输入下缓冲非空时按 @ 即进入（`abc` + `@` → 用户名 abc），
-# 候选给出常用后缀拼成的完整邮箱，空格或回车上屏。默认关闭。
-#
-# 与 [input.url] 的差别在触发判据：那边是「已打的字恰好等于某个前缀」，这边是
-# 「本键是 @ 且前面已经打了字」。空缓冲按 @ 不会进入，@ 照常作标点。
-#
-# suffixes 存 @ 之后的部分（qq.com 而不是 @qq.com）。模式内可自由输入表外的后缀，
-# 上屏后会被学下来，下次自动出现在候选里并按使用次数排到预置项前面。
-[input.email]
-enabled = false
-suffixes = ["qq.com", "163.com", "126.com", "foxmail.com", "sina.com", "sina.cn", "sohu.com", "139.com", "189.cn", "aliyun.com", "yeah.net", "21cn.com", "tom.com", "gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com", "live.com", "me.com", "proton.me", "protonmail.com", "aol.com", "gmx.com"]
-candidate_layout = "follow"
-
-# Unicode 输入：正常输入下打出 u+ 即进入，续打十六进制得到该码点的字符
-# （u+4e00 → 一）。空格或回车上屏。默认关闭。
-#
-# prefixes 按**字面**匹配，不像 [input.url] 那样把探针转小写——U+ 是 Unicode 的标准
-# 写法，大小写在这里是有意义的。出厂两条各走一个入口：小写 u+ 由码表缓冲触发，
-# 大写 U+ 由临时英文转交（Shift+U 会先进临英）。
-# 不要配单字符前缀：小写 "u" 会把 u 起手的编码全夺走，大写 "U" 够不着（临英先接管）。
-[input.unicode]
-enabled = false
-prefixes = ["u+", "U+"]
-candidate_layout = "follow"
-
 # 快捷加词面板（Ctrl+= 进入，见 [keys] add_word）。
 # 默认竖排：逐字确认的面板竖排更易读。此前是硬编码强制竖排、没有开关。
 [input.add_word]
@@ -1256,7 +1127,6 @@ variant = "s2t"
 enabled = false
 
 [input.cmdbar]
-enabled = false
 candidate_prefix = "⚡"
 
 # 短语前缀列举（原 [dict.phrase]）
@@ -1291,8 +1161,6 @@ open_dictionary = "none"
 add_word = "ctrl+equal"
 open_add_word_dialog = "ctrl+shift+equal"
 toggle_s2t = "ctrl+shift+j"
-# 繁入简出的开关键。"none" = 不绑；填一个组合键即可用，如 "ctrl+shift+;"。
-toggle_t2s = "none"
 activate_ime = "ctrl+shift+["
 take_screenshot = "ctrl+shift+f11"
 # 软键盘面板的开关键。清空 = 不绑（面板仍可从工具栏格与主菜单打开）。
@@ -1301,9 +1169,9 @@ take_screenshot = "ctrl+shift+f11"
 #   清空即禁用。给某个**面**配直通车（softkeyboard:<面id>）仍写 key_actions。
 softkeyboard = "ctrl+shift+k"
 # 改用系统级 RegisterHotKey 抢占的**动作名**列表（不是键串）：列进来的动作会绕开宿主
-# 自身的同名快捷键。仅支持无需按键上下文的 9 个动作：
+# 自身的同名快捷键。仅支持无需按键上下文的 8 个动作：
 #   switch_engine / toggle_full_width / toggle_punct / toggle_toolbar /
-#   open_settings / open_dictionary / take_screenshot / toggle_s2t / toggle_t2s
+#   open_settings / open_dictionary / take_screenshot / toggle_s2t
 # 写入其它名字只会进 warn 日志并被忽略。activate_ime 不在此列（走系统
 # DirectSwitchHotkeys 注册表，不经 RegisterHotKey）。空 = 全部走普通键盘钩子。
 global_hotkeys = []
@@ -1413,7 +1281,7 @@ number_key = "ignore"
 select_key = "ignore"
 select_char_key = "ignore"
 # 翻页键翻不动时（首页按上翻、末页按下翻）：ignore=吞键 / commit_and_input=上屏高亮候选并
-# 输出该键的符号（与直接按标点同一条通路：中文标点、全角、自动配对照常生效）。
+# 输出该键的符号（与直接按标点同一条通路：中文标点、全角、自定义映射照常生效）。
 # 只对能出字的翻页键生效（- = , . [ ]），PageUp/PageDown 不受影响；只在本批候选**从未翻过页**
 # 时生效——翻过页再翻回首页，那一下仍是吞键，免得翻页中途打出符号。末页按下翻若触发了检索
 # 范围放宽（scope_relax.page_end_key），放宽优先、不上屏。
@@ -1470,22 +1338,6 @@ min_window_height_vertical = 0
 # 只稳住候选区：翻页栏/编码栏的出现消失不在其量程内，要连这些一并罩住用
 # min_window_height_vertical（两项可同时配，取较大者）。
 min_rows = 0
-# 候选展开（卷轴）：候选多于一页时按翻页键，候选窗原地展开成多行网格，一行就是原来的一页。
-# 展开后 ↑↓ 换行、←→ 行内移动、翻页键逐行移动，数字键选高亮行；Esc 收起、再按一次取消。
-# 只对横排生效。
-grid_expand = false
-# 展开态的可见行数（2~10）。
-grid_rows = 5
-# 展开态每格最多显示几个字（0 = 只受 max_chars 约束）。超出部分在悬停提示里看全文。
-grid_cell_max_chars = 6
-# 展开态下序号（与数字键）从高亮行往下怎么顺延：rows = 只补整行（每页 5 个时下一行 6~0）、
-# cells = 逐格编到 0（可以停在半行）、off = 只编高亮行。
-grid_index_fill = "rows"
-# 展开态下 PageUp/PageDown 翻一整屏；关掉后也逐行。其余翻页键（如 - =）恒逐行。
-grid_pageupdown_screen = true
-# 展开态的分类标签（Tab / Shift+Tab 或鼠标点击切换）：all 全部、single 单字、phrase 词组、
-# rare 生僻、symbol 符号。只决定有哪些，顺序固定按这个次序；少于两个时不显示标签栏。
-grid_categories = ["all", "single", "phrase", "rare"]
 # 候选注释总开关。关掉后候选不再显示注释（含上方注释条），下面三层注释模板（全局 / 方案 /
 # 模式）一律不生效；关掉后不再计算注释，也不再为它预载反查编码、拆字等数据，省内存。
 # 此时 input.alt_commit = "comment" 按 "off" 处理（Alt+数字照常归程序）。
@@ -1577,8 +1429,6 @@ index_labels = []
 pager_bar_display = ""
 page_number_display = ""
 pager_in_preedit = false         # 翻页栏并入编码所在行右对齐（竖排省一行；candidate_top 与 candidate_inline 都生效）
-# 双击候选窗空白处（编码栏 / 内边距）把候选窗画面截图到剪贴板；候选项上单击即选词，故只认空白处
-double_click_screenshot = false
 # 定位方式：follow_caret=跟随光标（默认） | fixed=固定屏幕位置（不再随光标移动，也不再上翻）
 position_mode = "follow_caret"
 # 跟随光标时的位置微调（dp），与主题自带偏移相加；X 正=向右，Y 正=远离光标（下方定位向下、上翻向上）。0=不偏移。
@@ -1592,8 +1442,6 @@ custom_y = 0
 
 [ui.font]
 family = ""
-path = ""
-render_mode = "directwrite"
 # family 缺字时按序接续的字体；最终链 = [family] + fallback
 fallback = []
 # 按脚本单独指派字体：键取 latin/greek/cyrillic/cjk/emoji/digits/punct，值是该类自己的字体链。

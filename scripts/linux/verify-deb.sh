@@ -104,6 +104,7 @@ slim_skip() {
     case "$1" in
         opencc/*) return 0 ;;                                       # 出厂关：简繁转换
         schemas/wubi86/wubi86_jidian_extra_district.dict.yaml) return 0 ;;  # 出厂不勾选：行政区划
+        schemas/stroke/*) return 0 ;;                               # 出厂不激活：笔画方案（整目录被剔）
         *) return 1 ;;
     esac
 }

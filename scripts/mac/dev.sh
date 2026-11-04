@@ -780,19 +780,8 @@ download_dicts() {
     for f in $FROST_CELLS; do
         get_dict "$frost/cn_dicts_cell/$f.dict.yaml" "$rime/cn_dicts_cell/$f.dict.yaml" "扩展词库"
     done
-    # emoji / 符号表：emoji 附加模块的数据源（aurora-config 的 EMOJI_MODULES，出厂只开 emoji）
-    get_dict "$frost/opencc/emoji.txt"  "$rime/opencc/emoji.txt"  "emoji 表"
-    get_dict "$frost/opencc/others.txt" "$rime/opencc/others.txt" "符号 / 杂项表"
     info "rime-frost (英文):"
     for f in en en_ext; do get_dict "$frost/en_dicts/$f.dict.yaml" "$rime/en_dicts/$f.dict.yaml"; done
-
-    # rime-emoji（emoji 候选主表 / 分类表，LGPL-3.0：只下载不入库，组装时原样复制，见 dev.sh 同段）。
-    local emoji="$CACHE_DIR/rime-emoji"
-    local emojibase="https://raw.githubusercontent.com/rime/rime-emoji/master"
-    info "rime-emoji (候选扩展):"
-    get_dict "$emojibase/opencc/emoji_word.txt"     "$emoji/opencc/emoji_word.txt"     "词→emoji"
-    get_dict "$emojibase/opencc/emoji_category.txt" "$emoji/opencc/emoji_category.txt" "分类→emoji"
-    get_dict "$emojibase/LICENSE"                   "$emoji/LICENSE"                   "LGPL-3.0"
 
     local py="$CACHE_DIR/pinyin-data"
     local pybase="https://raw.githubusercontent.com/mozillazg/pinyin-data/master"
@@ -836,13 +825,11 @@ download_dicts() {
 # 随包附带的 rime-frost 细胞词库。清单与理由见 scripts/dev.sh 的 FROST_CELLS（几处要同步）。
 FROST_CELLS="exthot idiom place history name name2 sport geography animal computer music media industry_product inputmethod chess chess2"
 
-# rime-frost others.txt 里不随包的分组。理由与清单见 scripts/dev.sh 的同名变量（几处要同步）。
-FROST_OTHERS_EXCLUDE="著名表演艺术家"
-
 # 「瘦身数据包」开关：`AURORA_SLIM_DATA=1` 时把**出厂默认关闭**的那几组数据从随包数据里剔掉。
-# 与 scripts/dev.sh 的 `SLIM_DATA_PATHS` 是同一件事 —— 清单、实测收益（包内合计 6.41 MiB =
-# 包体 24.7%，grammar 一项 4.15 MiB，tar+zstd19 单线程口径）与全部后果都写在那边，改一边要
-# 同步另外两边（Windows 侧是 scripts/dev.ps1 的 $SlimDataPaths）。
+# 与 scripts/dev.sh 的 `SLIM_DATA_PATHS` 是同一件事 —— 清单、实测收益（7 组共 8.25 MiB = 包体
+# 约 32%，grammar 一项 4.15 MiB，tar+zstd19 单线程口径；其中「整块出厂关」三项原始 13.87 MiB、
+# 压缩后 6.52 MiB）与全部后果（每项剔了会怎样、开关位置）都写在那边，改一边要同步另外两边
+# （Windows 侧是 scripts/dev.ps1 的 $SlimDataPaths）。
 # 默认不设 = 产物逐字节不变（发版走默认；只有明确要瘦身包时才设这个变量）。
 # ⚠ 瘦身包里用户之后再打开这些功能会拿不到数据（不崩、不报错，只是功能不生效），可从用户目录
 #   自行投放。⚠ 校验瘦身包时也要带同一个变量，否则 verify_dist_data 会整体误报。
@@ -850,25 +837,17 @@ SLIM_DATA_PATHS=(
     schemas/pinyin/grammar
     schemas/pinyin/ext
     opencc
-    emoji
     schemas/aux_code
     schemas/wubi86/wubi86_jidian_extra_district.dict.yaml
+    # 笔画方案：数据是 gen_aux_code 产物，方案文件入库；全拼默认辅助码以 schema:stroke 引用它。
+    schemas/stroke
+    schemas/stroke.schema.toml
+    # 智能联想「下一词」表（桌面出厂关 [input.association].kind=off，移动端 [mobile.association] 开）。
+    assoc/assoc_bigram.txt
 )
 slim_data_enabled() { [ "${AURORA_SLIM_DATA:-}" = 1 ]; }
 
 # 按分组标题过滤 rime-frost 的 OpenCC 杂项表：$1 源，$2 目标。同 scripts/dev.sh 的同名函数。
-strip_frost_sections() {
-    awk -v excl="$FROST_OTHERS_EXCLUDE" '
-        BEGIN { n = split(excl, ex, " ") }
-        /^----------[^\t]*\t-+[ \t]*$/ {
-            name = $0; sub(/^-+/, "", name); sub(/\t.*$/, "", name)
-            skip = 0
-            for (i = 1; i <= n; i++) if (name == ex[i]) skip = 1
-        }
-        !skip { print }
-    ' "$1" > "$2"
-}
-
 # 把 rime 主表 import_tables 里**没随包**的子表、以及全部 cn_dicts_cell/ 细胞词库注释掉（就地改写）。
 # 与 scripts/dev.sh 的同名函数是同一件事（理由见那边），改一边要同步另外两边。
 strip_unshipped_imports() {
@@ -935,28 +914,6 @@ assemble_data() {
         strip_unshipped_imports "$pinyin/rime_frost.dict.yaml"
     else
         warn "缺 .cache/rime-frost/, 拼音词库不可用 (先跑 gd 下载)"
-    fi
-
-    # 2b. rime-frost 的 emoji / 符号表（emoji 附加模块；不依赖繁简归一表，mac 也能用）。
-    #     others.txt 剔除不随包的分组（FROST_OTHERS_EXCLUDE）。
-    if [[ -f "$rime/opencc/emoji.txt" ]]; then
-        mkdir -p "$data/emoji"
-        cp -f "$rime/opencc/emoji.txt" "$data/emoji/frost_emoji.txt"
-        [[ -f "$rime/opencc/others.txt" ]] \
-            && strip_frost_sections "$rime/opencc/others.txt" "$data/emoji/frost_others.txt"
-    fi
-
-    # 2c. rime-emoji 主表 / 分类表：**原样复制**，繁→简归一与建缓存都在用户本机首次启用时做
-    #     （我们分发的是 LGPL 原文的逐字副本，见 dev.sh 的 emoji 段）。LICENSE 必须一并带上。
-    local emoji_cache="$CACHE_DIR/rime-emoji"
-    if [[ -f "$emoji_cache/opencc/emoji_word.txt" && -f "$emoji_cache/LICENSE" ]]; then
-        mkdir -p "$data/emoji"
-        cp -f "$emoji_cache/opencc/emoji_word.txt" "$data/emoji/"
-        [[ -f "$emoji_cache/opencc/emoji_category.txt" ]] \
-            && cp -f "$emoji_cache/opencc/emoji_category.txt" "$data/emoji/"
-        cp -f "$emoji_cache/LICENSE" "$data/emoji/LICENSE"
-    else
-        warn "缺 .cache/rime-emoji/（或其 LICENSE）, emoji 主表不可用 (先跑 gd 下载)"
     fi
 
     # 3. 英文词库。
@@ -1084,7 +1041,9 @@ verify_dist_data() {
         local rel="$1" min="$2" p="$data/$1" sz
         # 瘦身包（AURORA_SLIM_DATA=1）刻意不带出厂默认关的数据，对应断言跟着跳过——否则瘦身包
         # 永远过不了这道门禁。清单见 SLIM_DATA_PATHS（与 scripts/dev.sh / dev.ps1 同源）。
-        if slim_data_enabled && [[ "$rel" == "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml" ]]; then
+        # schemas/stroke/ 是整目录被剔的（连同方案文件），故它的词库断言也要跳。
+        if slim_data_enabled && [[ "$rel" == "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml" \
+            || "$rel" == "schemas/stroke/stroke.dict.yaml" ]]; then
             info "  - $rel (瘦身包已剔除,跳过)"; return
         fi
         if [[ ! -f "$p" ]]; then err "  ✗ 缺失: $rel"; ok=0; return; fi
@@ -1102,6 +1061,7 @@ verify_dist_data() {
     _check_min "schemas/wubi86/wubi86_jidian_emoji.dict.yaml"          1000
     _check_min "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml" 10000
     # 笔画方案词库同为 gen_aux_code 生成物; 全拼默认辅助码经 schema:stroke 引用它
+    # (整组 schemas/stroke/ + 方案文件在瘦身包里被剔, 见上方 _check_min 里的跳过)
     _check_min "schemas/stroke/stroke.dict.yaml"                       500000
     local oc
     # 简繁 .octrie 也属「出厂默认关」那组（opencc/ 整目录），瘦身包里必然没有。

@@ -56,7 +56,7 @@
 #                模板 scripts\sign.local.ps1.example; 原理与取舍见 docs\design\code-signing.md。
 #   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  hooks(=激活 git hooks)  clean
 #   gd=gen-data  r=repl
-#     ↑ gd 支持 $env:AURORA_SLIM_DATA=1: 剔除「出厂默认关」的那几组数据 (瘦身包, 包体约 -6.41 MiB)。
+#     ↑ gd 支持 $env:AURORA_SLIM_DATA=1: 剔除「出厂默认关」的那几组数据 (瘦身包, 包内约 -8.25 MiB)。
 #       默认不设 = 行为完全不变; 清单、收益与后果见 Assemble-Data 上方的 $SlimDataPaths。
 #   av           配置 Defender 编译排除项 (自动 UAC 提权; 详见 scripts\defender-exclusions.ps1)
 #   avc          仅预览排除项改动 (免管理员)      avr  移除本脚本添加的排除项
@@ -469,9 +469,7 @@ function Download-Dicts {
     $rimeWubi    = "$CacheDir\rime-wubi"
     $cldr        = "$CacheDir\cldr"
     $auxCode     = "$CacheDir\aux-code"
-    $rimeEmoji   = "$CacheDir\rime-emoji"
-    $rimeEmojiCc = "$rimeEmoji\opencc"
-    foreach ($d in @($rimeFrostCn, $rimeFrostEn, $opencc, $pinyinData, $rimeWubi, $cldr, $auxCode, $rimeEmojiCc)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+    foreach ($d in @($rimeFrostCn, $rimeFrostEn, $opencc, $pinyinData, $rimeWubi, $cldr, $auxCode)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 
     $frostBase = "https://raw.githubusercontent.com/gaboolic/rime-frost/master"
     Gray "rime-frost (拼音):"
@@ -483,10 +481,6 @@ function Download-Dicts {
     Get-Dict "$frostBase/cn_dicts/others.dict.yaml"      "$rimeFrostCn\others.dict.yaml"        "容错词"       | Out-Null
     Get-Dict "$frostBase/cn_dicts/corrections.dict.yaml" "$rimeFrostCn\corrections.dict.yaml"   "错音词"       | Out-Null
     Get-Dict "$frostBase/cn_dicts/tencent.dict.yaml"     "$rimeFrostCn\tencent.dict.yaml"       "腾讯词频"     | Out-Null
-    # emoji / 符号表: emoji 附加模块的数据源 (aurora-config 的 EMOJI_MODULES, 出厂只开 emoji)
-    New-Item -ItemType Directory -Path "$rimeFrost\opencc" -Force | Out-Null
-    Get-Dict "$frostBase/opencc/emoji.txt"  "$rimeFrost\opencc\emoji.txt"  "emoji 表"        | Out-Null
-    Get-Dict "$frostBase/opencc/others.txt" "$rimeFrost\opencc\others.txt" "符号 / 杂项表"   | Out-Null
     New-Item -ItemType Directory -Path "$rimeFrost\cn_dicts_cell" -Force | Out-Null
     foreach ($c in $FrostCells) {
         Get-Dict "$frostBase/cn_dicts_cell/$c.dict.yaml" "$rimeFrost\cn_dicts_cell\$c.dict.yaml" "扩展词库" | Out-Null
@@ -562,51 +556,29 @@ function Download-Dicts {
     Get-Dict "$openccBase/TWPhrases.txt"    "$opencc\TWPhrases.txt"    "台湾词汇"   | Out-Null
     Get-Dict "$openccBase/HKVariants.txt"   "$opencc\HKVariants.txt"   "香港字形"   | Out-Null
 
-    # Emoji 候选扩展 (设计见 docs\design\emoji-suggestion.md, 出厂关闭)。
-    # ⚠️ rime-emoji 是 LGPL-3.0, 与本仓 GPL-3.0 不同。政策与 rime-stroke 一致 —— 只下载不入库;
-    #    但**分发方式刻意不同**: 本表随发行版**原样**分发 (不做构建期转换), 我们分发的因此是
-    #    逐字副本而非衍生作品, LGPL 的修改版义务不触发。繁->简归一与二进制化都在**用户本机**
-    #    首次启用时进行, 产物是本机缓存, 从不离开用户机器 => 不构成 conveying。
-    #    详见 NOTICE.md 与设计文档 §3.5。⛔ 切勿 include_bytes! 嵌进 exe (会构成 LGPL §4
-    #    Combined Work, 须另行提供重新链接机制)。
-    $emojiBase = "https://raw.githubusercontent.com/rime/rime-emoji/master"
-    Gray "rime-emoji (候选扩展):"
-    Get-Dict "$emojiBase/opencc/emoji_word.txt"     "$rimeEmojiCc\emoji_word.txt"     "词->emoji"   | Out-Null
-    Get-Dict "$emojiBase/opencc/emoji_category.txt" "$rimeEmojiCc\emoji_category.txt" "分类->emoji" | Out-Null
-    # 许可证全文必须随数据一起分发 (GPL-3.0 §4: give all recipients a copy of this License)。
-    Get-Dict "$emojiBase/LICENSE"                   "$rimeEmoji\LICENSE"              "LGPL-3.0"    | Out-Null
-    return $true
 }
 
 # 随包附带的 rime-frost 细胞词库。清单与理由见 dev.sh 的 FROST_CELLS（几处要同步）。
 $FrostCells = @('exthot', 'idiom', 'place', 'history', 'name', 'name2', 'sport', 'geography', 'animal',
                 'computer', 'music', 'media', 'industry_product', 'inputmethod', 'chess', 'chess2')
 
-# rime-frost others.txt 里不随包的分组。理由与清单见 dev.sh 的 FROST_OTHERS_EXCLUDE（几处要同步）。
-$FrostOthersExclude = @('著名表演艺术家')
-
 # 「瘦身数据包」开关: $env:AURORA_SLIM_DATA=1 时把**出厂默认关闭**的那几组数据从随包数据里剔掉。
-# 与 dev.sh 的 SLIM_DATA_PATHS、mac dev.sh 的同名变量是同一件事 —— 清单、实测收益 (包内合计
-# 6.41 MiB = 包体 24.7%, grammar 一项 4.15 MiB, tar+zstd19 单线程口径) 与全部后果都写在 dev.sh
-# 那边的注释里, 改一处要同步三处。默认不设 = 产物逐字节不变 (发版走默认, 只有明确要瘦身包才设)。
+# 与 dev.sh 的 SLIM_DATA_PATHS、mac dev.sh 的同名变量是同一件事 —— 清单、实测收益 (7 组共
+# 8.25 MiB = 包体约 32%, grammar 一项 4.15 MiB, tar+zstd19 单线程口径; 其中「整块出厂关」三项
+# 原始 13.87 MiB、压缩后 6.52 MiB) 与全部后果 (每项剔了会怎样、开关位置) 都写在 dev.sh 那边的
+# 注释里, 改一处要同步三处。默认不设 = 产物逐字节不变 (发版走默认, 只有明确要瘦身包才设)。
 # ⚠ 瘦身包里用户之后再打开这些功能会拿不到数据 (不崩、不报错, 只是功能不生效), 可从用户数据目录
 #   自行投放。⚠ 校验瘦身包时也要带同一个环境变量, 否则 Verify-DistData 会整体误报。
-$SlimDataPaths = @('schemas\pinyin\grammar', 'schemas\pinyin\ext', 'opencc', 'emoji',
-                   'schemas\aux_code', 'schemas\wubi86\wubi86_jidian_extra_district.dict.yaml')
+$SlimDataPaths = @('schemas\pinyin\grammar', 'schemas\pinyin\ext', 'opencc',
+                   'schemas\aux_code', 'schemas\wubi86\wubi86_jidian_extra_district.dict.yaml',
+                   # 笔画方案: 数据是 gen_aux_code 产物, 方案文件入库; 全拼默认辅助码以
+                   # schema:stroke 引用它 (整组剔除, 故也应在本清单里)
+                   'schemas\stroke', 'schemas\stroke.schema.toml',
+                   # 智能联想「下一词」表 (桌面出厂关 [input.association].kind=off,
+                   # 移动端 [mobile.association].kind=smart 出厂开)
+                   'assoc\assoc_bigram.txt')
 # 环境变量是字符串, 只认 "1" (与 dev.sh / mac dev.sh 的 `= 1` 同口径)。
 function Test-SlimData { return ($env:AURORA_SLIM_DATA -eq '1') }
-
-# 按分组标题过滤 rime-frost 的 OpenCC 杂项表 (同 dev.sh 的 strip_frost_sections):
-# 被剔除的组从其标题到下一个标题整段去掉, 其余行原样保留。按 LF 切行、按 LF 拼回。
-function Copy-FrostOthers ([string]$src, [string]$dst) {
-    $lines = [IO.File]::ReadAllText($src, [Text.UTF8Encoding]::new($false)) -split "`n"
-    $skip = $false
-    $out = foreach ($l in $lines) {
-        if ($l -match '^-{10}([^\t]*)\t-+\s*$') { $skip = $FrostOthersExclude -contains $Matches[1].TrimStart('-') }
-        if (-not $skip) { $l }
-    }
-    [IO.File]::WriteAllText($dst, ($out -join "`n"), [Text.UTF8Encoding]::new($false))
-}
 
 # 把 rime 主表 import_tables 里**没随包**的子表、以及全部 cn_dicts_cell/ 细胞词库注释掉（就地改写）。
 # 理由见 dev.sh 的 strip_unshipped_imports（同一件事，改一边要同步另外两边）：
@@ -747,38 +719,8 @@ function Assemble-Data ([string]$outdir = $BuildDevDir) {
     #   故缺文件时必须显式 SilentlyContinue (生成失败时本来就不会有这个文件)。
     Remove-Item "$schemas\aux_code\stroke.txt" -Force -ErrorAction SilentlyContinue
 
-    # 8. Emoji 候选扩展表: **原样复制**, 不做任何构建期转换 (与 5/6/7 的生成物刻意不同)。
-    #    繁->简归一、撞键合并与二进制化全部推迟到用户本机首次启用时 —— 这样我们分发的是
-    #    LGPL 原文的逐字副本, 而非衍生作品 (见 NOTICE.md 与 design\emoji-suggestion.md §3.5)。
-    #    LICENSE 必须一并复制: 缺了它这份分发就不合规。
-    #    功能出厂关闭, 故缺表只是「emoji 扩展用不了」, 用 Warn 不中断构建。
-    $emojiCache = "$CacheDir\rime-emoji"
-    if (Test-Path "$emojiCache\opencc\emoji_word.txt") {
-        Gray "复制 emoji 扩展表 (原样) ..."
-        $emojiOut = "$data\emoji"
-        New-Item -ItemType Directory -Path $emojiOut -Force | Out-Null
-        Copy-Item "$emojiCache\opencc\emoji_word.txt"     "$emojiOut\" -Force
-        # 分类表可缺 (出厂关), 缺了不影响主表。
-        if (Test-Path "$emojiCache\opencc\emoji_category.txt") {
-            Copy-Item "$emojiCache\opencc\emoji_category.txt" "$emojiOut\" -Force
-        }
-        if (Test-Path "$emojiCache\LICENSE") {
-            Copy-Item "$emojiCache\LICENSE" "$emojiOut\LICENSE" -Force
-        } else { Warn "缺 rime-emoji LICENSE, 该数据不得分发 (重跑 gen-data)" }
-    } else { Warn "缺 .cache\rime-emoji\, emoji 扩展不可用 (运行 gen-data 下载)" }
-
-    # 8b. rime-frost 的 emoji / 符号表 (emoji 附加模块)。GPL-3.0, 与拼音词库同源同许可。
-    #     others.txt 剔除不随包的分组 ($FrostOthersExclude), 其余分组运行时按模块取。
-    if (Test-Path "$rimeFrost\opencc\emoji.txt") {
-        New-Item -ItemType Directory -Path "$data\emoji" -Force | Out-Null
-        Copy-Item "$rimeFrost\opencc\emoji.txt" "$data\emoji\frost_emoji.txt" -Force
-        if (Test-Path "$rimeFrost\opencc\others.txt") {
-            Copy-FrostOthers "$rimeFrost\opencc\others.txt" "$data\emoji\frost_others.txt"
-        }
-    } else { Warn "缺 .cache\rime-frost\opencc\, 白霜 emoji 模块不可用 (运行 gen-data 下载)" }
-
-    # 8c. 瘦身开关 (默认关): 剔除出厂默认关闭的那几组数据, 清单与理由见 $SlimDataPaths。
-    # 必须放在**全部组装动作之后**: 第 8/8b 步会重新创建 $data\emoji, 放在前面等于白删。
+    # 8. 瘦身开关 (默认关): 剔除出厂默认关闭的那几组数据, 清单与理由见 $SlimDataPaths。
+    # 必须放在**全部组装动作之后**: 前面的步骤会重新创建被剔的目录, 放在前面等于白删。
     # 也放在「组装完成」统计之前, 让打印的文件数与实际随包内容一致。
     if (Test-SlimData) {
         Say "AURORA_SLIM_DATA=1: 剔除出厂默认关的数据..."
@@ -857,8 +799,10 @@ function Verify-DistData ([string]$outdir = $BuildDir) {
     foreach ($c in $checks) {
         # 瘦身包 (AURORA_SLIM_DATA=1) 刻意不带出厂默认关的数据, 对应断言跟着跳过 ——
         # 否则瘦身包永远过不了这道门禁。清单见 $SlimDataPaths (与 dev.sh / mac dev.sh 同源)。
+        # schemas\stroke\ 是整目录被剔的 (连同方案文件), 故它的词库断言也要跳。
         if ((Test-SlimData) -and (($c.Path -eq 'schemas\aux_code\flypy_full.txt') -or
-                                  ($c.Path -eq 'schemas\wubi86\wubi86_jidian_extra_district.dict.yaml'))) {
+                                  ($c.Path -eq 'schemas\wubi86\wubi86_jidian_extra_district.dict.yaml') -or
+                                  ($c.Path -eq 'schemas\stroke\stroke.dict.yaml'))) {
             Gray "  - $($c.Path) (瘦身包已剔除,跳过)"; continue
         }
         $p = "$data\$($c.Path)"

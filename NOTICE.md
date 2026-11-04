@@ -86,9 +86,7 @@ gitignore），用于生成词库数据文件，其各自适用原项目的许�
 - **许可证**: GPL-3.0
 - **使用的文件**: `rime_frost.dict.yaml`、`cn_dicts/`（8105 / 41448 / base /
   ext / others / corrections / tencent）、`en_dicts/`（en / en_ext）、`cn_dicts_cell/` 中的 16 张
-  小型细胞词库（作扩展词库随包，出厂关，清单见 `scripts/dev.sh` 的 `FROST_CELLS`）、
-  `opencc/emoji.txt` 与 `opencc/others.txt`（emoji 附加模块；`others.txt` 构建期按分组剔除
-  `FROST_OTHERS_EXCLUDE` 所列的组后分发）
+  小型细胞词库（作扩展词库随包，出厂关，清单见 `scripts/dev.sh` 的 `FROST_CELLS`）
 - **另用于**: 笔画输入方案词库的权重（取 `cn_dicts/8105`、`41448` 的单字字频，见 rime-stroke 条目）
 
 #### pinyin-data
@@ -116,23 +114,6 @@ gitignore），用于生成词库数据文件，其各自适用原项目的许�
   与商业使用，仅要求保留版权与许可声明。`Copyright © 1991-2025 Unicode, Inc.`，
   完整条款见 https://www.unicode.org/license.txt。若将来启用该功能，其产物可
   直接入库——本许可证无 copyleft 传染性
-
-#### rime-emoji（候选 emoji 扩展）
-
-- **用途**: 「打出词组后在候选里追加对应 emoji」的映射表（`词 → emoji…`），出厂关闭。
-  设计见 `docs/design/emoji-suggestion.md`
-- **仓库**: https://github.com/rime/rime-emoji
-- **许可证**: **LGPL-3.0**
-- **使用的文件**: `opencc/emoji_word.txt`（4668 行）、`opencc/emoji_category.txt`（165 行）、
-  `LICENSE`
-- **加工方式**: **不加工**。三个文件由 `scripts/dev.*` 的 gen-data 下载到 `.cache/rime-emoji/`，
-  再**原样**复制进发行版 `data/emoji/`，逐字节未改
-- **★ 与 rime-stroke 的处理刻意不同**: 笔画表在构建期转换（剥 YAML 头、裁剪字集），产物是
-  衍生作品；本表则原样分发，我们交付的是**逐字副本**，LGPL 关于修改版的义务（标注修改、
-  提供对应源）因此不触发。繁→简归一、同键合并与二进制化全部推迟到**用户本机**首次启用时
-  进行，其产物是本机缓存，从不离开用户机器 ⇒ 不构成 conveying
-- **⛔ 不得嵌入可执行文件**: 一旦 `include_bytes!` 进 exe 即构成 LGPL §4 的 Combined Work，
-  需另行提供让用户替换该部分的机制；保持独立数据文件则该节整节不适用
 
 #### rime-stroke（笔画辅助码 / 笔画输入方案）
 
@@ -281,17 +262,12 @@ GPL-3.0 许可的词库数据（rime-frost）与 LGPL-3.0 许可的笔画码表�
 LGPL-3.0 许可的联想「下一词」表（`data/assoc/assoc_bigram.txt`，蒸馏自 rime-octagram-data）
 入库并随发行版分发，适用 LGPL-3.0 条款；表中的标点统计源自中文维基百科，同时适用 CC BY-SA 4.0。
 
-LGPL-3.0 许可的 emoji 映射表（rime-emoji）同样不入库，但发行版中包含的是其
-**未经修改的原始文件**（`data/emoji/`），适用 LGPL-3.0 条款，并随附上游 LICENSE 全文。
+发行版的 `licenses/` 目录含本文件与本项目自身的 LICENSE，该目录为履行「向每一位接收者
+提供许可证副本」（GPL-3.0 §4、LGPL-3.0、Apache-2.0 §4(a)）而设，打包时不得省略。
 
-发行版的 `licenses/` 目录含本文件与本项目自身的 LICENSE，`data/emoji/LICENSE` 为
-rime-emoji 的 LGPL-3.0 全文。该目录为履行「向每一位接收者提供许可证副本」
-（GPL-3.0 §4、LGPL-3.0、Apache-2.0 §4(a)）而设，打包时不得省略。
-
-⚠️ **尚未补全**：除 rime-emoji 外，其余 copyleft 上游（rime-frost 的 GPL-3.0、
-rime-stroke 的 LGPL-3.0）与 Apache-2.0 上游的许可证**全文**目前未随包分发——本文件
-的逐条声明不等于许可证副本。补齐方式是在 `scripts/dev.*` 的 gen-data 里逐个下载上游
-LICENSE 并复制进 `licenses/`。
+⚠️ **尚未补全**：copyleft 上游（rime-frost 的 GPL-3.0、rime-stroke 的 LGPL-3.0）与
+Apache-2.0 上游的许可证**全文**目前未随包分发——本文件的逐条声明不等于许可证副本。
+补齐方式是在 `scripts/dev.*` 的 gen-data 里逐个下载上游 LICENSE 并复制进 `licenses/`。
 
 Apache-2.0（极点五笔码表）与 Unicode-3.0（Unicode CLDR，当前仅研究用）
 均为宽松许可证，允许修改后再分发，其加工产物可直接包含在本仓库中，
