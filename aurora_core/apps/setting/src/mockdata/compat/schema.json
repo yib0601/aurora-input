@@ -293,28 +293,6 @@
       "advanced": false,
       "dependsOn": null,
       "group": "behavior",
-      "hosts": [
-        "EXCEL.EXE",
-        "et.exe"
-      ],
-      "key": "auto_pair",
-      "kind": "tri_bool",
-      "label": "符号自动配对",
-      "options": [],
-      "problem": "表格类软件（Excel、WPS 表格）在输入状态下把方向键当作「确认单元格并移动」，配对后无法把光标退回两个符号之间，目前只能对它们关掉自动配对。不设置则沿用全局设置。",
-      "protocol": false,
-      "section": "apps",
-      "summary": "输入左括号 / 引号时是否自动补全右半边。",
-      "triLabels": [
-        "跟随全局",
-        "启用",
-        "禁用"
-      ]
-    },
-    {
-      "advanced": false,
-      "dependsOn": null,
-      "group": "behavior",
       "hosts": [],
       "key": "password_force_english",
       "kind": "tri_bool",
@@ -329,29 +307,6 @@
         "开",
         "关"
       ]
-    },
-    {
-      "advanced": false,
-      "dependsOn": null,
-      "group": "behavior",
-      "hosts": [
-        "Tabby.exe"
-      ],
-      "key": "smart_method",
-      "kind": "enum",
-      "label": "智能符号替换方式",
-      "optionLabels": [
-        "删除后替换",
-        "保持组合串"
-      ],
-      "options": [
-        "delete_replace",
-        "hold_composition"
-      ],
-      "problem": "在 Tabby 这类终端里，删改已输入内容会出现严重错误，改用 hold_composition 兼容性更好。不设置则沿用全局设置。",
-      "protocol": false,
-      "section": "apps",
-      "summary": "delete_replace 会删改已输入的内容来替换符号；hold_composition 全程不删改。"
     },
     {
       "advanced": true,

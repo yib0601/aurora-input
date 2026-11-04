@@ -622,7 +622,7 @@ pub fn build_toggle_rows_dialog(
     Element::dialog(visible, frame)
 }
 
-/// 配对复选网格对话框（用于 auto_pair *_pairs 类 strlist）。
+/// 配对复选网格对话框（用于“每项一对字符”的 strlist，如自定义标点映射的成对取值）。
 /// `sigs`: (value, Signal<bool>)；`labels`: 每项对应的展示标签（1:1 with sigs）；
 /// `defaults`: capability 默认 strlist（恢复默认用）。
 pub fn build_pairs_dialog(

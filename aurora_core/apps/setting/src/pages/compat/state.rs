@@ -966,7 +966,7 @@ mod tests {
                 .all(|(m, _)| !m.starts_with("compat.upsert")),
             "还没设置字段就不落盘"
         );
-        assert!(st.set_field(&id("New.exe"), "auto_pair", json!(true)));
+        assert!(st.set_field(&id("New.exe"), "password_force_english", json!(true)));
         assert_eq!(st.draft.get(), None, "第一次设置字段后草稿转正");
         assert_eq!(calls("compat.upsert").len(), 1);
         assert_eq!(st.selected.get(), id("New.exe").key(), "转正后仍选中它");
@@ -983,7 +983,7 @@ mod tests {
         let st = loaded();
         let name = super::super::mock::MOCK_NOOP_PROCESS;
         st.start_draft(id(name)).unwrap();
-        assert!(st.set_field(&id(name), "auto_pair", json!(true)));
+        assert!(st.set_field(&id(name), "password_force_english", json!(true)));
         assert_eq!(
             st.draft.get(),
             Some(id(name)),
@@ -1061,10 +1061,13 @@ mod tests {
         let _g = MockGuard::new();
         let st = loaded();
         st.start_draft(id("Brand.exe")).unwrap();
-        st.set_field(&id("Brand.exe"), "auto_pair", json!(false));
-        assert!(!st.is_pending(&id("Brand.exe"), "auto_pair"));
+        st.set_field(&id("Brand.exe"), "password_force_english", json!(false));
+        assert!(!st.is_pending(&id("Brand.exe"), "password_force_english"));
         let rule = st.selected_rule_of(&id("Brand.exe")).unwrap();
-        assert_eq!(rule.fields["auto_pair"].source, FieldSource::User);
+        assert_eq!(
+            rule.fields["password_force_english"].source,
+            FieldSource::User
+        );
     }
 
     /// 占位与「已设置」并存（外部改动了它）时，第一次点「移除」就要真的去掉。
@@ -1322,7 +1325,7 @@ mod tests {
         let d = st.detail_epoch.get();
         assert!(!st.set_field(
             &id(crate::rpc::MOCK_COMPAT_FAIL_PROCESS),
-            "auto_pair",
+            "password_force_english",
             json!(true)
         ));
         assert!(st.detail_epoch.get() > d, "写失败要按核心的值重建控件");
@@ -1451,12 +1454,12 @@ mod tests {
         );
 
         let _ = crate::rpc::take_mock_calls();
-        assert!(st.set_field(&qq_win, "auto_pair", json!(true)));
+        assert!(st.set_field(&qq_win, "password_force_english", json!(true)));
         assert!(st.set_disabled(&win("*", "Chrome_WidgetWin_*", ""), true));
         let u = calls("compat.upsert");
         assert_eq!(
             u[0],
-            json!({"section": "apps", "process": "QQ.exe", "class": "TXGuiFoundation", "patch": {"auto_pair": true}})
+            json!({"section": "apps", "process": "QQ.exe", "class": "TXGuiFoundation", "patch": {"password_force_english": true}})
         );
         let _ = st;
     }
@@ -1471,7 +1474,7 @@ mod tests {
         assert_eq!(st.selected.get(), d.key());
         assert_eq!(st.selected_rule().unwrap().class, "ChatWnd");
         let _ = crate::rpc::take_mock_calls();
-        assert!(st.set_field(&d, "auto_pair", json!(true)));
+        assert!(st.set_field(&d, "password_force_english", json!(true)));
         assert_eq!(st.draft.get(), None, "转正");
         assert_eq!(st.selected.get(), d.key());
         assert!(

@@ -1124,88 +1124,6 @@
       "type": "map"
     },
     {
-      "default": false,
-      "key": "input.symbol.smart_mode",
-      "type": "bool"
-    },
-    {
-      "default": 500,
-      "key": "input.symbol.smart_timeout_ms",
-      "type": "int"
-    },
-    {
-      "default": "。，？！：；、～￥·……——",
-      "key": "input.symbol.smart_chars",
-      "type": "str"
-    },
-    {
-      "default": "delete_replace",
-      "key": "input.symbol.smart_method",
-      "type": "enum",
-      "values": [
-        "delete_replace",
-        "hold_composition"
-      ]
-    },
-    {
-      "default": false,
-      "key": "input.symbol.english_punct_mode",
-      "type": "bool"
-    },
-    {
-      "default": false,
-      "key": "input.symbol.english_mode",
-      "type": "bool"
-    },
-    {
-      "default": ".,?!:;",
-      "key": "input.symbol.english_chars",
-      "type": "str"
-    },
-    {
-      "default": false,
-      "key": "input.auto_pair.chinese",
-      "type": "bool"
-    },
-    {
-      "default": false,
-      "key": "input.auto_pair.english",
-      "type": "bool"
-    },
-    {
-      "default": [
-        "（）",
-        "【】",
-        "｛｝",
-        "《》",
-        "〈〉"
-      ],
-      "key": "input.auto_pair.chinese_pairs",
-      "type": "strlist"
-    },
-    {
-      "default": [
-        "()",
-        "[]",
-        "{}",
-        "<>"
-      ],
-      "key": "input.auto_pair.english_pairs",
-      "type": "strlist"
-    },
-    {
-      "default": [
-        "right_symbol"
-      ],
-      "key": "input.auto_pair.jump_out_keys",
-      "type": "strlist"
-    },
-    {
-      "default": 120,
-      "key": "input.auto_pair.state_ttl_secs",
-      "type": "int"
-    },
-    {
       "default": true,
       "key": "input.temp_english.enabled",
       "type": "bool"
@@ -1372,79 +1290,6 @@
       ]
     },
     {
-      "default": false,
-      "key": "input.url.enabled",
-      "type": "bool"
-    },
-    {
-      "default": [
-        "www.",
-        "http",
-        "https",
-        "ftp."
-      ],
-      "key": "input.url.prefixes",
-      "type": "strlist"
-    },
-    {
-      "default": false,
-      "key": "input.url.history_enabled",
-      "type": "bool"
-    },
-    {
-      "default": 200,
-      "key": "input.url.history_max",
-      "type": "int"
-    },
-    {
-      "default": false,
-      "key": "input.email.enabled",
-      "type": "bool"
-    },
-    {
-      "default": [
-        "qq.com",
-        "163.com",
-        "126.com",
-        "foxmail.com",
-        "sina.com",
-        "sina.cn",
-        "sohu.com",
-        "139.com",
-        "189.cn",
-        "aliyun.com",
-        "yeah.net",
-        "21cn.com",
-        "tom.com",
-        "gmail.com",
-        "outlook.com",
-        "hotmail.com",
-        "yahoo.com",
-        "icloud.com",
-        "live.com",
-        "me.com",
-        "proton.me",
-        "protonmail.com",
-        "aol.com",
-        "gmx.com"
-      ],
-      "key": "input.email.suffixes",
-      "type": "strlist"
-    },
-    {
-      "default": false,
-      "key": "input.unicode.enabled",
-      "type": "bool"
-    },
-    {
-      "default": [
-        "u+",
-        "U+"
-      ],
-      "key": "input.unicode.prefixes",
-      "type": "strlist"
-    },
-    {
       "default": [],
       "key": "input.rare_char.trigger_keys",
       "type": "strlist"
@@ -1470,101 +1315,6 @@
       "type": "bool"
     },
     {
-      "default": false,
-      "key": "input.emoji.enabled",
-      "type": "bool"
-    },
-    {
-      "default": "exact",
-      "key": "input.emoji.scope",
-      "type": "enum",
-      "values": [
-        "off",
-        "exact",
-        "all"
-      ]
-    },
-    {
-      "default": "after",
-      "key": "input.emoji.show_as",
-      "type": "enum",
-      "values": [
-        "after",
-        "tail",
-        "comment"
-      ]
-    },
-    {
-      "default": 3,
-      "key": "input.emoji.max_per_word",
-      "type": "int"
-    },
-    {
-      "default": 1,
-      "key": "input.emoji.max_hosts",
-      "type": "int"
-    },
-    {
-      "default": 2,
-      "key": "input.emoji.min_word_chars",
-      "type": "int"
-    },
-    {
-      "default": false,
-      "key": "input.emoji.categories",
-      "type": "bool"
-    },
-    {
-      "default": false,
-      "key": "input.emoji.block_auto_commit",
-      "type": "bool"
-    },
-    {
-      "default": {
-        "frost_chem": false,
-        "frost_diezi": false,
-        "frost_emoji": true,
-        "frost_greek": false,
-        "frost_keys": false,
-        "frost_misc": false,
-        "frost_month": false,
-        "frost_radicals": false,
-        "frost_sitcom": false
-      },
-      "key": "input.emoji.modules",
-      "type": "map"
-    },
-    {
-      "default": "follow",
-      "key": "input.url.candidate_layout",
-      "type": "enum",
-      "values": [
-        "follow",
-        "vertical",
-        "horizontal"
-      ]
-    },
-    {
-      "default": "follow",
-      "key": "input.email.candidate_layout",
-      "type": "enum",
-      "values": [
-        "follow",
-        "vertical",
-        "horizontal"
-      ]
-    },
-    {
-      "default": "follow",
-      "key": "input.unicode.candidate_layout",
-      "type": "enum",
-      "values": [
-        "follow",
-        "vertical",
-        "horizontal"
-      ]
-    },
-    {
       "default": "vertical",
       "key": "input.add_word.candidate_layout",
       "type": "enum",
@@ -1587,11 +1337,6 @@
     {
       "default": false,
       "key": "input.t2s.enabled",
-      "type": "bool"
-    },
-    {
-      "default": false,
-      "key": "input.cmdbar.enabled",
       "type": "bool"
     },
     {
@@ -1758,11 +1503,6 @@
     {
       "default": "ctrl+shift+j",
       "key": "keys.toggle_s2t",
-      "type": "str"
-    },
-    {
-      "default": "none",
-      "key": "keys.toggle_t2s",
       "type": "str"
     },
     {
@@ -2005,46 +1745,6 @@
       "type": "int"
     },
     {
-      "default": false,
-      "key": "ui.candidate.grid_expand",
-      "type": "bool"
-    },
-    {
-      "default": 5,
-      "key": "ui.candidate.grid_rows",
-      "type": "int"
-    },
-    {
-      "default": 6,
-      "key": "ui.candidate.grid_cell_max_chars",
-      "type": "int"
-    },
-    {
-      "default": "rows",
-      "key": "ui.candidate.grid_index_fill",
-      "type": "enum",
-      "values": [
-        "rows",
-        "cells",
-        "off"
-      ]
-    },
-    {
-      "default": true,
-      "key": "ui.candidate.grid_pageupdown_screen",
-      "type": "bool"
-    },
-    {
-      "default": [
-        "all",
-        "single",
-        "phrase",
-        "rare"
-      ],
-      "key": "ui.candidate.grid_categories",
-      "type": "strlist"
-    },
-    {
       "default": true,
       "key": "ui.candidate.comment_enabled",
       "type": "bool"
@@ -2113,11 +1813,6 @@
       "type": "bool"
     },
     {
-      "default": false,
-      "key": "ui.candidate.double_click_screenshot",
-      "type": "bool"
-    },
-    {
       "default": "follow_caret",
       "key": "ui.candidate.position_mode",
       "type": "enum",
@@ -2159,20 +1854,6 @@
       "default": "",
       "key": "ui.font.family",
       "type": "str"
-    },
-    {
-      "default": "",
-      "key": "ui.font.path",
-      "type": "str"
-    },
-    {
-      "default": "directwrite",
-      "key": "ui.font.render_mode",
-      "type": "enum",
-      "values": [
-        "directwrite",
-        "gdi"
-      ]
     },
     {
       "default": [],

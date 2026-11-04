@@ -430,13 +430,7 @@ mod tests {
             edit_target(C::CommonChars, None),
             Some(json!({"kind": "common_chars"}))
         );
-        for c in [
-            C::PhraseSystem,
-            C::Charsets,
-            C::MailSuffix,
-            C::UrlHistory,
-            C::QuickHistory,
-        ] {
+        for c in [C::PhraseSystem, C::Charsets, C::QuickHistory] {
             assert_eq!(edit_target(c, Some("wubi86")), None, "{c:?}");
         }
         assert_eq!(edit_target(C::UserDict, None), None, "没有方案就没有入口");

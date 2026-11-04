@@ -24,27 +24,6 @@
    "select_keys_commit": true,
    "space_commits": true
   },
-  "auto_pair": {
-   "chinese": false,
-   "chinese_pairs": [
-    "（）",
-    "【】",
-    "｛｝",
-    "《》",
-    "〈〉"
-   ],
-   "english": false,
-   "english_pairs": [
-    "()",
-    "[]",
-    "{}",
-    "<>"
-   ],
-   "jump_out_keys": [
-    "right_symbol"
-   ],
-   "state_ttl_secs": 120
-  },
   "buffer_symbol_chars": "-",
   "capslock": {
    "cancel_on_mode_switch": false,
@@ -58,8 +37,7 @@
    "temp_pinyin_via_composition": true
   },
   "cmdbar": {
-   "candidate_prefix": "⚡",
-   "enabled": false
+   "candidate_prefix": "⚡"
   },
   "commit_newline": "keep",
   "correction": {
@@ -91,57 +69,6 @@
    "full_width": false,
    "remember_last_state": false,
    "state_scope": "global"
-  },
-  "email": {
-   "candidate_layout": "follow",
-   "enabled": false,
-   "suffixes": [
-    "qq.com",
-    "163.com",
-    "126.com",
-    "foxmail.com",
-    "sina.com",
-    "sina.cn",
-    "sohu.com",
-    "139.com",
-    "189.cn",
-    "aliyun.com",
-    "yeah.net",
-    "21cn.com",
-    "tom.com",
-    "gmail.com",
-    "outlook.com",
-    "hotmail.com",
-    "yahoo.com",
-    "icloud.com",
-    "live.com",
-    "me.com",
-    "proton.me",
-    "protonmail.com",
-    "aol.com",
-    "gmx.com"
-   ]
-  },
-  "emoji": {
-   "block_auto_commit": false,
-   "categories": false,
-   "enabled": false,
-   "max_hosts": 1,
-   "max_per_word": 3,
-   "min_word_chars": 2,
-   "modules": {
-    "frost_chem": false,
-    "frost_diezi": false,
-    "frost_emoji": true,
-    "frost_greek": false,
-    "frost_keys": false,
-    "frost_misc": false,
-    "frost_month": false,
-    "frost_radicals": false,
-    "frost_sitcom": false
-   },
-   "scope": "exact",
-   "show_as": "after"
   },
   "english_case_cycle_key": "",
   "enter_behavior": "commit",
@@ -178,15 +105,6 @@
    "prefix": "·"
   },
   "space_on_empty_behavior": "commit",
-  "symbol": {
-   "english_chars": ".,?!:;",
-   "english_mode": false,
-   "english_punct_mode": false,
-   "smart_chars": "。，？！：；、～￥·……——",
-   "smart_method": "delete_replace",
-   "smart_mode": false,
-   "smart_timeout_ms": 500
-  },
   "t2s": {
    "enabled": false
   },
@@ -216,27 +134,7 @@
    ]
   },
   "top_commit_learn": true,
-  "top_commit_mode": "direct_commit",
-  "unicode": {
-   "candidate_layout": "follow",
-   "enabled": false,
-   "prefixes": [
-    "u+",
-    "U+"
-   ]
-  },
-  "url": {
-   "candidate_layout": "follow",
-   "enabled": false,
-   "history_enabled": false,
-   "history_max": 200,
-   "prefixes": [
-    "www.",
-    "http",
-    "https",
-    "ftp."
-   ]
-  }
+  "top_commit_mode": "direct_commit"
  },
  "keys": {
   "activate_ime": "ctrl+shift+[",
@@ -281,7 +179,6 @@
   ],
   "toggle_punct": "ctrl+.",
   "toggle_s2t": "ctrl+shift+j",
-  "toggle_t2s": "none",
   "toggle_toolbar": "ctrl+shift+\\"
  },
  "mobile": {
@@ -516,24 +413,12 @@
    "comment_template_vertical": "${code_hint|code_rev|shuangpin}",
    "custom_x": 0,
    "custom_y": 0,
-   "double_click_screenshot": false,
    "fast_first_show_fallback_ms": 25,
    "fast_typing_window_ms": 100,
    "first_show_mode": "fast",
    "first_show_settle_ratio": 0.800000011920929,
    "flip_when_above": false,
    "font_size": 0.0,
-   "grid_categories": [
-    "all",
-    "single",
-    "phrase",
-    "rare"
-   ],
-   "grid_cell_max_chars": 6,
-   "grid_expand": false,
-   "grid_index_fill": "rows",
-   "grid_pageupdown_screen": true,
-   "grid_rows": 5,
    "hide_window": false,
    "index_labels": [],
    "layout": "horizontal",
@@ -559,8 +444,6 @@
   "font": {
    "fallback": [],
    "family": "",
-   "path": "",
-   "render_mode": "directwrite",
    "scripts": {},
    "weight": 0
   },

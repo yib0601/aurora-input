@@ -149,40 +149,6 @@ mod tests {
         assert!(items.is_empty());
     }
 
-    /// ★ 顺序无语义的键：只换顺序不算改动。
-    ///
-    /// 现场：清单调整了标点对的展示顺序，而写回按清单序整表覆盖 ⇒ 老用户配置里的既有
-    /// 顺序与之不符 ⇒ 打开设置页什么都不动就判脏、每次关窗被拦。
-    #[test]
-    fn reordering_an_unordered_list_is_not_a_change() {
-        let base = Config::from_value(json!({
-            "input": { "auto_pair": { "chinese_pairs": ["（）", "【】", "｛｝", "《》"] } }
-        }));
-        let current = Config::from_value(json!({
-            "input": { "auto_pair": { "chinese_pairs": ["（）", "【】", "《》", "｛｝"] } }
-        }));
-        assert!(
-            diff_config(&base, &current, &[]).is_empty(),
-            "同一批标点对换个顺序不该判脏"
-        );
-    }
-
-    /// ★ 但**内容**变了照旧判脏——豁免的只是顺序，不是这个键本身。
-    #[test]
-    fn changing_an_unordered_lists_content_is_still_a_change() {
-        let base = Config::from_value(json!({
-            "input": { "auto_pair": { "chinese_pairs": ["（）", "【】"] } }
-        }));
-        for current in [
-            json!({ "input": { "auto_pair": { "chinese_pairs": ["（）", "「」"] } } }), // 换成员
-            json!({ "input": { "auto_pair": { "chinese_pairs": ["（）"] } } }),         // 少一个
-            json!({ "input": { "auto_pair": { "chinese_pairs": ["（）", "【】", "「」"] } } }), // 多一个
-        ] {
-            let items = diff_config(&base, &Config::from_value(current.clone()), &[]);
-            assert_eq!(items.len(), 1, "内容变了必须判脏：{current}");
-        }
-    }
-
     /// ★★ 不得误伤**有序**的键：顺序即语义的那些，换序就是改动。
     ///
     /// 误判方向不对称——把有序的当成无序，用户调了顺序却不判脏，改动会静默丢失。
@@ -290,59 +256,17 @@ mod tests {
     }
 }
 
-/// 顺序**无语义**的字符串数组键：diff 时按多重集比较，顺序变了不算改动。
+/// 叶子值是否等价。
 ///
-/// ## ★ 默认是「有序」，本表是显式豁免——因为误判方向不对称
+/// 顺序**无语义**的字符串数组键此前在这里有豁免名单；仅有的两个候选（标点配对表）
+/// 随自动配对功能删除后名单为空，机制一并去掉——默认就是「有序」，顺序变了即判脏。
+/// 叶子值是否等价：逐值严格比较。
 ///
-/// | 误判 | 后果 |
-/// | --- | --- |
-/// | 有序的当成无序 | 用户调了顺序却不判脏 ⇒ **改动静默丢失** |
-/// | 无序的当成有序 | 保留一次假脏 ⇒ 只是烦 |
-///
-/// 所以只列确有把握的，宁可漏也不可多。`keys.select_key_groups`、
-/// `ui.candidate.index_labels`、`ui.font.fallback`、`ui.toolbar.items`、`schema.available`
-/// 这些的顺序都是有语义的（选词位次 / 回退次序 / 渲染序 / 切换循环序），**不得**加进来。
-/// core 的 `config_schema.rs` 里已有同款区分的先例（`ui.toolbar.items` 的顺序即渲染顺序，
-/// 与 `ui.status.items` 相对）。
-///
-/// ## 为什么需要它
-///
-/// 这两个键的控件是「勾一批中文/英文标点对」，写回走 `collect_checked` 的**整表覆盖**，
-/// 输出顺序 = 清单选项序。清单里调整过展示顺序之后，它与用户配置里的既有顺序不再一致
-/// ⇒ 打开设置页什么都不动就判脏 ⇒ 每次关窗都被拦一次。集合本身没变，顺序对这两个键
-/// 也没有任何语义。
-const ORDER_INSENSITIVE_LISTS: &[&str] = &[
-    "input.auto_pair.chinese_pairs",
-    "input.auto_pair.english_pairs",
-];
-
-/// 叶子值是否等价（顺序无语义的数组按多重集比）。
-///
-/// 用**排序后逐项比**而不是 HashSet：重复项的增减也是真实改动，集合比会漏掉。
-fn leaf_equivalent(key: &str, base: &Value, current: &Value) -> bool {
-    if base == current {
-        return true;
-    }
-    if !ORDER_INSENSITIVE_LISTS.contains(&key) {
-        return false;
-    }
-    match (base.as_array(), current.as_array()) {
-        (Some(b), Some(c)) if b.len() == c.len() => {
-            let key_of = |v: &Value| v.as_str().map(str::to_string);
-            let (mut bs, mut cs): (Vec<_>, Vec<_>) = (
-                b.iter().map(key_of).collect(),
-                c.iter().map(key_of).collect(),
-            );
-            // 含非字符串元素时不做等价判定，退回严格比较（None 参与排序但下面会不等）。
-            if bs.iter().any(Option::is_none) || cs.iter().any(Option::is_none) {
-                return false;
-            }
-            bs.sort();
-            cs.sort();
-            bs == cs
-        }
-        _ => false,
-    }
+/// 历史上这里对两张标点配对表做过「排序后比」的顺序豁免（`ORDER_INSENSITIVE_LISTS`），
+/// 那两张表随自动配对功能删除后名单为空，多的那层分支一并去掉——顺序即语义，
+/// 「有序的当成无序」会把用户的调序静默丢掉，方向不可接受。
+fn leaf_equivalent(_key: &str, base: &Value, current: &Value) -> bool {
+    base == current
 }
 
 fn diff_value(

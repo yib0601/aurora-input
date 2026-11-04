@@ -135,7 +135,7 @@ impl HideRule {
                 section: s,
             } => match g.as_deref() {
                 None => s == section,
-                // 分区名本身带斜杠（如 `Emoji/OpenCC`）时，不带分组的写法会被拆成
+                // 分区名本身带斜杠（如用户自建的 `我的/分区`）时，不带分组的写法会被拆成
                 // 「分组/分区」；这里把拆开的两半拼回去再比一次。
                 Some(g) => (s == section && g == group) || format!("{g}/{s}") == section,
             },
@@ -730,9 +730,9 @@ mod tests {
     /// 分区名自带斜杠时，不带分组的写法会被拆开；匹配要能拼回去。
     #[test]
     fn section_name_containing_slash_still_matches() {
-        let r = HideRule::parse("section:Emoji/OpenCC").unwrap();
-        assert!(r.matches_section("input", "Emoji/OpenCC"));
-        assert!(!r.matches_section("input", "Emoji"));
+        let r = HideRule::parse("section:我的/分区").unwrap();
+        assert!(r.matches_section("input", "我的/分区"));
+        assert!(!r.matches_section("input", "我的"));
         let r = HideRule::parse("section:input/字符与标点").unwrap();
         assert!(r.matches_section("input", "字符与标点"));
         assert!(!r.matches_section("ui", "字符与标点"));

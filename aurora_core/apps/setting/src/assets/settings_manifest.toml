@@ -1583,9 +1583,9 @@ label = "Tab"
 # ═══════════════════════════ 输入 ═══════════════════════════
 # ── 字符与标点 ──
 # 输入页的分节顺序（＝导航顺序）分三段，越靠前越"每天都在起作用"：
-#   ① 字符形态：字符与标点 / 智能符号 / 标点配对 —— 打出来长什么样；
+#   ① 字符形态：字符与标点 —— 打出来长什么样；
 #   ② 临时模式：快捷输入 / 生僻字 —— 临时换一种打法；
-#   ③ 特殊：简繁转换 / Emoji / 网址输入 / Unicode 输入 —— 候选或上屏结果另有来路；
+#   ③ 特殊：简繁转换 —— 上屏结果另有来路；
 #   末尾 联想 / 词频 是候选的后处理与统计口径，两块都不常改。
 # 按键行为、候选无效按键在「按键」页（键按下去做什么集中在一页）；临时拼音、临时英文在
 # 「方案」页（临时换一套方案打字，触发键、候选形态都是方案级的概念）。
@@ -1683,184 +1683,6 @@ type = "toggle_slash_dun"
 label = "/ 键输出顿号"
 hint = "中文标点状态下按 / 输出「、」；英文标点状态不变，仍是 /。开启会一并启用上面的自定义标点映射"
 
-# ── 智能符号 ──
-# 三个开关各管一种场景、互相独立，都默认关。上屏方案与时限**不挂 enabled_when**：
-# 它们是三个开关共用的公共参数，挂在任何单个开关上都会造成「另外两个开着却调不了」。
-[[items]]
-key = "input.symbol.smart_mode"
-group = "input"
-section = "智能符号"
-type = "toggle"
-label = "中文标点智能符号"
-hint = "连按两次同一中文标点转英文；数字后的标点方向相反（先出英文，再按转中文）"
-
-# gate_soft：按钮不随「启用」置灰——对话框里还寄居着「英文标点智能符号」开关，
-# 置灰会让只想用那一项的用户彻底够不着它。
-[[items]]
-key = "input.symbol.smart_chars"
-group = "input"
-section = "智能符号"
-type = "dialog_button"
-label = "中文符号字符集"
-hint = "参与转换的中文标点集合"
-gate_key = "input.symbol.smart_mode"
-gate_soft = true
-
-# 寄居在上面那个对话框里（不独立成行）：它与中文智能符号同属「中文输入模式下」的标点行为，
-# 单开一行会让卡片又多一个顶层开关。
-[[items]]
-key = "input.symbol.english_punct_mode"
-group = "input"
-section = "智能符号"
-type = "toggle"
-label = "英文标点智能符号"
-hint = "标点切到英文时，连按两次同一英文标点转中文。符号列表使用下方的「英文符号字符集」，不是本对话框的中文集合"
-dialog_extra_for = "input.symbol.smart_chars"
-
-[[items]]
-key = "input.symbol.english_mode"
-group = "input"
-section = "智能符号"
-type = "toggle"
-label = "英文模式智能符号"
-hint = "英文输入模式下，连按两次同一英文标点转中文。开启后输入法会接管这些标点键（原本直接交给应用），故默认关闭"
-
-# gate_soft：字符集同时服务于「英文标点智能符号」（在上面的对话框里），
-# 跟着 english_mode 置灰会让只开那一项的用户改不了集合。
-[[items]]
-key = "input.symbol.english_chars"
-group = "input"
-section = "智能符号"
-type = "dialog_button"
-label = "英文符号字符集"
-hint = "两个英文场景共用的标点集合，填按键本身的英文标点（如 . 而非 。）。不建议放括号引号：英文模式下这些键被接管后，Tab 跳出配对会失效"
-gate_key = "input.symbol.english_mode"
-gate_soft = true
-
-[[items]]
-key = "input.symbol.smart_method"
-group = "input"
-section = "智能符号"
-type = "select"
-label = "智能符号上屏方案"
-hint = "直接替换：第一次按键直接上屏符号，再次按键删改为另一形态，所见即所得、没有中间预览态，实际体感更好（推荐）；组合态预览：第一次按键先以预览态显示，超时或再次按键才真正定型，全程不做删改，兼容性更好，适合在直接替换下表现异常的应用。三种场景共用"
-options = [
-  { value = "delete_replace", label = "直接替换（推荐）" },
-  { value = "hold_composition", label = "组合态预览（兼容性好）" },
-]
-
-[[items]]
-key = "input.symbol.smart_timeout_ms"
-group = "input"
-section = "智能符号"
-type = "slider"
-label = "智能符号时限"
-hint = "两次按键的最大间隔（毫秒）；三种场景共用"
-min = 100
-max = 2000
-step = 50
-unit = "ms"
-
-# ── 标点配对 ──
-[[items]]
-key = "input.auto_pair.chinese"
-group = "input"
-section = "标点配对"
-type = "toggle"
-label = "中文标点自动配对"
-hint = "输入左括号类标点时自动补全右标点"
-
-[[items]]
-key = "input.auto_pair.chinese_pairs"
-group = "input"
-section = "标点配对"
-type = "dialog_button"
-label = "中文配对字符"
-hint = "勾选参与自动配对的中文标点对"
-gate_key = "input.auto_pair.chinese"
-[[items.options]]
-value = "（）"
-label = "（ ）圆括号"
-[[items.options]]
-value = "【】"
-label = "【 】方括号"
-[[items.options]]
-value = "《》"
-label = "《 》书名号"
-[[items.options]]
-value = "〈〉"
-label = "〈 〉单书名号"
-[[items.options]]
-value = "｛｝"
-label = "｛ ｝花括号"
-[[items.options]]
-value = "〔〕"
-label = "〔 〕六角符号"
-[[items.options]]
-value = "「」"
-label = "「 」单角引号"
-[[items.options]]
-value = "『』"
-label = "『 』双角引号"
-[[items.options]]
-value = "“”"
-label = "“ ” 双引号"
-[[items.options]]
-value = "‘’"
-label = "‘ ’ 单引号"
-
-[[items]]
-key = "input.auto_pair.english"
-group = "input"
-section = "标点配对"
-type = "toggle"
-label = "英文标点自动配对"
-hint = "英文模式或英文标点下自动配对括号"
-
-[[items]]
-key = "input.auto_pair.english_pairs"
-group = "input"
-section = "标点配对"
-type = "dialog_button"
-label = "英文配对字符"
-hint = "勾选参与自动配对的英文括号对"
-gate_key = "input.auto_pair.english"
-[[items.options]]
-value = "()"
-label = "( ) 圆括号"
-[[items.options]]
-value = "[]"
-label = "[ ] 方括号"
-[[items.options]]
-value = "{}"
-label = "{ } 花括号"
-[[items.options]]
-value = "<>"
-label = "< > 尖括号"
-[[items.options]]
-value = '""'
-label = '" " 双引号'
-[[items.options]]
-value = "''"
-label = "' ' 单引号"
-
-[[items]]
-key = "input.auto_pair.jump_out_keys"
-group = "input"
-section = "标点配对"
-type = "dialog_button"
-label = "配对跳出键"
-hint = "配对状态下按这些键跳到右符号之后；可多选，留空则不启用。引号等左右同形的配对不支持「右符号本身」跳出（无法区分是要跳出还是要嵌套新的一对），只能用 Tab/Enter"
-[[items.options]]
-value = "right_symbol"
-label = "右符号本身"
-[[items.options]]
-value = "tab"
-label = "Tab 制表键"
-[[items.options]]
-value = "enter"
-label = "Enter 回车键"
-
 # ── 快捷输入 ──
 [[items]]
 key = "schema.mix_modes"
@@ -1909,7 +1731,7 @@ options = [
 # 候选布局：与触发键、候选来源读写同一个 core 键（schema.mix_modes 里 quick_mix 的
 # candidate_layout），故用视图 key `#candidate_layout` 另立一项。
 # 取代旧的 schema.quick_input.force_vertical——那个布尔挂在与实例无关的全局段，
-# 且表达不了「全局竖排但本模式横排」。三个模式的选项须一致（见下方临拼/临英/网址）。
+# 且表达不了「全局竖排但本模式横排」。各模式的选项须一致（见方案页的临拼/临英）。
 [[items]]
 key = "schema.mix_modes#candidate_layout"
 group = "input"
@@ -1972,7 +1794,7 @@ hint = "计算结果最多保留的小数位数（0 表示取整）"
 min = 0
 max = 6
 
-# 候选来源「快捷输入历史」的条数上限，与网址历史 input.url.history_max 同一套裁剪。
+# 候选来源「快捷输入历史」的条数上限，与 core 的补全表裁剪（prune_completions）同一套。
 [[items]]
 key = "schema.quick_input.history_max"
 group = "input"
@@ -2085,253 +1907,6 @@ type = "toggle"
 label = "启用繁入简出"
 hint = "词库和候选是繁体时，上屏转成简体。开启会自动关闭「简入繁出」"
 exclusive_with = "input.s2t.enabled"
-
-# ── Emoji/OpenCC ──
-# 按候选文字查表，与编码无关，所有方案通用。词表随程序附带（data/emoji/），首次开启时
-# 在本机建立索引缓存。
-[[items]]
-key = "input.emoji.enabled"
-group = "input"
-section = "Emoji/OpenCC"
-opens_dialog = "emoji"
-type = "toggle"
-label = "启用 Emoji/OpenCC 候选"
-hint = "打出词语后，在候选中追加对应的 emoji（如「开心」→ 😄）。首次开启时建立索引，稍候片刻"
-
-# 不列 comment（只在注释区显示）：注释区目前没有上屏入口，选了等于什么都看不到。
-# core 侧保留该取值，待注释上屏功能落地后加回选项即可（见 capabilities.rs 的
-# NARROWED_ON_PURPOSE）。
-[[items]]
-key = "input.emoji.show_as"
-group = "input"
-section = "Emoji/OpenCC"
-dialog_group = "emoji"
-type = "select"
-label = "显示位置"
-hint = "紧随词后：插在对应词之后，其后候选的序号顺延；列表末尾：追加在常用候选之后，原有序号不变"
-enabled_when = "input.emoji.enabled == true"
-options = [
-  { value = "after", label = "紧随词后" },
-  { value = "tail", label = "列表末尾" },
-]
-
-[[items]]
-key = "input.emoji.scope"
-group = "input"
-section = "Emoji/OpenCC"
-dialog_group = "emoji"
-type = "select"
-label = "适用范围"
-hint = "仅完整词：只为完整匹配的词追加；全部候选：补全与部分匹配的候选也追加"
-enabled_when = "input.emoji.enabled == true"
-options = [
-  { value = "exact", label = "仅完整词" },
-  { value = "all", label = "全部候选" },
-  { value = "off", label = "不追加" },
-]
-
-[[items]]
-key = "input.emoji.max_hosts"
-group = "input"
-section = "Emoji/OpenCC"
-dialog_group = "emoji"
-type = "number"
-label = "追加范围"
-hint = "只为列表前 N 个候选追加 emoji。1 = 仅首选"
-min = 0
-max = 20
-enabled_when = "input.emoji.enabled == true"
-
-[[items]]
-key = "input.emoji.max_per_word"
-group = "input"
-section = "Emoji/OpenCC"
-dialog_group = "emoji"
-type = "number"
-label = "每词上限"
-hint = "一个词最多追加的 emoji 个数"
-min = 1
-max = 10
-enabled_when = "input.emoji.enabled == true"
-
-[[items]]
-key = "input.emoji.min_word_chars"
-group = "input"
-section = "Emoji/OpenCC"
-dialog_group = "emoji"
-type = "number"
-label = "最少字数"
-hint = "候选少于此字数时不追加。默认 2，即不为单字追加"
-min = 1
-max = 8
-enabled_when = "input.emoji.enabled == true"
-
-[[items]]
-key = "input.emoji.categories"
-group = "input"
-section = "Emoji/OpenCC"
-dialog_group = "emoji"
-type = "toggle"
-label = "启用分类词"
-hint = "「动物」「水果」等分类词会带出整组 emoji，数量受每词上限约束"
-enabled_when = "input.emoji.enabled == true"
-
-[[items]]
-key = "input.emoji.block_auto_commit"
-group = "input"
-section = "Emoji/OpenCC"
-dialog_group = "emoji"
-type = "toggle"
-label = "有追加时不自动上屏"
-hint = "全码唯一自动上屏时，若候选追加了 emoji 或附加模块的符号（如「提手旁」→ 扌），不自动上屏，留出选择的机会"
-enabled_when = "input.emoji.enabled == true"
-
-# 附加模块（core 的 EMOJI_MODULES + 用户放进用户目录 emoji\ 的 OpenCC 表）：条数不定，走对话框，
-# 整张 input.emoji.modules 表读写。
-[[items]]
-key = "input.emoji.modules"
-group = "input"
-section = "Emoji/OpenCC"
-type = "dialog_button_emoji_modules"
-indent = false
-label = "附加模块"
-hint = "按模块加挂 emoji 与符号表（偏旁、希腊字母、单位等）；同样只为前 N 个候选追加，见「追加范围」。也可在用户目录 emoji\\ 下放 OpenCC 格式的 .txt 自行扩充"
-enabled_when = "input.emoji.enabled == true"
-
-# ── 网址/邮箱输入 ──
-# 两个模式合成一个分区：它们共用同一个补全候选源（core 的 mode_completion.rs），
-# 开关、触发条件、候选行为逐条对位，用户学一次即可。历史与后缀的「查看/清空」入口
-# 都在词库页（那里有现成的列表 + 逐条删 + 清空确认），本分区的 hint 里指路过去。
-[[items]]
-key = "input.url.enabled"
-group = "input"
-section = "网址/邮箱输入"
-opens_dialog = "url"
-type = "toggle"
-label = "网址输入模式"
-hint = "打出完整前缀（如 http、www.）即进入网址输入模式，可自由输入网址，空格或回车上屏"
-
-[[items]]
-key = "input.url.prefixes"
-group = "input"
-section = "网址/邮箱输入"
-dialog_group = "url"
-type = "strlist_text"
-label = "触发前缀"
-hint = "识别为网址的前缀（如 www. http https ftp.），按空格分隔"
-
-[[items]]
-key = "input.url.history_enabled"
-group = "input"
-section = "网址/邮箱输入"
-dialog_group = "url"
-type = "toggle"
-label = "记住输入过的网址"
-hint = "把上屏过的网址记下来，下次打前几个字符即可补全。记录可在「词库 → 网址历史」查看和清空"
-enabled_when = "input.url.enabled == true"
-
-[[items]]
-key = "input.url.history_max"
-group = "input"
-section = "网址/邮箱输入"
-dialog_group = "url"
-type = "number"
-label = "历史条数上限"
-hint = "超出后按「用得少、用得旧」自动清理。0 = 不限"
-min = 0
-max = 10000
-step = 50
-unit = "条"
-enabled_when = "input.url.enabled == true && input.url.history_enabled == true"
-
-# 网址模式开始产出候选（历史补全）后，这一项才有可观察的效果，故此前的 hidden 已删。
-[[items]]
-key = "input.url.candidate_layout"
-group = "input"
-section = "网址/邮箱输入"
-dialog_group = "url"
-type = "select"
-label = "网址候选窗布局"
-hint = "网址输入期间候选窗的排列方向；退出后自动恢复。跟随全局 = 用外观页的候选布局设置"
-width = 210
-enabled_when = "input.url.enabled == true"
-options = [
-  { value = "follow", label = "跟随全局" },
-  { value = "vertical", label = "强制竖排" },
-  { value = "horizontal", label = "强制横排" },
-]
-
-[[items]]
-key = "input.email.enabled"
-group = "input"
-section = "网址/邮箱输入"
-opens_dialog = "email"
-type = "toggle"
-label = "邮箱输入模式"
-hint = "打了字之后按 @ 即进入，候选给出常用后缀拼成的完整邮箱。空缓冲按 @ 不触发，照常出标点"
-
-[[items]]
-key = "input.email.suffixes"
-group = "input"
-section = "网址/邮箱输入"
-dialog_group = "email"
-type = "strlist_text"
-label = "邮箱后缀"
-hint = "预置的后缀列表（写 @ 之后的部分，如 qq.com gmail.com），按空格分隔。表外的后缀也能直接打，用过一次就会被记住并排到前面"
-
-[[items]]
-key = "input.email.candidate_layout"
-group = "input"
-section = "网址/邮箱输入"
-dialog_group = "email"
-type = "select"
-label = "邮箱候选窗布局"
-hint = "邮箱输入期间候选窗的排列方向；退出后自动恢复。跟随全局 = 用外观页的候选布局设置"
-width = 210
-enabled_when = "input.email.enabled == true"
-options = [
-  { value = "follow", label = "跟随全局" },
-  { value = "vertical", label = "强制竖排" },
-  { value = "horizontal", label = "强制横排" },
-]
-
-# ── Unicode 输入 ──
-# 与网址输入同属「前缀夺取式」模式（core 侧 docs/design/prefix-hijack-modes.md），
-# 故三项的形态与上面那组刻意一致——同类东西在设置页里长得一样，用户少学一次。
-[[items]]
-key = "input.unicode.enabled"
-group = "input"
-section = "Unicode 输入"
-opens_dialog = "unicode"
-type = "toggle"
-label = "Unicode 输入模式"
-hint = "打出 u+ 再接十六进制码点即可出该字符（u+4e00 → 一），空格或回车上屏"
-
-[[items]]
-key = "input.unicode.prefixes"
-group = "input"
-section = "Unicode 输入"
-dialog_group = "unicode"
-type = "strlist_text"
-label = "触发前缀"
-hint = "识别为码点输入的前缀（如 u+ U+），按空格分隔。区分大小写；不要填单个字母，那会占掉该字母开头的所有编码"
-
-# 与网址那项不同，**这一项不隐藏**：码点输入会实实在在出一条候选，布局设置有可观察的效果。
-[[items]]
-key = "input.unicode.candidate_layout"
-group = "input"
-section = "Unicode 输入"
-dialog_group = "unicode"
-type = "select"
-label = "候选窗布局"
-hint = "Unicode 输入期间候选窗的排列方向；退出后自动恢复。跟随全局 = 用外观页的候选布局设置"
-width = 210
-enabled_when = "input.unicode.enabled == true"
-options = [
-  { value = "follow", label = "跟随全局" },
-  { value = "vertical", label = "强制竖排" },
-  { value = "horizontal", label = "强制横排" },
-]
 
 # ── 联想 ──
 # 上屏之后按刚上屏的内容再给一批候选。core 侧设计见 WindInput/docs/design/association.md。
@@ -3046,14 +2621,6 @@ label = "切换简入繁出"
 hint = "开关简体输入→繁体输出（变体在「输入 → 简入繁出」中选择）"
 
 [[items]]
-key = "keys.toggle_t2s"
-group = "keys"
-section = "功能快捷键"
-type = "hotkey"
-label = "切换繁入简出"
-hint = "开关繁体输入→简体输出。出厂不绑，点开设置一个组合键即可用"
-
-[[items]]
 key = "keys.toggle_toolbar"
 group = "keys"
 section = "功能快捷键"
@@ -3227,8 +2794,8 @@ type = "dialog_button"
 label = "按文字类别指定字体"
 hint = "主字体不含某类文字、或那类字形不理想时，给它单独指定字体"
 
-# 注：ui.font.path（自定义字体文件）当前平台不支持，已隐藏（由 core 维持默认）。
-# 注：ui.font.render_mode（字体渲染方式）当前不支持，已移除（由 core 维持默认）。
+# 注：ui.font.path / ui.font.render_mode 已从配置体系**删除**（2026-11）：两者零读者，
+# 字体后端由编译期后端（DirectWrite / CoreText / Linux 后端）决定，不再有运行期开关。
 
 # ── 候选窗口（数量/显隐/位置/尺寸下限）──
 [[items]]
@@ -3422,19 +2989,6 @@ min = 0
 max = 9
 dialog_extra_for = "ui.candidate.first_show_mode"
 
-# 只认空白处（编码栏 / 内边距）：候选项按下即选词上屏、候选窗随之消失，落不到第二下。
-# macOS 候选窗由 .app 自绘，没有接这条鼠标交互，故限 Windows。
-[[items]]
-key = "ui.candidate.double_click_screenshot"
-group = "ui"
-section = "候选窗口"
-subsection = "其它"
-dialog_extra_for = "ui.candidate.first_show_mode"
-type = "toggle"
-label = "双击候选窗截图"
-hint = "双击候选窗的编码栏或空白处，把候选窗当前画面复制到剪贴板；点候选词仍是选词"
-platform = "windows"
-
 # ── 候选排版（编码栏位置、横竖排、上方时的顺序）──
 [[items]]
 key = "ui.candidate.preedit_display"
@@ -3472,91 +3026,6 @@ label = "候选文本最大字数"
 hint = "候选文本超过此字数时截断并追加省略号；0 = 不限。只管候选词本身，注释的字数上限在下方「候选注释」的设置里"
 min = 0
 max = 64
-
-# 展开候选（卷轴）：开关排在「候选排版」高级设置之上，细节进它自己的对话框并随它置灰。
-# 核心设计见 core 仓 docs/design/candidate-grid-expand.md。
-[[items]]
-key = "ui.candidate.grid_expand"
-group = "ui"
-section = "候选排版"
-opens_dialog = "grid"
-type = "toggle"
-label = "翻页时展开候选"
-hint = "候选多于一页时，按翻页键把候选窗原地展开成多行，一行就是一页；方向键在各行间移动，数字键选高亮行，Esc 先收起。仅横排生效"
-
-[[items]]
-key = "ui.candidate.grid_rows"
-group = "ui"
-section = "候选排版"
-dialog_group = "grid"
-type = "number"
-label = "可见行数"
-hint = "展开后一屏显示几行，PageUp/PageDown 翻整屏时一次滚动这么多行"
-enabled_when = "ui.candidate.grid_expand == true"
-min = 2
-max = 10
-
-[[items]]
-key = "ui.candidate.grid_cell_max_chars"
-group = "ui"
-section = "候选排版"
-dialog_group = "grid"
-type = "number"
-label = "每格最多字数"
-hint = "展开后各列对齐，长词会撑宽整列，超出部分以省略号截断，悬停提示里可看全文；0 = 只受「候选文本最大字数」约束"
-enabled_when = "ui.candidate.grid_expand == true"
-min = 0
-max = 64
-
-[[items]]
-key = "ui.candidate.grid_index_fill"
-group = "ui"
-section = "候选排版"
-dialog_group = "grid"
-type = "select"
-label = "序号顺延"
-hint = "一行用不完 1~0 十个数字键时，序号怎么往下一行顺延；数字键跟着序号选"
-enabled_when = "ui.candidate.grid_expand == true"
-options = [
-  { value = "rows", label = "只补整行" },
-  { value = "cells", label = "逐格编满十个" },
-  { value = "off", label = "只编高亮行" },
-]
-
-[[items]]
-key = "ui.candidate.grid_pageupdown_screen"
-group = "ui"
-section = "候选排版"
-dialog_group = "grid"
-type = "toggle"
-label = "PageUp/PageDown 翻整屏"
-hint = "其余翻页键（如 -=）逐行移动"
-enabled_when = "ui.candidate.grid_expand == true"
-
-[[items]]
-key = "ui.candidate.grid_categories"
-group = "ui"
-section = "候选排版"
-dialog_group = "grid"
-type = "checkbox_group"
-label = "分类标签"
-hint = "展开后在候选下方（与翻页箭头同一行）显示的分类，按 Tab / Shift+Tab 或点击切换；只有当前候选里有这一类时才出现，「生僻」按常用字表划分；勾选不足两个时不显示标签栏"
-enabled_when = "ui.candidate.grid_expand == true"
-[[items.options]]
-value = "all"
-label = "全部"
-[[items.options]]
-value = "single"
-label = "单字"
-[[items.options]]
-value = "phrase"
-label = "词组"
-[[items.options]]
-value = "rare"
-label = "生僻"
-[[items.options]]
-value = "symbol"
-label = "符号"
 
 [[items]]
 key = "ui.candidate.flip_when_above"
@@ -3724,8 +3193,9 @@ hint = "为序号 1-10 自定义标签（每框一个完整标签，可多字符
 # 主流输入法（搜狗、Google 拼音）同样只提供「是否跟随光标」开关，不提供坐标输入。
 # 尚未拖动过时（坐标为 0,0）候选窗落在屏幕下方居中的默认锚点。配置键仍在 config.toml 中保留。
 
-# 注：input.cmdbar.enabled（命令栏开关）不在设置端暴露——命令栏始终开启（core 默认 true），
-# 不提供关闭入口；故仅保留前缀配置。
+# 注：命令直通车（cmdbar）的 `input.cmdbar.enabled` 已从配置体系**删除**（2026-11）：它零读者，
+# 且原注释「core 默认 true」与实现（默认 false）相反。直通车的表达式求值器仍在（短语、工具栏
+# 按钮、key_actions 的 command: 三处都用它），这里只保留候选前缀配置。
 [[items]]
 key = "input.cmdbar.candidate_prefix"
 group = "ui"

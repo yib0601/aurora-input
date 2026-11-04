@@ -172,7 +172,6 @@ pub struct Draft {
     pub clear_on_empty_max: bool,
     pub code_hint: bool,
     // 第 2 步：拼音
-    pub emoji: bool,
     pub fuzzy: bool,
     pub fuzzy_pairs: [bool; FUZZY_N],
     pub allow_full_pinyin: bool,
@@ -272,7 +271,6 @@ impl Draft {
                 .get_str("schema.pinyin.code_hint_source")
                 .unwrap_or("off")
                 != "off",
-            emoji: b("input.emoji.enabled"),
             fuzzy: b("schema.pinyin.fuzzy.enabled"),
             fuzzy_pairs: FUZZY_PAIRS.map(|(k, _)| b(&format!("schema.pinyin.fuzzy.{k}"))),
             allow_full_pinyin: b("schema.pinyin.shuangpin.allow_full_pinyin"),
@@ -315,7 +313,6 @@ impl Draft {
                 }
             }
             Kind::Pinyin => {
-                d.emoji = true;
                 // 分项不重置：总开关关着时它们隐藏，清掉就是悄悄抹掉用户的分项偏好。
                 d.fuzzy = false;
                 d.allow_full_pinyin = false;
@@ -392,9 +389,6 @@ impl Draft {
                 }
             }
             Kind::Pinyin => {
-                if self.emoji != cur.emoji {
-                    set("input.emoji.enabled", self.emoji.into());
-                }
                 if self.fuzzy != cur.fuzzy {
                     set("schema.pinyin.fuzzy.enabled", self.fuzzy.into());
                 }
@@ -549,12 +543,6 @@ pub fn summary(
             );
         }
         Kind::Pinyin => {
-            push(
-                "输入习惯",
-                "Emoji 候选",
-                on_off(cur.emoji),
-                on_off(new.emoji),
-            );
             push("输入习惯", "模糊音", on_off(cur.fuzzy), on_off(new.fuzzy));
             // 与 to_target 同：分项只在模糊音开着时算
             if new.fuzzy {
@@ -1170,7 +1158,7 @@ mod tests {
             "schema": {"active": "wubi86", "available": ["wubi86", "wubi86_pinyin", "my_table"],
                        "codetable": {"auto_commit_at_full": false, "clear_on_empty_max": false},
                        "pinyin": {"code_hint_source": "auto", "fuzzy": {"enabled": false}}},
-            "input": {"emoji": {"enabled": false}, "temp_pinyin": {"enabled": true},
+            "input": {"temp_pinyin": {"enabled": true},
                       "punct": {"custom_enabled": false, "custom_mappings": {}}},
             "keys": {"key_actions": {"semicolon": "mix:quick_mix", "backtick": "temp_pinyin",
                                      "backslash": "special:kf"}}
@@ -1235,7 +1223,7 @@ mod tests {
         assert_eq!(d.enabled.first().map(String::as_str), Some("pinyin"));
         assert!(d.enabled.contains(&"my_table".to_string()));
         assert!(!d.enabled.contains(&"wubi86".to_string()));
-        assert!(d.emoji && !d.fuzzy);
+        assert!(!d.fuzzy);
     }
 
     #[test]
@@ -1491,7 +1479,6 @@ mod tests {
                     d.enabled.retain(|x| x != "my_table")
                 }),
                 ("码表下改拼音项（隐藏）", |d| {
-                    d.emoji = true;
                     d.fuzzy = true;
                 }),
                 ("切拼音", |d| *d = d.with_preset(Kind::Pinyin)),
@@ -1506,7 +1493,7 @@ mod tests {
             ),
             &[
                 ("未动", |_| {}),
-                ("emoji", |d| d.emoji = true),
+                ("允许全拼", |d| d.allow_full_pinyin = true),
                 ("模糊音开", |d| d.fuzzy = true),
                 ("模糊音开并改分项", |d| {
                     d.fuzzy = true;

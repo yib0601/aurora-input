@@ -763,7 +763,7 @@ mod tests {
             key: key.into(),
             message: "m".into(),
         };
-        assert!(p("auto_pair").is_about(&r));
+        assert!(p("password_force_english").is_about(&r));
         assert!(!p("process").is_about(&r));
     }
 }

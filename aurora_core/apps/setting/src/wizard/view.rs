@@ -81,7 +81,6 @@ struct Controls {
     auto_commit: Signal<bool>,
     clear_empty: Signal<bool>,
     code_hint: Signal<bool>,
-    emoji: Signal<bool>,
     fuzzy: Signal<bool>,
     pairs: [Signal<bool>; FUZZY_N],
     allow_full: Signal<bool>,
@@ -116,7 +115,6 @@ impl Controls {
             auto_commit: signal(false),
             clear_empty: signal(false),
             code_hint: signal(false),
-            emoji: signal(false),
             fuzzy: signal(false),
             pairs: std::array::from_fn(|_| signal(false)),
             allow_full: signal(false),
@@ -144,7 +142,6 @@ impl Controls {
             self.auto_commit.version(),
             self.clear_empty.version(),
             self.code_hint.version(),
-            self.emoji.version(),
             self.fuzzy.version(),
             self.allow_full.version(),
             self.quick_idx.version(),
@@ -317,7 +314,6 @@ fn sync(app: &Rc<RefCell<AppState>>, c: &Controls) {
     set_if(c.auto_commit, d.auto_commit_at_full);
     set_if(c.clear_empty, d.clear_on_empty_max);
     set_if(c.code_hint, d.code_hint);
-    set_if(c.emoji, d.emoji);
     set_if(c.fuzzy, d.fuzzy);
     for (i, p) in c.pairs.iter().enumerate() {
         set_if(*p, d.fuzzy_pairs[i]);
@@ -432,7 +428,6 @@ fn write_back(app: &Rc<RefCell<AppState>>, c: &Controls) {
             d.auto_commit_at_full = c.auto_commit.get();
             d.clear_on_empty_max = c.clear_empty.get();
             d.code_hint = c.code_hint.get();
-            d.emoji = c.emoji.get();
             d.fuzzy = c.fuzzy.get();
             for (i, p) in c.pairs.iter().enumerate() {
                 d.fuzzy_pairs[i] = p.get();
@@ -951,15 +946,11 @@ fn step2_body(c: Controls) -> Element {
         vec![
             with_cond(
                 CardItem::Row(switch_row(
-                    "Emoji 候选",
-                    "打出词语后附带对应的 emoji，如「开心」→ 😄",
-                    c.emoji,
-                )),
-                vec![CardItem::Row(switch_row(
                     "允许按全拼输入",
                     "双拼方案下也能直接打全拼，如 zaijian → 再见",
                     c.allow_full,
-                ))],
+                )),
+                Vec::new(),
                 move || is_sp.get(),
             ),
             // 模糊音放最后：分项网格在它下面展开，不把其它行顶下去。
@@ -1272,7 +1263,6 @@ mod tests {
             assert_eq!(d.active, "pinyin_simp");
             assert!(app.borrow().wizard_rev.get() != rev0, "草稿变了要推 rev");
             sync(&app, &c);
-            assert!(c.emoji.get(), "拼音预设 emoji 开");
             assert!(!c.fuzzy.get());
             // 控件与草稿一致后再回写一次，草稿不变。
             write_back(&app, &c);
@@ -1372,7 +1362,7 @@ mod tests {
                 Ok(match m {
                     "config.setItems" => serde_json::json!({
                         "applied": 2,
-                        "skipped": [{"key": "input.emoji.enabled", "reason": "x"}]
+                        "skipped": [{"key": "input.association.kind", "reason": "x"}]
                     }),
                     _ => serde_json::json!({}),
                 })
@@ -1392,7 +1382,7 @@ mod tests {
             assert_eq!(st.wizard_phase.get(), WizardPhase::Result);
             let s = st.wizard.borrow();
             let text = result_text(s.as_ref().unwrap());
-            assert!(text.contains("input.emoji.enabled"), "{text}");
+            assert!(text.contains("input.association.kind"), "{text}");
             assert!(!text.contains("没有改动任何配置"), "{text}");
             assert!(text.contains("其余 2 项已写入"), "{text}");
         });

@@ -280,7 +280,6 @@ pub const HOTKEY_FIELDS: &[(&str, &str)] = &[
     ("keys.toggle_full_width", "切换全角/半角"),
     ("keys.toggle_punct", "切换中/英文标点"),
     ("keys.toggle_s2t", "切换简入繁出"),
-    ("keys.toggle_t2s", "切换繁入简出"),
     ("keys.toggle_toolbar", "显示/隐藏工具栏"),
     ("keys.softkeyboard", "显示/隐藏软键盘"),
     ("keys.open_settings", "打开设置"),

@@ -312,7 +312,7 @@ unset = ["stale_probe_guard"]
 
 [[apps]]
 process = "EXCEL.EXE"
-auto_pair = false
+caret_use_top = false
 
 [[apps]]
 process = "Dota2.exe"
@@ -320,7 +320,6 @@ disabled = true
 
 [[apps]]
 process = "Tabby.exe"
-smart_method = "hold_composition"
 first_show_mode = "fast"
 initial_mode = "english"
 initial_punct = "englsh"
@@ -330,7 +329,7 @@ future_key = 3
 [[apps]]
 process = "Tabby.exe"
 title = "SSH*"
-auto_pair = true
+caret_use_top = true
 
 [[apps]]
 process = "*"
@@ -350,7 +349,7 @@ style = "keep"
     pub const IMPORT: &str = r#"
 [[apps]]
 process = "Brand.exe"
-auto_pair = true
+caret_use_top = true
 
 [[apps]]
 process = "Weixin.exe"

@@ -9,12 +9,6 @@
         "stale_probe_guard": true
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -123,12 +117,6 @@
           "userValue": null,
           "value": null
         },
-        "smart_method": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "stale_probe_guard": {
           "source": "system",
           "systemValue": true,
@@ -183,12 +171,6 @@
         "process": "Weixin.exe"
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -297,12 +279,6 @@
           "userValue": null,
           "value": null
         },
-        "smart_method": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "stale_probe_guard": {
           "source": "cleared",
           "systemValue": true,
@@ -360,17 +336,10 @@
     {
       "class": "",
       "effective": {
-        "auto_pair": false,
         "first_show_mode": "wait",
         "process": "EXCEL.EXE"
       },
       "fields": {
-        "auto_pair": {
-          "source": "user",
-          "systemValue": null,
-          "userValue": false,
-          "value": false
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -479,12 +448,6 @@
           "userValue": null,
           "value": null
         },
-        "smart_method": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "stale_probe_guard": {
           "source": "default",
           "systemValue": null,
@@ -518,11 +481,9 @@
       },
       "hasUserEntry": true,
       "key": "excel.exe\u001f\u001f",
-      "overridden": [
-        "auto_pair"
-      ],
+      "overridden": [],
       "process": "EXCEL.EXE",
-      "state": "modified",
+      "state": "system",
       "system": {
         "first_show_mode": "wait",
         "process": "EXCEL.EXE"
@@ -530,7 +491,7 @@
       "title": "",
       "unknownKeys": [],
       "user": {
-        "auto_pair": false,
+        "caret_use_top": false,
         "process": "EXCEL.EXE"
       }
     },
@@ -541,12 +502,6 @@
         "process": "wps.exe"
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -650,12 +605,6 @@
           "value": true
         },
         "schema": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
-        "smart_method": {
           "source": "default",
           "systemValue": null,
           "userValue": null,
@@ -712,12 +661,6 @@
         "process": "SearchHost.exe"
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -821,12 +764,6 @@
           "value": null
         },
         "schema": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
-        "smart_method": {
           "source": "default",
           "systemValue": null,
           "userValue": null,
@@ -883,12 +820,6 @@
         "process": "QQ.exe"
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -992,12 +923,6 @@
           "value": null
         },
         "schema": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
-        "smart_method": {
           "source": "default",
           "systemValue": null,
           "userValue": null,
@@ -1054,12 +979,6 @@
         "process": "Dota2.exe"
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -1163,12 +1082,6 @@
           "value": null
         },
         "schema": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
-        "smart_method": {
           "source": "default",
           "systemValue": null,
           "userValue": null,
@@ -1231,12 +1144,6 @@
         "process": "QQ.exe"
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -1345,12 +1252,6 @@
           "userValue": null,
           "value": null
         },
-        "smart_method": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "stale_probe_guard": {
           "source": "default",
           "systemValue": null,
@@ -1403,12 +1304,6 @@
         "process": ""
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -1517,12 +1412,6 @@
           "userValue": null,
           "value": null
         },
-        "smart_method": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "stale_probe_guard": {
           "source": "default",
           "systemValue": null,
@@ -1573,16 +1462,9 @@
         "caret_offset_y": 4,
         "first_show_mode": "fast",
         "initial_mode": "english",
-        "process": "Tabby.exe",
-        "smart_method": "hold_composition"
+        "process": "Tabby.exe"
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -1691,12 +1573,6 @@
           "userValue": null,
           "value": null
         },
-        "smart_method": {
-          "source": "user",
-          "systemValue": null,
-          "userValue": "hold_composition",
-          "value": "hold_composition"
-        },
         "stale_probe_guard": {
           "source": "default",
           "systemValue": null,
@@ -1733,8 +1609,7 @@
       "overridden": [
         "caret_offset_y",
         "first_show_mode",
-        "initial_mode",
-        "smart_method"
+        "initial_mode"
       ],
       "process": "Tabby.exe",
       "state": "user",
@@ -1749,23 +1624,16 @@
         "future_key": 3,
         "initial_mode": "english",
         "initial_punct": "englsh",
-        "process": "Tabby.exe",
-        "smart_method": "hold_composition"
+        "process": "Tabby.exe"
       }
     },
     {
       "class": "",
       "effective": {
-        "auto_pair": true,
+        "caret_use_top": true,
         "process": "Tabby.exe"
       },
       "fields": {
-        "auto_pair": {
-          "source": "user",
-          "systemValue": null,
-          "userValue": true,
-          "value": true
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -1797,10 +1665,10 @@
           "value": 0
         },
         "caret_use_top": {
-          "source": "default",
+          "source": "user",
           "systemValue": null,
-          "userValue": null,
-          "value": false
+          "userValue": true,
+          "value": true
         },
         "composition_placeholder": {
           "source": "default",
@@ -1874,12 +1742,6 @@
           "userValue": null,
           "value": null
         },
-        "smart_method": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "stale_probe_guard": {
           "source": "default",
           "systemValue": null,
@@ -1914,7 +1776,7 @@
       "hasUserEntry": true,
       "key": "tabby.exe\u001f\u001fssh*",
       "overridden": [
-        "auto_pair"
+        "caret_use_top"
       ],
       "process": "Tabby.exe",
       "state": "user",
@@ -1922,7 +1784,7 @@
       "title": "SSH*",
       "unknownKeys": [],
       "user": {
-        "auto_pair": true,
+        "caret_use_top": true,
         "process": "Tabby.exe",
         "title": "SSH*"
       }
@@ -1934,12 +1796,6 @@
         "process": "*"
       },
       "fields": {
-        "auto_pair": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
         "candidate_position_mode": {
           "source": "default",
           "systemValue": null,
@@ -2043,12 +1899,6 @@
           "value": null
         },
         "schema": {
-          "source": "default",
-          "systemValue": null,
-          "userValue": null,
-          "value": null
-        },
-        "smart_method": {
           "source": "default",
           "systemValue": null,
           "userValue": null,

@@ -748,7 +748,9 @@ mod user_hide_tests {
             "别的分区不受牵连"
         );
         assert!(
-            m.sections_of("input").iter().any(|(s, _)| s == "标点配对"),
+            m.sections_of("input")
+                .iter()
+                .any(|(s, _)| s == "生僻字模式"),
             "输入页同组的别的节不受牵连"
         );
     }

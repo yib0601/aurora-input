@@ -992,7 +992,7 @@ fn build_exit_confirm_dialog(app: &Rc<RefCell<AppState>>) -> Element {
                         .max_lines(3),
                 )
                 // 「共 N 项未保存 ⓘ」：正文不列具体项——普通用户不关心哪几个配置键在
-                // 动，一串 `input.auto_pair.english_pairs` 只会喧宾夺主。清单收进角标，
+                // 动，一串长配置路径只会喧宾夺主。清单收进角标，
                 // 悬停能看、点击能复制，排查「什么都没动就说有未保存」时一步到位。
                 .child(
                     Element::row()

@@ -172,11 +172,8 @@ fn is_bulk_method(method: &str) -> bool {
             | "temp.promoteAll"
             | "temp.clear"
             | "freq.clear"
-            // 补全学习数据的清空同样是 O(n) 改 redb：网址历史条数上限出厂 200，但用户
-            // 可以调到上万（快捷输入历史出厂 1000、0 = 不限）。不进这张表就走 5 秒档，
-            // 数据量大时会「报失败其实成功」。
-            | "mailSuffix.clear"
-            | "urlHistory.clear"
+            // 补全学习数据的清空同样是 O(n) 改 redb：快捷输入历史出厂 1000、0 = 不限，
+            // 不进这张表就走 5 秒档，数据量大时会「报失败其实成功」。
             | "quickHistory.clear"
     )
 }
@@ -1762,16 +1759,6 @@ pub(crate) fn mock_reply(method: &str, params: &Value) -> Value {
                 { "path": "comments/en.dict.yaml", "label": "简明英汉", "hasComment": true },
                 { "path": "comments/emoji.dict.yaml", "label": "Emoji 名称", "hasComment": true },
                 { "path": "comments/broken.dict.yaml", "label": "", "hasComment": false }
-            ]
-        }),
-        // 与 core 的 EMOJI_MODULES 同序同出厂值，外加一个用户放置的文件。
-        "emoji.modules" => json!({
-            "userDir": "emoji",
-            "modules": [
-                { "id": "frost_emoji", "label": "白霜 Emoji", "description": "补充更多词语的 emoji 与符号，如「右箭头」→ ➡️", "file": "emoji/frost_emoji.txt", "user": false, "defaultOn": true },
-                { "id": "frost_radicals", "label": "偏旁部首", "description": "如「提手旁」→ 扌", "file": "emoji/frost_others.txt", "user": false, "defaultOn": false },
-                { "id": "frost_greek", "label": "希腊字母", "description": "如「阿尔法」→ alpha α Α", "file": "emoji/frost_others.txt", "user": false, "defaultOn": false },
-                { "id": "猫猫", "label": "猫猫", "description": "", "file": "emoji/猫猫.txt", "user": true, "defaultOn": false }
             ]
         }),
         "schema.list" => json!([

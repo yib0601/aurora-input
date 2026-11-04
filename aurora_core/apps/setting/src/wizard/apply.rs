@@ -160,7 +160,7 @@ mod tests {
     fn plan() -> Plan {
         Plan {
             items: vec![ConfigItem {
-                key: "input.emoji.enabled".into(),
+                key: "input.association.kind".into(),
                 value: json!(true),
             }],
             layout: Some(("double_pinyin".into(), "ziranma".into())),

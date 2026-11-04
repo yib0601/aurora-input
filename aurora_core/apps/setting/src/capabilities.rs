@@ -194,8 +194,6 @@ pub fn control_type_compatible(control: &str, ty: &str) -> bool {
         "dialog_button_mix_members" => ty == "structlist",
         // 注释词库：整表读写的条目列表（id/label/path/enabled/schemas 五个字段）。
         "dialog_button_comment_dicts" => ty == "structlist",
-        // emoji 附加模块：id → bool 的整张表（键含用户放置的文件名，不是固定集合）。
-        "dialog_button_emoji_modules" => ty == "map",
         // 语言栏角标规则：整表读写的条目列表（enabled/state/corner/两个色值/scale）。
         "dialog_button_langbar_badges" => ty == "structlist",
         // 悬停提示段列表：整表读写的条目列表（enabled/label/template/each/promote/inline）。
@@ -324,26 +322,23 @@ mod tests {
         //    available→ 行内启用勾选 + ↑↓ 排序，同样经 writer 写回。
         "schema.active",
         "schema.available",
-        // ③ 短语前缀列举：开关暂无作用，待 core 决定后再处理。
+        // ③ 短语前缀列举：**有作用**（`aurora-coordinator/src/handle_candidate.rs` 的前缀枚举
+        //    门槛，出厂 2）。不暴露的判据是「普通用户没有判断依据」——调小会让 zz/co 这类
+        //    短前缀也进候选，属于调参而非功能开关，需要时改配置文件。
         "input.phrase.min_prefix",
         // ④ 非独立清单项：由各功能键的「全局」勾选经收集器汇总写回。
         "keys.global_hotkeys",
-        // ⑤ 临时英文不再设独立启用开关（Shift+字母 始终可进入、触发键可留空）。
+        // ⑤ 临时英文**仍有总开关**（`enabled`，出厂 true），生产读者在 `handle_lifecycle.rs`
+        //    （Shift+字母进临英 / `shift_when_composing` 支 / 按键绑定）、`handle_temp.rs`
+        //    （引导键支）、`handle_mode.rs`：置 false 会让临时英文整体进不去。
+        //    ⚠️ 这里曾写作「不再设独立启用开关」，与代码相反——缺的是**设置页入口**
+        //    （应补进「按键 → 中英文切换」卡片），不是这个键本身。
         "input.temp_english.enabled",
-        // ⑥ 外观不支持 / 平台限制项，均由 core 维持默认值。
-        "ui.font.path",
-        "ui.font.render_mode",
-        // ⑦ 命令栏始终开启，不提供关闭入口。
-        "input.cmdbar.enabled",
-        // ⑧ 词频打分模型的两个残留系数：**改动无任何效果**，故不暴露。
-        //    core 改用位置提升模型后，配置项 → FreqProfile 字段 → pinyin_score 整条链已无
-        //    生产调用者（位置模型只取 decay_factor，不打分）。core 侧已在 data/config.toml
-        //    与函数文档上标注，保留仅为将来若恢复打分模型可复用。
-        //
-        //    ⚠️ **不能因为「词频参数都该放一起」就把它俩也接进设置页**：调频的其余参数
-        //    （enabled / strategy / promote_prefix / half_life ×2 / protect_top_n* /
-        //    english_code_scope）都已在清单内，唯独这两个是死链。放上去等于给用户两个拧了
-        //    没反应的旋钮，比不放更糟。要放的前提是 core 先恢复打分模型。
+        // ⑥ 词频打分模型的两个系数：**注释曾写「死链、改动无任何效果」，与代码相反**。
+        //    `FreqProfile::pinyin_score`（`aurora-store/src/freq.rs`）仍被联想打分消费
+        //    （`aurora-engine/src/manager.rs` 的 `assoc_freq_scores`、
+        //    `aurora-coordinator/src/handle_assoc.rs`）。不暴露的判据仍是「调它需要什么依据」，
+        //    但要放的前提不是「core 恢复打分模型」，而是「用户有可对照的真值」。
         //    见 core 的 docs/design/freq-rerank-model.md §9.1.2。
         "schema.pinyin.frequency.base_scale",
         "schema.pinyin.frequency.recency_peak",
@@ -373,8 +368,10 @@ mod tests {
         //        容量参数普通用户无判断依据，出厂值足够宽，临时词条也能在「词库 → 英文 → 临时
         //        词库」逐条删。开关与晋升次数已在清单内（英文行为 → 自动造词）。
         "schema.english.auto_learn.temp_max_entries",
-        // ⑨'' 码元字符集：core 的 REGISTRY 已注册（config_schema.rs），但消费侧仍在开发中，
-        //     暂不接入设置界面。**待 core 定稿后再评估**该不该暴露、放全局清单还是方案对话框。
+        // ⑨'' 码元字符集：**消费侧早已接完**（`aurora-engine/src/manager.rs` 的
+        //      `active_input_chars()` → 协调器按键闸门与通配判定），全局基线非空即覆盖方案。
+        //      不暴露不是「开发中」，而是这两个键改错了会让某些键彻底打不出字（按键闸门），
+        //      属于改配置文件才该碰的参数。
         "schema.codetable.input_chars",
         "schema.codetable.leading_chars",
         "debug.log_max_files",
@@ -412,13 +409,9 @@ mod tests {
         "ui.candidate.custom_y",
         "ui.status.custom_x",
         "ui.status.custom_y",
-        // ⑬ 配对状态时效秒数（core 侧跨模式跳出改造新增，内部项）：兜底「用户中途用鼠标
-        //    点走、把括号退格删掉」这类输入法感知不到的操作。取值依据是人的操作节奏，
-        //    普通用户无判断依据，需要时改配置文件。
-        "input.auto_pair.state_ttl_secs",
         // ⑭ 加词面板的候选布局（core 侧模式级候选布局改造新增）：加词面板没有独立设置
         //    分区，且它逐字确认的两行提示本就该竖排——出厂 vertical 即最优解，横排没有
-        //    使用场景。同批的临拼/临英/网址/快捷四项都已进清单，只有它刻意不暴露。
+        //    使用场景。同批的临拼/临英/快捷三项都已进清单，只有它刻意不暴露。
         "input.add_word.candidate_layout",
         // ㉓ 候选窗定位方式（core 新增 `[input.caret]`，2026-09-15）：**排障开关，不是偏好**。
         //    这几个模式由热键激活、激活瞬间无输入内容，却要立刻显示候选窗，于是靠一个占位
@@ -462,8 +455,10 @@ mod tests {
         // ⑱ 联想的四个「来源开关」（core 侧联想改造新增）：主干六项已在清单内，这四项决定
         //    联想候选**从哪来**，按配置文件里的书写顺序取配额。
         //
-        //    bigram 是**尚无实现**的来源，开着也不会出候选——与 ⑧ 的两个死链系数同一处理：
-        //    给用户拧了没反应的旋钮，比不放更糟。等数据来源落地后再评估。
+        //    bigram **已实现**（2026-10）：`aurora-assoc/src/bigram.rs` + 随包
+        //    `data/assoc/assoc_bigram.txt`（约 2 MB），是智能联想档唯一的「下一词」来源。
+        //    ⚠️ 这里曾写作「尚无实现，开着也不会出候选」，与代码相反。不暴露的判据是
+        //    「调它需要什么依据」——关掉它等于让智能联想档退化成只有历史与前缀。
         //    history（联想历史，2026-09 已实现）出厂开、只学用户自己从联想里选过的词，
         //    没有「需要关它」的常见诉求；清数据走「清空词频」，故仍不放开关。
         //
@@ -596,8 +591,9 @@ mod tests {
     ///    根本没有勾选信号，于是写回值天生就少一项。
     /// 2. 用户只要保存一次，那个值就被**静默吃掉**。
     ///
-    /// 现场：`input.auto_pair.english_pairs` 的出厂值含 `<>`，清单漏了它
-    /// （2026-08-27 用户报「进入设置什么也不操作，关闭时提示有内容修改」）。
+    /// 现场：某张标点配对表的出厂值漏列一项（2026-08-27 用户报「进入设置什么也不操作，
+    /// 关闭时提示有内容修改」）。那两张表已随自动配对功能删除，但判据对**任何**带
+    /// `options` 的 strlist 键仍然适用（生僻字范围、词频排除区块等）。
     #[test]
     fn checkbox_group_options_cover_factory_values() {
         let caps = Capabilities::from_embedded();
@@ -608,9 +604,8 @@ mod tests {
                 continue;
             };
             // ⚠️ 判据是「**声明了 options** 且配置类型是 strlist」，不是 `typ == "checkbox_group"`：
-            //    `input.auto_pair.english_pairs` 的 typ 是 `dialog_button`（勾选组在对话框里渲染），
-            //    按 typ 过滤会把它整个跳过——本测试第一版就是这么写的，反向验证时（把 `<>`
-            //    从清单里删掉）它照样绿，等于白写。
+            //    勾选组在清单里可能以 `dialog_button` 渲染，按 typ 过滤会把它们整个跳过——
+            //    本测试第一版就是这么写的，反向验证时照样绿，等于白写。
             if item.options.is_empty()
                 || caps.entries.get(key).map(|e| e.ty.as_str()) != Some("strlist")
             {
@@ -760,16 +755,10 @@ mod enum_domain_gate {
     ///
     /// 登记的门槛是「界面上少一个选项是有意的」，理由必须同时写在清单该项旁边——
     /// 这里只放键名与一句话，方便下一个人知道该去哪读。
-    const NARROWED_ON_PURPOSE: &[(&str, &str)] = &[
-        (
-            "input.association.kind",
-            "不列 smart：桌面上它与 word 完全等价，摆一个没区别的选项只会让人以为选错了",
-        ),
-        (
-            "input.emoji.show_as",
-            "不列 comment：注释区没有上屏入口，选了 emoji 只能看不能选；待注释上屏落地后加回",
-        ),
-    ];
+    const NARROWED_ON_PURPOSE: &[(&str, &str)] = &[(
+        "input.association.kind",
+        "不列 smart：桌面上它与 word 完全等价，摆一个没区别的选项只会让人以为选错了",
+    )];
 
     /// ★★ 清单的 select/segmented **不得漏掉 core 的取值**。
     ///

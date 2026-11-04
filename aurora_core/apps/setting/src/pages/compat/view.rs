@@ -1029,7 +1029,6 @@ mod tests {
             labels("ignore_host_ime_close"),
             ["跟随内置规则", "忽略", "采纳"]
         );
-        assert_eq!(labels("auto_pair"), ["跟随全局", "启用", "禁用"]);
         assert_eq!(labels("password_force_english"), ["跟随全局", "开", "关"]);
     }
 
