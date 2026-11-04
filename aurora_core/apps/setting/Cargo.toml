@@ -17,7 +17,12 @@ dirs = "6"
 serde_json = "1"
 chrono = "0.4"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+# ⚠ 不要加回 `env-filter`：它的唯一用途是解析 `RUST_LOG` 的 `target=level` 细粒度指令，
+# 而本程序除它以外没有 regex 使用者——那个 feature 会拖进 matchers + regex-automata +
+# regex-syntax 整套（审计在 release 二进制里实测这类符号合计 0.41 MiB）。本程序只按
+# **级别**覆盖日志（见 src/logger.rs 的 `parse_level`），级别过滤用 `LevelFilter` +
+# `with_max_level` 就够，零额外依赖。
+tracing-subscriber = { version = "0.3", features = ["registry"] }
 tracing-appender = "0.2"
 toml = "0.8"
 ureq = "2"
@@ -27,7 +32,11 @@ semver = "1"
 # 升级包完整性校验
 sha2 = "0.10"
 # 日志打包（设置 › 高级 › 日志）。与 core 的 aurora-transfer 同一大版本，只开 deflate。
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# ⚠ 是 `deflate-flate2` 不是 `deflate`：后者会连带 zopfli（只在压缩级别 >9 时才用，
+# 本程序固定用级别 1），白编 0.08 MiB 进 exe。理由详见 aurora-transfer/Cargo.toml。
+# 后端 `rust_backend` 由下一行的 workspace flate2 直接依赖注入（zip 不带后端）。
+zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
+flate2 = { workspace = true }
 
 [dev-dependencies]
 # 仅测试用：core 的 capability 生成器与配置真相源，供守护 capabilities.snapshot.json

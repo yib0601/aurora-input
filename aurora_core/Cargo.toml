@@ -90,8 +90,17 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
     "gif",
     "bmp",
-    "rayon",
 ] }
+# 已删的 feature：`rayon`。它是**纯 API 暴露**——image 里只有 `images/buffer_par.rs`
+# （`par_pixels` / `par_rows` 那族并行迭代器）与 lib.rs 的一处 re-export 挂在它下面，
+# 解码/编码路径完全不走 rayon（`grep -rn "par_pixels\|par_rows\|par_chunks" crates/ apps/`
+# = 0 处）。它对最终二进制近似 0 字节（没人实例化那族泛型，LTO + --gc-sections 直接丢），
+# 但会拖进 rayon / rayon-core / crossbeam-epoch / crossbeam-utils 四个编译单元
+# （审计实测 debug rlib text 合计 0.22 MiB），纯编译期与锁文件开销。
+# ⚠ 别只为"省体积"去裁 png/jpeg/webp/gif/bmp 里的格式：webp/gif/bmp 是用户自定义主题
+# 背景图（`aurora-ui/src/image_cache.rs` 的 `image::open`）能用到的格式，裁掉是**用户可见
+# 回归**，实测也只省 ≈0.2 MiB/二进制（按 zopfli 实测 0.077 MiB ÷ debug rlib 0.275 MiB
+# 的 0.28 折算率估）。要裁先补「不支持格式 → 明确告警」与主题文档，别静默退化。
 # Config
 dirs = "6"
 uuid = { version = "1", features = ["v4"] }
@@ -127,11 +136,18 @@ windows = { version = "0.58", features = [
     "Win32_System_DataExchange",
     "Win32_Storage_FileSystem",
 ]}
-# Random
-rand = "0.8"
-# HTTP server (core 内嵌 web API)
-axum = "0.7"
-tower-http = { version = "0.6", features = ["cors"] }
+# zip 的 deflate 后端。**不是给本仓代码用的**（没人 import flate2），只为把
+# `flate2/rust_backend` 这个 feature 注入到 feature 统一后的 flate2 上——理由见
+# crates/aurora-transfer/Cargo.toml 的 zip 行：zip 2.4 的 `deflate` 会连 zopfli 一起拉，
+# 而 `deflate-flate2` 又只置 `_deflate-any`、不选后端，缺后端时 flate2 直接
+# `compile_error!("You need to choose a zlib backend")`（编译期报错，不会静默）。
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+# ⛔ 不要往这里加回 `axum` / `tower-http` / `rand`：三者都**没有被任何成员 crate 引用**
+# （`{ workspace = true }` 0 处），既没进 Cargo.lock、也没参与编译——删掉是纯卫生动作（收益
+# 0 字节）。axum/tower-http 是内嵌 web API 的遗留（早已退役，见 aurora-rpc/src/lib.rs 模块头
+# 「从内嵌 HTTP webapi 回退而来」）；rand 是更早的遗留。要加依赖先证明有消费者，
+# 别把它们当"以后可能用到"的预留位。
 
 [profile.release]
 opt-level = 3

@@ -17,7 +17,20 @@ aurora-theme = { path = "../aurora-theme" }
 # 只开 deflate（自家产出的主题/方案/备份包都是 deflate）+ time（条目时间戳取当前时间，
 # 不开会一律写成 1980-01-01）。默认 feature 会把 aes / bzip2 / xz / lzma / zstd / deflate64
 # 全拉进来（zstd-sys、bzip2-sys 还是 C 库），约 0.4 MiB 代码无人调用。
-zip = { version = "2", default-features = false, features = ["deflate", "time"] }
+#
+# ⚠ 写 `deflate-flate2` 而不是看起来更自然的 `deflate`：zip 2.4 的 `deflate` =
+# `flate2/rust_backend` + **`deflate-zopfli`** + `deflate-flate2`，无条件把 zopfli 拖进闭包。
+# zopfli 只在「压缩级别 > flate2 的 best(9)」时才被调用（zip 源码 `write.rs` 的
+# `deflate_compression_level_range` 给的上限是 9 + zopfli 的 255 档），而本仓没有任何调用点
+# 设过 >9 的级别（`setting/src/log_tools.rs` 是 Some(1)，其余走默认级别）——这部分代码永远
+# 走不到，却实打实编进二进制（审计实测 setting 的 zopfli 符号 0.077 MiB）。`deflate-flate2`
+# 同时会置上内部的 `_deflate-any`，故 `CompressionMethod::default()` 仍是 Deflated，
+# 打包行为与改前一致。
+# `flate2`（zip 的隐式 feature）负责激活 zip 那个 optional 依赖；后端本身靠上面 workspace
+# 的 `flate2` 直接依赖注入 `rust_backend`——`deflate-flate2` 自己不选后端。
+zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2", "time"] }
+# 本 crate 代码不直接用 flate2，只为给上面那行选后端（见 workspace Cargo.toml 的 flate2 行）。
+flate2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

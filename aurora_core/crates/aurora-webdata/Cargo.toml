@@ -31,7 +31,10 @@ aurora-quick-input = { path = "../aurora-quick-input" }
 aurora-bridge = { path = "../aurora-bridge" }
 # 手工构造 .wpkg 用（export_package 写不出带说明的 package.toml）；
 # 与 aurora-transfer 同一版本、同一组 feature（取舍理由见那边）。
-zip = { version = "2", default-features = false, features = ["deflate", "time"] }
+# ⚠ 是 `deflate-flate2` 不是 `deflate`：后者会把 zopfli 一起拖进来且永远走不到，见那边注释。
+# 后端 `rust_backend` 由下一行的 workspace flate2 直接依赖注入（zip 不带后端）。
+zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2", "time"] }
+flate2 = { workspace = true }
 
 [lints]
 workspace = true
