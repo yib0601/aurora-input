@@ -46,6 +46,8 @@
 #       t/test 更是原生 cargo test。想在本机直接出二进制看看链接过不过: AURORA_BUILD_LOCAL=1
 #       (⚠️ 产物不能部署也不能发版, 见 lib/remote-build.sh)
 #   gd=gen-data  r=repl  dl=pull-data  pc=pull-config  pl=pull-log(pla=全部)
+#     ↑ gd 支持 AURORA_SLIM_DATA=1：剔除「出厂默认关」的那几组数据（瘦身包，包体约 −6.41 MiB）。
+#       默认不设 = 行为完全不变；清单、收益与后果见 assemble_data 上方的 SLIM_DATA_PATHS。
 #   远程诊断(靶机现场, 配置见 deploy.local):
 #     rwhere  常用位置    rproc  进程+部署产物时间戳    rls/rcat/rtail <路径>    rgrep <模式>
 #   GUI 验证(设置界面离屏截图, 进程内合成事件、不走 SendInput, 故 SSH 会话可用):
@@ -590,6 +592,33 @@ FROST_CELLS="exthot idiom place history name name2 sport geography animal comput
 # ⚠ 与 dev.ps1 的 $FrostOthersExclude、mac/dev.sh 的同名变量同步。
 FROST_OTHERS_EXCLUDE="著名表演艺术家"
 
+# 「瘦身数据包」开关：`AURORA_SLIM_DATA=1` 时把**出厂默认关闭**的那几组数据从随包数据里剔掉。
+# 默认不设 = 产物逐字节不变（发版走默认；只有明确要瘦身包时才设这个变量）。
+# 实测（对真实 rpm payload 的 147 个文件分组重压，tar + zstd19 单线程）：这 6 组在包里合计
+# 6.41 MiB = 包体的 24.7%；其中 grammar 一项就有 4.15 MiB。每一组都对应一个出厂 false 的开关：
+#   schemas/pinyin/grammar/                               拼音语法模型（pinyin.grammar 出厂关）
+#   schemas/pinyin/ext/                                   16 张细胞词库（方案设置里出厂不勾选）
+#   opencc/                                               简繁转换 .octrie（简繁出厂关）
+#   schemas/aux_code/                                     辅助码表（schema.pinyin.aux_code.enabled 出厂 false）
+#   emoji/                                                emoji 候选扩展（出厂关）
+#   schemas/wubi86/wubi86_jidian_extra_district.dict.yaml  行政区划扩展词库（出厂不勾选）
+# ⚠ 瘦身包里用户之后再打开上述功能会**拿不到数据**（不崩、不报错，只是功能不生效）；这些数据都
+#   能从用户目录的同名路径自行投放（覆盖解析优先用户目录，见根 AGENTS.md「自带数据文件一律经
+#   覆盖解析函数定位」）。所以这是「默认关、按需开」的开关，不能做成发版默认。
+#   具体到 `schemas/aux_code/`：整个目录被剔掉，连双拼出厂引用的 `aux_code/flypy_full.txt` 也没了
+#   ⇒ 瘦身包里双拼辅助码会因空表走 passthrough（不筛候选），与「辅助码出厂关」的口径一致。
+# ⚠ 断言侧要同步：本文件的 verify_dist_data、scripts/linux/verify-rpm.sh 与 verify-deb.sh 里
+#   对这组文件的检查会跟着跳过（校验瘦身包时也要带同一个变量），否则瘦身包在门禁上整体误报。
+SLIM_DATA_PATHS=(
+    schemas/pinyin/grammar
+    schemas/pinyin/ext
+    opencc
+    emoji
+    schemas/aux_code
+    schemas/wubi86/wubi86_jidian_extra_district.dict.yaml
+)
+slim_data_enabled() { [ "${AURORA_SLIM_DATA:-}" = 1 ]; }
+
 # 按分组标题过滤 rime-frost 的 OpenCC 杂项表：$1 源，$2 目标。标题行形如
 # `----------偏旁部首<Tab>----------`（OpenCC 无注释语法，rime-frost 借假词条写标题），
 # 被剔除的组从其标题到下一个标题整段去掉；其余行原样保留（运行时按分组取，见 emojidict::select_sections）。
@@ -733,7 +762,7 @@ assemble_data() {
     # 7. 辅助码表（Rust 工具 gen_aux_code）：小鹤/自然码原样透传，笔画表 YAML→`字=码` + 字集裁剪。
     # --schema-out 另从同一份笔画数据产出「笔画」码表方案的词库 schemas/stroke/stroke.dict.yaml
     # （权重取 rime-frost 单字字频；方案文件 stroke.schema.toml 入库、已随第 1 步复制）。
-    # 全拼默认辅助码引用的就是这个方案（schema:stroke）；stroke.txt 照旧产出，供旧写法的用户 override。
+    # 全拼默认辅助码引用的就是这个方案（schema:stroke），**不是** stroke.txt（理由见下方 7b）。
     # 与五笔同理：产物只进 build 目录、不入版本库（rime-stroke 是 LGPL-3.0，见 NOTICE.md）。
     # 功能出厂关闭，故缺表只是「辅助码 / 笔画方案用不了」，不影响其它一切 —— 用 warn 不中断构建。
     if [ -f "$CACHE_DIR/aux-code/stroke.dict.yaml" ]; then
@@ -745,6 +774,18 @@ assemble_data() {
     else
         warn "缺 .cache/aux-code/，辅助码不可用（运行 gen-data 下载）"
     fi
+
+    # 7b. 去掉重复落盘的 schemas/aux_code/stroke.txt
+    # 上面的 --schema-out 已从**同一次解析**产出「笔画」码表方案的词库 schemas/stroke/stroke.dict.yaml；
+    # stroke.txt 是同一份数据的另一种落盘形态（47,287 行 vs 47,280 行，差的是 YAML 头与尾部裁剪），
+    # 字与码逐字相同。出厂全拼引用的是方案 `schema:stroke`（data/schemas/pinyin.schema.toml），
+    # 不是这个文件——它随包分发纯属重复，实测 875,381 B（压缩后约 0.22 MiB）。
+    # gen_aux_code 的两条输出（stroke.txt 与 --schema-out）都**保持原样**，本处只从随包数据里
+    # 去掉这一份副本：用户 override 里写死旧路径 `files = ["aux_code/stroke.txt"]` 的用法仍然
+    # 成立，只是需要用户把该文件丢进用户数据目录的同名路径（覆盖解析优先用户目录，见根 AGENTS.md）。
+    # ⚠ 同构实现的另外两处未同步（不在本次改动范围）：scripts/dev.ps1 的 Assemble-Data、
+    #   scripts/mac/dev.sh 的 assemble_data，Windows / macOS 包目前仍带这份重复文件。
+    rm -f "$schemas/aux_code/stroke.txt"
 
     # 8. Emoji 候选扩展表：**原样复制**，不做任何构建期转换（与 5/6/7 的生成物刻意不同）。
     # 繁→简归一、撞键合并与二进制化全部推迟到用户本机首次启用时 —— 这样我们分发的是
@@ -777,6 +818,21 @@ assemble_data() {
             && strip_frost_sections "$rime_frost/opencc/others.txt" "$data/emoji/frost_others.txt"
     else
         warn "缺 .cache/rime-frost/opencc/，白霜 emoji 模块不可用（运行 gen-data 下载）"
+    fi
+
+    # 8c. 瘦身开关（默认关）：剔除出厂默认关闭的那几组数据，清单与理由见 SLIM_DATA_PATHS 处。
+    # 放在「组装完成」统计之前，让打印的文件数与实际随包内容一致。
+    if slim_data_enabled; then
+        say "AURORA_SLIM_DATA=1：剔除出厂默认关的数据…"
+        local slim_path
+        for slim_path in "${SLIM_DATA_PATHS[@]}"; do
+            if [ -e "$data/$slim_path" ]; then
+                gray "  - $slim_path ($(du -sh "$data/$slim_path" | cut -f1))"
+                rm -rf "${data:?}/$slim_path"
+            else
+                gray "  - $slim_path (不存在,跳过)"
+            fi
+        done
     fi
 
     gray "data/ 组装完成 ($(find "$data" -type f | wc -l) 文件)"
@@ -1332,6 +1388,11 @@ verify_dist_data() {
     local entry path min sz
     for entry in "${checks[@]}"; do
         path="${entry%%|*}"; min="${entry##*|}"
+        # 瘦身包（AURORA_SLIM_DATA=1）刻意不带出厂默认关的数据，对应断言跟着跳过——否则瘦身包
+        # 永远过不了这道门禁。清单见 SLIM_DATA_PATHS。
+        if slim_data_enabled && [ "$path" = "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml" ]; then
+            gray "  - $path（瘦身包已剔除,跳过）"; continue
+        fi
         if [ ! -f "$data/$path" ]; then
             err "  ✗ 缺失: $path"; ok=0; continue
         fi
@@ -1343,12 +1404,16 @@ verify_dist_data() {
         fi
     done
     # OpenCC:至少一个非空 .octrie(简繁转换)
-    local octrie_cnt
-    octrie_cnt=$(find "$data/opencc" -name '*.octrie' -size +0c 2>/dev/null | wc -l)
-    if [ "$octrie_cnt" -lt 1 ]; then
-        err "  ✗ 缺失: opencc/*.octrie(简繁转换编译失败)"; ok=0
+    if slim_data_enabled; then
+        gray "  - opencc/*.octrie（瘦身包已剔除,跳过）"
     else
-        gray "  ✓ opencc/*.octrie ($octrie_cnt 个)"
+        local octrie_cnt
+        octrie_cnt=$(find "$data/opencc" -name '*.octrie' -size +0c 2>/dev/null | wc -l)
+        if [ "$octrie_cnt" -lt 1 ]; then
+            err "  ✗ 缺失: opencc/*.octrie(简繁转换编译失败)"; ok=0
+        else
+            gray "  ✓ opencc/*.octrie ($octrie_cnt 个)"
+        fi
     fi
 
     if [ "$ok" -ne 1 ]; then

@@ -21,8 +21,11 @@ scheme = "full"
 # "schema:<码表方案 id>" = 取该方案系统词库 + 用户词库里的编码。这里引用内置的「笔画」
 # 码表方案（stroke.schema.toml，不在出厂切换列表里，但装着），它的词库与
 # aux_code/stroke.txt 由同一次转换产出、码逐字相同，引用方案的好处是用户给笔画方案
-# 加的字也能拿来筛。换成别的码表如 files = ["schema:wubi86"]；也可写码表文件路径
-# （相对 schemas 目录，如 "aux_code/stroke.txt"，旧写法继续有效）。
+# 加的字也能拿来筛。换成别的码表如 files = ["schema:wubi86"]。
+# 也可写码表文件路径（相对 schemas 目录，如 "aux_code/stroke.txt"）：⚠️ 但那份
+# stroke.txt 自本版起**不再随包分发**（它与上面的方案词库同源同码，属重复落盘）。
+# 要用这种旧写法，须自己把 stroke.txt 放进用户数据目录的 schemas/aux_code/ 下
+# （覆盖解析优先用户目录）；缺文件时表为空，辅助码会变成「不筛任何候选」。
 # 两种来源的数据都由构建脚本从上游拉取并转换，不入版本库（见 NOTICE.md）。
 files = ["schema:stroke"]
 

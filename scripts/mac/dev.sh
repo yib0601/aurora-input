@@ -839,6 +839,23 @@ FROST_CELLS="exthot idiom place history name name2 sport geography animal comput
 # rime-frost others.txt 里不随包的分组。理由与清单见 scripts/dev.sh 的同名变量（几处要同步）。
 FROST_OTHERS_EXCLUDE="著名表演艺术家"
 
+# 「瘦身数据包」开关：`AURORA_SLIM_DATA=1` 时把**出厂默认关闭**的那几组数据从随包数据里剔掉。
+# 与 scripts/dev.sh 的 `SLIM_DATA_PATHS` 是同一件事 —— 清单、实测收益（包内合计 6.41 MiB =
+# 包体 24.7%，grammar 一项 4.15 MiB，tar+zstd19 单线程口径）与全部后果都写在那边，改一边要
+# 同步另外两边（Windows 侧是 scripts/dev.ps1 的 $SlimDataPaths）。
+# 默认不设 = 产物逐字节不变（发版走默认；只有明确要瘦身包时才设这个变量）。
+# ⚠ 瘦身包里用户之后再打开这些功能会拿不到数据（不崩、不报错，只是功能不生效），可从用户目录
+#   自行投放。⚠ 校验瘦身包时也要带同一个变量，否则 verify_dist_data 会整体误报。
+SLIM_DATA_PATHS=(
+    schemas/pinyin/grammar
+    schemas/pinyin/ext
+    opencc
+    emoji
+    schemas/aux_code
+    schemas/wubi86/wubi86_jidian_extra_district.dict.yaml
+)
+slim_data_enabled() { [ "${AURORA_SLIM_DATA:-}" = 1 ]; }
+
 # 按分组标题过滤 rime-frost 的 OpenCC 杂项表：$1 源，$2 目标。同 scripts/dev.sh 的同名函数。
 strip_frost_sections() {
     awk -v excl="$FROST_OTHERS_EXCLUDE" '
@@ -985,7 +1002,7 @@ assemble_data() {
     # 7. 辅助码表 (Rust 工具 gen_aux_code): 小鹤/自然码原样透传, 笔画表 YAML→`字=码` + 字集裁剪。
     # --schema-out 另从同一份笔画数据产出「笔画」码表方案的词库 schemas/stroke/stroke.dict.yaml
     # (权重取 rime-frost 单字字频; 方案文件 stroke.schema.toml 入库、随 data/ 一起复制)。
-    # 全拼默认辅助码引用的就是这个方案 (schema:stroke); stroke.txt 照旧产出, 供旧写法的用户 override。
+    # 全拼默认辅助码引用的就是这个方案 (schema:stroke)，**不是** stroke.txt（理由见下方 7b）。
     # 与五笔同理: 产物只进 build 目录、不入版本库 (rime-stroke 是 LGPL-3.0, 见 NOTICE.md)。
     # 功能出厂关闭, 故缺表只是「辅助码 / 笔画方案用不了」, 不影响其它一切 —— 用 warn 不中断构建。
     if [[ -f "$CACHE_DIR/aux-code/stroke.dict.yaml" ]]; then
@@ -996,6 +1013,31 @@ assemble_data() {
             || warn "辅助码表生成失败 (辅助码功能与笔画方案不可用)"
     else
         warn "缺 .cache/aux-code/, 辅助码不可用 (先跑 gd 下载)"
+    fi
+
+    # 7b. 去掉重复落盘的 schemas/aux_code/stroke.txt
+    # --schema-out 已从**同一次解析**产出 schemas/stroke/stroke.dict.yaml；stroke.txt 是同一份
+    # 笔画数据的另一种落盘形态（47,287 行 vs 47,280 行，差的是 YAML 头与尾部裁剪），字与码逐字
+    # 相同。出厂全拼引用的是方案 `schema:stroke`，所以它随包分发纯属重复（875,381 B）。
+    # gen_aux_code 的两条输出都**保持原样**，这里只从随包数据里去掉这一份副本：用户 override 里
+    # 写死旧路径 `files = ["aux_code/stroke.txt"]` 的用法仍然成立，只是需要用户把该文件丢进用户
+    # 数据目录的同名路径（覆盖解析优先用户目录，见根 AGENTS.md）。
+    # ⚠ 与 scripts/dev.sh 的 7b、scripts/dev.ps1 的 Assemble-Data 同构，三处必须一致。
+    rm -f "$data/schemas/aux_code/stroke.txt"
+
+    # 7c. 瘦身开关（默认关）：剔除出厂默认关闭的那几组数据，清单与理由见 SLIM_DATA_PATHS 处。
+    # 放在「组装完成」统计之前，让打印的文件数与实际随包内容一致。
+    if slim_data_enabled; then
+        bold "AURORA_SLIM_DATA=1：剔除出厂默认关的数据…"
+        local slim_path
+        for slim_path in "${SLIM_DATA_PATHS[@]}"; do
+            if [[ -e "$data/$slim_path" ]]; then
+                info "  - $slim_path"
+                rm -rf "${data:?}/$slim_path"
+            else
+                info "  - $slim_path (不存在,跳过)"
+            fi
+        done
     fi
 
     info "data/ 组装完成 ($(find "$data" -type f | wc -l | tr -d ' ') 文件)"
@@ -1040,6 +1082,11 @@ verify_dist_data() {
     bold "==> 校验发布数据完整性 → $data"
     _check_min() {
         local rel="$1" min="$2" p="$data/$1" sz
+        # 瘦身包（AURORA_SLIM_DATA=1）刻意不带出厂默认关的数据，对应断言跟着跳过——否则瘦身包
+        # 永远过不了这道门禁。清单见 SLIM_DATA_PATHS（与 scripts/dev.sh / dev.ps1 同源）。
+        if slim_data_enabled && [[ "$rel" == "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml" ]]; then
+            info "  - $rel (瘦身包已剔除,跳过)"; return
+        fi
         if [[ ! -f "$p" ]]; then err "  ✗ 缺失: $rel"; ok=0; return; fi
         sz=$(stat -f%z "$p" 2>/dev/null || echo 0)
         if (( sz < min )); then err "  ✗ 过小 (${sz}B < 期望 ${min}B): $rel"; ok=0
@@ -1056,9 +1103,17 @@ verify_dist_data() {
     _check_min "schemas/wubi86/wubi86_jidian_extra_district.dict.yaml" 10000
     # 笔画方案词库同为 gen_aux_code 生成物; 全拼默认辅助码经 schema:stroke 引用它
     _check_min "schemas/stroke/stroke.dict.yaml"                       500000
-    local oc; oc=$(ls "$data/opencc"/*.octrie 2>/dev/null | wc -l | tr -d ' ')
-    if (( oc < 1 )); then err "  ✗ 缺失: opencc/*.octrie (简繁转换编译失败)"; ok=0
-    else info "  ✓ opencc/*.octrie ($oc 个)"; fi
+    local oc
+    # 简繁 .octrie 也属「出厂默认关」那组（opencc/ 整目录），瘦身包里必然没有。
+    if slim_data_enabled; then
+        info "  - opencc/*.octrie (瘦身包已剔除,跳过)"
+    else
+        # `|| true`：opencc 目录存在但没有 .octrie 时 ls 非零，set -e + pipefail 会让整个门禁
+        # 静默中止在「缺文件」判断之前（原有隐患，顺手修）。
+        oc=$(ls "$data/opencc"/*.octrie 2>/dev/null | wc -l | tr -d ' ' || true)
+        if (( oc < 1 )); then err "  ✗ 缺失: opencc/*.octrie (简繁转换编译失败)"; ok=0
+        else info "  ✓ opencc/*.octrie ($oc 个)"; fi
+    fi
 
     if (( ok == 0 )); then
         err "发布数据校验失败! 上述文件缺失或异常会导致功能残缺。"

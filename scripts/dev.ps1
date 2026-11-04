@@ -56,6 +56,8 @@
 #                模板 scripts\sign.local.ps1.example; 原理与取舍见 docs\design\code-signing.md。
 #   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  hooks(=激活 git hooks)  clean
 #   gd=gen-data  r=repl
+#     ↑ gd 支持 $env:AURORA_SLIM_DATA=1: 剔除「出厂默认关」的那几组数据 (瘦身包, 包体约 -6.41 MiB)。
+#       默认不设 = 行为完全不变; 清单、收益与后果见 Assemble-Data 上方的 $SlimDataPaths。
 #   av           配置 Defender 编译排除项 (自动 UAC 提权; 详见 scripts\defender-exclusions.ps1)
 #   avc          仅预览排除项改动 (免管理员)      avr  移除本脚本添加的排除项
 #   wtinit       新 worktree 首次全量构建 (sccache 过首关 + 切回 incremental; 实测省 30%)
@@ -583,6 +585,17 @@ $FrostCells = @('exthot', 'idiom', 'place', 'history', 'name', 'name2', 'sport',
 # rime-frost others.txt 里不随包的分组。理由与清单见 dev.sh 的 FROST_OTHERS_EXCLUDE（几处要同步）。
 $FrostOthersExclude = @('著名表演艺术家')
 
+# 「瘦身数据包」开关: $env:AURORA_SLIM_DATA=1 时把**出厂默认关闭**的那几组数据从随包数据里剔掉。
+# 与 dev.sh 的 SLIM_DATA_PATHS、mac dev.sh 的同名变量是同一件事 —— 清单、实测收益 (包内合计
+# 6.41 MiB = 包体 24.7%, grammar 一项 4.15 MiB, tar+zstd19 单线程口径) 与全部后果都写在 dev.sh
+# 那边的注释里, 改一处要同步三处。默认不设 = 产物逐字节不变 (发版走默认, 只有明确要瘦身包才设)。
+# ⚠ 瘦身包里用户之后再打开这些功能会拿不到数据 (不崩、不报错, 只是功能不生效), 可从用户数据目录
+#   自行投放。⚠ 校验瘦身包时也要带同一个环境变量, 否则 Verify-DistData 会整体误报。
+$SlimDataPaths = @('schemas\pinyin\grammar', 'schemas\pinyin\ext', 'opencc', 'emoji',
+                   'schemas\aux_code', 'schemas\wubi86\wubi86_jidian_extra_district.dict.yaml')
+# 环境变量是字符串, 只认 "1" (与 dev.sh / mac dev.sh 的 `= 1` 同口径)。
+function Test-SlimData { return ($env:AURORA_SLIM_DATA -eq '1') }
+
 # 按分组标题过滤 rime-frost 的 OpenCC 杂项表 (同 dev.sh 的 strip_frost_sections):
 # 被剔除的组从其标题到下一个标题整段去掉, 其余行原样保留。按 LF 切行、按 LF 拼回。
 function Copy-FrostOthers ([string]$src, [string]$dst) {
@@ -710,7 +723,7 @@ function Assemble-Data ([string]$outdir = $BuildDevDir) {
     # 7. 辅助码表 (Rust 工具 gen_aux_code): 小鹤/自然码原样透传, 笔画表 YAML→`字=码` + 字集裁剪。
     #    -schema-out 另从同一份笔画数据产出「笔画」码表方案的词库 schemas\stroke\stroke.dict.yaml
     #    (权重取 rime-frost 单字字频; 方案文件 stroke.schema.toml 入库、随 data\ 一起复制)。
-    #    全拼默认辅助码引用的就是这个方案 (schema:stroke); stroke.txt 照旧产出, 供旧写法的用户 override。
+    #    全拼默认辅助码引用的就是这个方案 (schema:stroke), **不是** stroke.txt (理由见下方 7b)。
     #    与五笔同理: 产物只进 build 目录, 不入版本库 (rime-stroke 是 LGPL-3.0, 见 NOTICE.md)。
     #    功能出厂关闭, 故缺表只是「辅助码 / 笔画方案用不了」, 不影响其它一切 —— 用 Warn 不中断构建。
     $auxCache = "$CacheDir\aux-code"
@@ -723,6 +736,16 @@ function Assemble-Data ([string]$outdir = $BuildDevDir) {
             if ($LASTEXITCODE -ne 0) { Warn "辅助码表生成失败 (辅助码功能与笔画方案不可用)" }
         } finally { Pop-Location }
     } else { Warn "缺 .cache\aux-code\, 辅助码不可用 (运行 gen-data 下载)" }
+
+    # 7b. 去掉重复落盘的 schemas\aux_code\stroke.txt
+    # -schema-out 已从**同一次解析**产出 schemas\stroke\stroke.dict.yaml; stroke.txt 是同一份笔画
+    # 数据的另一种落盘形态 (47,287 行 vs 47,280 行, 差的是 YAML 头与尾部裁剪), 字与码逐字相同。
+    # 出厂全拼引用的是方案 `schema:stroke`, 故它随包分发纯属重复 (875,381 B)。gen_aux_code 的两条
+    # 输出都保持原样, 这里只去掉**随包**副本: 旧写法 files = ["aux_code/stroke.txt"] 仍成立, 但需
+    # 用户把该文件放进用户数据目录的同名路径 (覆盖解析优先用户目录, 见根 AGENTS.md)。
+    # ⚠ 与 dev.sh 的 7b、mac dev.sh 的 7b 同构, 三处必须一致。$ErrorActionPreference 是 Stop,
+    #   故缺文件时必须显式 SilentlyContinue (生成失败时本来就不会有这个文件)。
+    Remove-Item "$schemas\aux_code\stroke.txt" -Force -ErrorAction SilentlyContinue
 
     # 8. Emoji 候选扩展表: **原样复制**, 不做任何构建期转换 (与 5/6/7 的生成物刻意不同)。
     #    繁->简归一、撞键合并与二进制化全部推迟到用户本机首次启用时 —— 这样我们分发的是
@@ -753,6 +776,20 @@ function Assemble-Data ([string]$outdir = $BuildDevDir) {
             Copy-FrostOthers "$rimeFrost\opencc\others.txt" "$data\emoji\frost_others.txt"
         }
     } else { Warn "缺 .cache\rime-frost\opencc\, 白霜 emoji 模块不可用 (运行 gen-data 下载)" }
+
+    # 8c. 瘦身开关 (默认关): 剔除出厂默认关闭的那几组数据, 清单与理由见 $SlimDataPaths。
+    # 必须放在**全部组装动作之后**: 第 8/8b 步会重新创建 $data\emoji, 放在前面等于白删。
+    # 也放在「组装完成」统计之前, 让打印的文件数与实际随包内容一致。
+    if (Test-SlimData) {
+        Say "AURORA_SLIM_DATA=1: 剔除出厂默认关的数据..."
+        foreach ($slimRel in $SlimDataPaths) {
+            $slimPath = "$data\$slimRel"
+            if (Test-Path $slimPath) {
+                Gray "  - $slimRel"
+                Remove-Item $slimPath -Recurse -Force
+            } else { Gray "  - $slimRel (不存在,跳过)" }
+        }
+    }
 
     $cnt = (Get-ChildItem $data -Recurse -File).Count
     Gray "data/ 组装完成 ($cnt 文件)"
@@ -809,22 +846,35 @@ function Verify-DistData ([string]$outdir = $BuildDir) {
         @{ Path = "schemas\wubi86\wubi86_jidian_extra_district.dict.yaml"; Min = 10000 },
         # 辅助码表同为生成物、同样不入库。功能虽出厂关闭, 缺表的后果仍是「用户在设置里
         # 打开了却毫无反应」—— 门卫只 warn 一行日志, 用户看不到。故照样在此硬拦。
-        @{ Path = "schemas\aux_code\stroke.txt";     Min = 500000 },
+        # ⚠ stroke.txt 已不再随包 (出厂引用的是码表方案 schema:stroke; 见 Assemble-Data 的 7b),
+        #   所以这里**不再**校验它 —— 继续留着会让每个正常构建都红。双拼出厂引用的
+        #   flypy_full.txt 仍在包里, 继续拦。
         @{ Path = "schemas\aux_code\flypy_full.txt"; Min = 50000 },
         # 笔画方案词库同为 gen_aux_code 生成物; 全拼默认辅助码经 schema:stroke 引用它
         @{ Path = "schemas\stroke\stroke.dict.yaml"; Min = 500000 }
     )
     Say "`n校验发布数据完整性 → $data"
     foreach ($c in $checks) {
+        # 瘦身包 (AURORA_SLIM_DATA=1) 刻意不带出厂默认关的数据, 对应断言跟着跳过 ——
+        # 否则瘦身包永远过不了这道门禁。清单见 $SlimDataPaths (与 dev.sh / mac dev.sh 同源)。
+        if ((Test-SlimData) -and (($c.Path -eq 'schemas\aux_code\flypy_full.txt') -or
+                                  ($c.Path -eq 'schemas\wubi86\wubi86_jidian_extra_district.dict.yaml'))) {
+            Gray "  - $($c.Path) (瘦身包已剔除,跳过)"; continue
+        }
         $p = "$data\$($c.Path)"
         if (-not (Test-Path $p)) { ErrMsg "  ✗ 缺失: $($c.Path)"; $ok = $false; continue }
         $sz = (Get-Item $p).Length
         if ($sz -lt $c.Min) { ErrMsg "  ✗ 过小 (${sz}B < 期望 $($c.Min)B): $($c.Path)"; $ok = $false }
         else { Gray "  ✓ $($c.Path) ($([math]::Round($sz/1KB))KB)" }
     }
-    $octrie = @(Get-ChildItem "$data\opencc\*.octrie" -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 })
-    if ($octrie.Count -lt 1) { ErrMsg "  ✗ 缺失: opencc\*.octrie (简繁转换编译失败)"; $ok = $false }
-    else { Gray "  ✓ opencc\*.octrie ($($octrie.Count) 个)" }
+    # 简繁 .octrie 也属「出厂默认关」那组 (opencc 整目录), 瘦身包里必然没有。
+    if (Test-SlimData) {
+        Gray "  - opencc\*.octrie (瘦身包已剔除,跳过)"
+    } else {
+        $octrie = @(Get-ChildItem "$data\opencc\*.octrie" -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 0 })
+        if ($octrie.Count -lt 1) { ErrMsg "  ✗ 缺失: opencc\*.octrie (简繁转换编译失败)"; $ok = $false }
+        else { Gray "  ✓ opencc\*.octrie ($($octrie.Count) 个)" }
+    }
 
     if (-not $ok) {
         ErrMsg "`n发布数据校验失败! 上述文件缺失或异常会导致功能残缺。"

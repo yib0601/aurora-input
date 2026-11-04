@@ -144,7 +144,9 @@ gitignore），用于生成词库数据文件，其各自适用原项目的许�
 - **加工方式**: 由 `wind-tools/gen_aux_code` 按常用字集裁剪后写出两份构建产物，
   字集与每字的码序逐一相同。**码本身不作任何改动**（同字多码保留上游行序 = 优先级）。
   裁剪字集见下方 hanzi-chars 条目
-  - `data/schemas/aux_code/stroke.txt`：剥去 YAML 头、`<TAB>` 转 `=`（辅助码表格式）
+  - `data/schemas/aux_code/stroke.txt`：剥去 YAML 头、`<TAB>` 转 `=`（辅助码表格式）。
+    ⚠️ **本版起不随安装包分发**：它只是下面那份方案词库的重复落盘（同源同码），出厂方案已改用
+    `schema:stroke`。生成器仍产出它，供用户放进用户数据目录以兼容旧写法的 override
   - `data/schemas/stroke/stroke.dict.yaml`（笔画输入方案词库）：保留 librime 词库格式，
     另加一列权重。上游不带权重，权重取自 rime-frost（GPL-3.0，见上方条目）单字表
     `cn_dicts/8105` 与 `41448` 的字频（同字多音取最大，按对数压进 0~10000，无字频为 0）
