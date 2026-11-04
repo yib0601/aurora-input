@@ -58,16 +58,6 @@ Windows 与 Linux 均可原生构建，详见 [README](README.md)。
 > **本仓不单独发版。** 设置程序随 WindInput 的安装包与便携包一起分发，由主仓的
 > [Release 流程](https://github.com/huanfeng/WindInput/releases)构建并打包。
 
-### Git Hooks（首次克隆后建议激活）
-
-仓库自带 `.githooks/pre-commit`（提交前自动跑 `cargo fmt --check`），默认不生效，需一次性激活：
-
-```sh
-git config core.hooksPath .githooks
-```
-
-（仅影响本地 clone，不会随仓库自动传播。）
-
 ### 提交规范
 
 本项目使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范：

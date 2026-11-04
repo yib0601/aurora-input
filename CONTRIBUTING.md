@@ -64,31 +64,6 @@ macOS 额外需要：
 > （[wind-installer](https://github.com/huanfeng/wind-installer)）为独立仓库，
 > 构建脚本在其不存在时会自动跳过，不影响核心部分的构建。
 
-### Git Hooks（首次克隆后建议激活）
-
-仓库自带两个钩子，默认不生效，需一次性激活：
-
-```
-.\scripts\dev.ps1 hooks    # Windows
-scripts/dev.sh hooks       # Linux/macOS
-```
-
-（等价于 `git config core.hooksPath .githooks`，仅影响本地 clone，不会随仓库自动传播；
-每个 worktree/clone 都要各自激活一次。）
-
-| 钩子 | 跑什么 | 意图 |
-|------|--------|------|
-| `pre-commit` | 本次暂存的 `.rs` 逐个 `rustfmt --check` | 拦未格式化代码，免得等 CI 才暴露 |
-| `pre-push` | 本次推送涉及的 `.rs` fmt 检查 + 全工作区 `cargo clippy --keep-going --workspace --all-targets -- -D warnings` | 拦 CI 最常红的那一类（clippy） |
-
-两者都**只查本次改动的文件**做格式检查、**不跑 `cargo test`**：test 耗时是 clippy 的数倍，
-而 CI 红灯的主要来源是 clippy；门禁卡太久的唯一结局是 `--no-verify` 变成肌肉记忆。
-测试与跨平台行为仍以 `dev.ps1 ci` / `dev.sh ci` 与 CI 为准。误拦（例如别人的 WIP 波及工作区）
-时用 `git push --no-verify`。
-
-> 按下述「多会话共仓」的前提，格式检查刻意只覆盖**暂存/待推**的文件——查全工作区会把别人
-> 写到一半的文件一起拦下，而被拦的人既不该去 fmt 别人正在编辑的文件，也不该跳过门禁。
-
 ### 提交规范
 
 本项目使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/) 规范：

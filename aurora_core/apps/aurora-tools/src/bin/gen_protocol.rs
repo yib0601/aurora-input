@@ -1,7 +1,7 @@
 //! gen_protocol：协议常量**对账器**。
 //!
 //! 用法：
-//!   `gen_protocol --check`   与真源对账，任一处漂移则非零退出（CI / pre-push 用）
+//!   `gen_protocol --check`   与真源对账，任一处漂移则非零退出（CI 用）
 //!   `gen_protocol`           同上（无生成行为；保留裸调用是为了让人不必记两个形态）
 //!   可选 `--root <仓库根>`   默认自动向上查找
 //!

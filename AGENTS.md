@@ -242,7 +242,6 @@ log_level = "debug"   # 或 "trace"
 - **只用显式路径**：`git add <具体文件>`，禁止 `git add -A` / `git add .` / `git commit -a`；提交前 `git status` 确认暂存区只含自己改的文件。
 - **提交信息**：`type(scope): 摘要` + 中文正文；不带 `Co-Authored-By` / `Generated with` / `Constraint:` / `Confidence:` / `Tested:` 等 AI trailer；不带真实姓名、邮箱、内网地址、主机名与含用户名的本机路径（引用文件一律仓库相对路径）。
 - **格式化**：改 Rust 文件后，验证通过前必须 `cargo fmt`（在 `aurora_core/` 下）；**逻辑改动与 fmt 改动分开提交**。开始新一轮前先 `git status` + `cargo fmt`，清掉上一轮遗留的纯格式漂移。
-- **hooks**：`.githooks/pre-commit`（暂存 `.rs` 的 fmt 检查）与 `pre-push`（待推 `.rs` 的 fmt + 全工作区 clippy `-D warnings`）默认未激活，`./scripts/dev.sh hooks` 或 `.\scripts\dev.ps1 hooks` 激活一次；两者都不跑 `cargo test`，理由见 CONTRIBUTING。
 
 ## 构建 / 测试
 
@@ -403,7 +402,7 @@ cargo test -p aurora-rpc --test wind_setting_assets
 
 - host 即目标：`cargo check/test --workspace` 全 workspace 可直接跑（含 `aurora-coordinator`
   ——`windows` crate 是 `cfg(windows)` 依赖，非 Windows 上不参与编译）。脚本快捷键与
-  `dev.ps1` 对齐：`k`/`l`/`t`/`f`/`fmt-check`/`ci`/`hooks`/`clean`/`gd`/`r`。
+  `dev.ps1` 对齐：`k`/`l`/`t`/`f`/`fmt-check`/`ci`/`clean`/`gd`/`r`。
 - 模块映射：Win 的 `m1`(TSF DLL) ↔ mac 的 `m1`(`WindInput.app`，Swift/IMKit)；
   Win 的 `m2`(核心 exe) ↔ mac 的 `m2`(Rust 服务)。全构建 `1`/`d1`，系统安装 `p1`/`pd1`，
   安装包 `8`/`d8` → `.pkg`。

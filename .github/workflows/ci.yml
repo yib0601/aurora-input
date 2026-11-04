@@ -56,8 +56,6 @@ jobs:
       #
       # 同时断言「同方向不重码」：跨方向复用（0x0101 上行 KEY_EVENT / 下行 COMMIT_TEXT）
       # 是合法的，靠 dispatcher 上下文区分；同方向重码才是 bug。
-      #
-      # 与 .githooks/pre-push 第 5 步是同一条命令。
       - name: 协议常量对账
         working-directory: aurora_core
         run: cargo run -q -p aurora-tools --bin gen_protocol

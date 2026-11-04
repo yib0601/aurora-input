@@ -315,8 +315,8 @@ forwardKey 对某类应用确实无效时才值得做，目前没有这样的证
 `tests/codec_test.cpp` 里按 Rust 解码器写死的字节偏移。
 
 > **值由机器把关**：命令码与真源的一致性、以及「同方向不重码」，由
-> `cargo run -p aurora-tools --bin gen_protocol`（在 `aurora_core/` 下）校验，已接入 CI、
-> pre-push 与 `dev.sh ci`。
+> `cargo run -p aurora-tools --bin gen_protocol`（在 `aurora_core/` 下）校验，已接入 CI 与
+> `dev.sh ci`。
 >
 > **字节布局也由机器把关**：`tests/wire_vectors_test.cpp` 读
 > `aurora_core/crates/aurora-ipc/testdata/wire_vectors.json`（Rust 真源重录），三端消费同一份。

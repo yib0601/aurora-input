@@ -77,12 +77,7 @@ cargo test             # 运行测试
 AURORA_RPC_MOCK=1 cargo run
 ```
 
-提交前请运行 `cargo fmt`。仓库在 `.githooks/` 提供了 `pre-commit` 钩子（跑 `cargo fmt --check`），
-启用一次即可：
-
-```sh
-git config core.hooksPath .githooks
-```
+提交前请运行 `cargo fmt`。
 
 ## 命令行
 

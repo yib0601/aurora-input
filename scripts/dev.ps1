@@ -54,7 +54,7 @@
 #   verify-sign  验签 dist\ 下的产物 (发版门禁; 未配置签名时【也会失败】, 这是刻意的)
 #                签名会话有时限(2 小时), 过期时只警告不中断 —— 故发版前跑一次 verify-sign。
 #                模板 scripts\sign.local.ps1.example; 原理与取舍见 docs\design\code-signing.md。
-#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  hooks(=激活 git hooks)  clean
+#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  clean
 #   gd=gen-data  r=repl
 #     ↑ gd 支持 $env:AURORA_SLIM_DATA=1: 剔除「出厂默认关」的那几组数据 (瘦身包, 包内约 -8.25 MiB)。
 #       默认不设 = 行为完全不变; 清单、收益与后果见 Assemble-Data 上方的 $SlimDataPaths。
@@ -391,19 +391,11 @@ function Do-Test   { Say "`n正在运行 cargo test (全工作区)...";   Push-L
 function Do-Fmt    { Say "`n正在运行 cargo fmt...";                Push-Location $ProjectRoot; try { cargo fmt }                finally { Pop-Location } }
 function Do-FmtCheck { Say "`n正在运行 cargo fmt --check...";      Push-Location $ProjectRoot; try { cargo fmt --all -- --check } finally { Pop-Location } }
 function Do-Clean  { Say "`n正在运行 cargo clean...";              Push-Location $ProjectRoot; try { cargo clean }              finally { Pop-Location } }
-function Do-HooksInstall {
-    Say "`n激活 .githooks (git config core.hooksPath .githooks)..."
-    Push-Location $ProductRoot; try { git config core.hooksPath .githooks } finally { Pop-Location }
-    Say "已激活："
-    Gray "  pre-commit  暂存的 .rs 跑 rustfmt --check"
-    Gray "  pre-push    待推内容跑 fmt + clippy(-D warnings)，拦下 CI 会红的 lint"
-    Gray "  逃生口：git commit/push --no-verify"
-}
 
 # 协议常量对账：Rust 真源 ↔ C++（BinaryProtocol.h / ExtProtocol.h）↔ Swift。
 #
 # 拦住「改了 protocol.rs 忘了镜像」。那类漂移的症状是**某类消息静默丢失**：两侧值都合法、
-# 都能编译、都在跑，零报错。与 CI 的「协议常量对账」步、.githooks/pre-push 第 5 步、
+# 都能编译、都在跑，零报错。与 CI 的「协议常量对账」步、
 # dev.sh 的 do_proto_check 同一条命令。
 function Do-ProtoCheck {
     Say "`n[proto] 协议常量对账..."
@@ -418,7 +410,7 @@ function Do-ProtoCheck {
 # 日志里一个字都没有）。TSF 的 SendKeyEvent 直接 memcpy 结构体上送，
 # `static_assert(sizeof(...))` 连「两个 uint16_t 互换」都拦不住。
 #
-# 与 CI、.githooks/pre-push 第 6 步、dev.sh 的 do_wire_check 同一条命令。
+# 与 CI、dev.sh 的 do_wire_check 同一条命令。
 function Do-WireCheck {
     Say "`n[wire] 线格式真值表..."
     Push-Location $ProjectRoot
@@ -2432,7 +2424,7 @@ function Show-Menu {
 #   · 部署/卸载 (p* / u* / pb* / ub*) —— 要注册 COM、写注册表、装字体, 本机才是目标机;
 #   · 会改源码的 f/fmt —— cargo fmt 改的是编译机上的源码, 下次 /MIR 同步即被本机覆盖,
 #     白改且无声。(ci 走的是 Do-FmtCheck 只读, 故可以远程。)
-#   · 本机状态类 (av* / hooks / r / wtinit / clean) —— Defender 排除项、git hooks、交互
+#   · 本机状态类 (av* / r / wtinit / clean) —— Defender 排除项、交互
 #     repl, 以及「清哪台的 target」, 都只在本机有意义。
 $RemoteCommands = @(
     "1", "release", "d1", "dev",
@@ -2566,7 +2558,6 @@ function Dispatch ([string]$cmd, [string]$arg) {
         { $_ -in @("f", "fmt") }     { Do-Fmt;    $LASTEXITCODE; break }
         "fmt-check"                  { Do-FmtCheck; $LASTEXITCODE; break }
         "ci"                         { if (Do-Ci) { 0 } else { 1 }; break }
-        "hooks"                      { Do-HooksInstall; 0; break }
         "clean"                      { Do-Clean;  $LASTEXITCODE; break }
         { $_ -in @("gd", "gen-data") }  { if (Do-GenData) { 0 } else { 1 }; break }
         { $_ -in @("r", "repl") }       { Do-Repl $arg; 0; break }

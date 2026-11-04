@@ -37,7 +37,7 @@
 #   p1 / pd1     push 全部 build[_dev]/ → Windows 安装目录 (release / dev)
 #   pm1/pm2      push 单模块 (tsf/核心, release)
 #   pdm1/pdm2    push 单模块 (dev)
-#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  hooks(=激活pre-commit)  clean
+#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  clean
 #   sk=setting-check  st=setting-test  sg=setting-regen   aurora_core/apps/setting
 #     (交叉到 Windows 目标; st/sg 经 wine 执行。sg = 重生成检入的 capability 快照与 mockdata)
 #     ↑ 只改了 core 配置注册表的话, 先跑 cargo test -p aurora-rpc --test wind_setting_assets
@@ -375,15 +375,6 @@ do_fmt_check() {
     cd "$PROJECT_ROOT" && cargo fmt --all -- --check
 }
 
-do_hooks_install() {
-    say "\n激活 .githooks (git config core.hooksPath .githooks)..."
-    cd "$PRODUCT_ROOT" && git config core.hooksPath .githooks
-    say "已激活："
-    gray "  pre-commit  暂存的 .rs 跑 rustfmt --check"
-    gray "  pre-push    待推内容跑 fmt + clippy(-D warnings)，拦下 CI 会红的 lint"
-    gray "  逃生口：git commit/push --no-verify"
-}
-
 do_clean() {
     say "\n正在运行 cargo clean..."
     cd "$PROJECT_ROOT" && cargo clean
@@ -402,7 +393,7 @@ do_ci() {
 # 协议常量对账：Rust 真源 ↔ C++（BinaryProtocol.h / ExtProtocol.h）↔ Swift。
 #
 # 拦住「改了 protocol.rs 忘了镜像」。那类漂移的症状是**某类消息静默丢失**：两侧值都合法、
-# 都能编译、都在跑，零报错。与 CI 的「协议常量对账」步、.githooks/pre-push 第 5 步同一条命令。
+# 都能编译、都在跑，零报错。与 CI 的「协议常量对账」步同一条命令。
 do_proto_check() {
     say "\n[proto] 协议常量对账..."
     ( cd "$PROJECT_ROOT" && cargo run -q -p aurora-tools --bin gen_protocol )
@@ -415,7 +406,7 @@ do_proto_check() {
 # 日志里一个字都没有）。TSF 的 SendKeyEvent 直接 memcpy 结构体上送，
 # `static_assert(sizeof(...))` 连「两个 uint16_t 互换」都拦不住。
 #
-# 与 CI、.githooks/pre-push 第 6 步同一条命令。
+# 与 CI 同一条命令。
 do_wire_check() {
     say "\n[wire] 线格式真值表..."
     ( cd "$PROJECT_ROOT" && cargo test -q -p aurora-ipc --test wire_vectors )
@@ -2022,7 +2013,6 @@ dispatch() {
         f|fmt)            do_fmt ;;
         fmt-check)        do_fmt_check ;;
         ci)               do_ci ;;
-        hooks)            do_hooks_install ;;
         clean)            do_clean ;;
         gd|gen-data)      do_gen_data ;;
         r|repl)           do_repl "${2:-}" ;;

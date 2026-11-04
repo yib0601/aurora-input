@@ -24,7 +24,6 @@
 #   8  / d8           生成 .pkg 安装包 (release / dev): 全构建后打包 (含设置 app)
 #   8s / d8s          生成 .pkg (跳过重建, 直接用现有产物打包)
 #   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt-check+clippy+test)
-#   hooks             激活 .githooks/pre-commit (提交前自动 cargo fmt --check)
 #   clean
 #   gd=gen-data       下载词库 + 生成 unigram/pinyin_map + 组装 data/ → build_mac/data + 校验
 #   r=repl            候选 REPL (cargo run -p wind-repl -- <data>; data 默认 build_mac/data)
@@ -2193,7 +2192,7 @@ show_menu() {
     echo   "    8    生成安装包 (release)        d8    生成安装包 (dev)"
     echo   "    8s   跳过重建直接打包 (release)  d8s   跳过重建直接打包 (dev)"
     printf "\033[33m  代码质量:\033[0m\n"
-    echo   "    k=check  l=clippy  t=test  f=fmt  fmt-check  ci  hooks  clean"
+    echo   "    k=check  l=clippy  t=test  f=fmt  fmt-check  ci  clean"
     printf "\033[33m  数据 / 实测:\033[0m\n"
     echo   "    gd=gen-data  r=repl(本机)"
     printf "\033[33m  macOS 便利命令:\033[0m\n"
@@ -2234,7 +2233,6 @@ dispatch() {
         f|fmt)     ( cd "$RUST_DIR" && bold "==> cargo fmt" && cargo fmt ) ;;
         fmt-check) ( cd "$RUST_DIR" && bold "==> cargo fmt --check" && cargo fmt --all -- --check ) ;;
         ci)        do_ci ;;
-        hooks)     do_hooks_install ;;
         clean)     do_cargo clean ;;
         gd|gen-data) apply_variant release; do_gendata && verify_dist_data ;;
         run)       apply_variant release; do_run ;;
@@ -2246,15 +2244,6 @@ dispatch() {
 }
 
 do_cargo() { bold "==> cargo $1 --workspace"; ( cd "$RUST_DIR" && cargo "$1" --workspace ); }
-
-# 激活仓库自带 pre-commit hook (提交前跑 cargo fmt --check)。对齐 dev.ps1 Do-HooksInstall。
-# 纯本地 git config, 不随仓库传播 —— 每个 clone/worktree 都要单独激活一次。
-do_hooks_install() {
-    bold "==> 激活 .githooks/pre-commit (git config core.hooksPath .githooks)"
-    ( cd "$REPO_DIR" && git config core.hooksPath .githooks ) || return $?
-    chmod +x "$REPO_DIR/.githooks/pre-commit" 2>/dev/null || true
-    info "已激活：提交前将自动跑 cargo fmt --check"
-}
 
 do_ci() {
     ( cd "$RUST_DIR" && bold "==> cargo fmt --check" && cargo fmt --all -- --check ) || return $?
