@@ -10,7 +10,11 @@
 #      全程零报错）；
 #   4. 关键文件齐全、词库不是残缺的、compat.toml 零规则；
 #   5. 没有 group/other 可写的文件；maintainer 脚本语法通过；
-#   6. %post / %postun 里的 pkill 模式确实能匹配到包内那个路径（防「升级不换二进制」）。
+#   6. %post / %postun 里的 pkill 模式确实能匹配到包内那个路径（防「升级不换二进制」）；
+#   7. 三个 ELF 都已被 strip（符号表白占磁盘；打包脚本的 strip 漏了就靠这条红）。
+#
+# 瘦身包：以 `AURORA_SLIM_DATA=1` 构建的包不含出厂默认关的那几组数据，校验时**也要带同一个
+# 变量**，否则「出厂默认关数据」相关的断言会整体误报（见下方 slim_skip）。
 #
 # 与 verify-deb.sh 的分工：那边查 GLIBC 符号上限（因为 deb 要在 22.04 基线之上运行）；
 # rpm 的基线就是构建机本身的 glibc —— 它随发行版走，写死一个上限反而会拦住正当的重建。
@@ -113,8 +117,22 @@ fi
 
 # ── 词库完整性（同 dev.sh verify_dist_data 的口径，只取最能说明「下载/生成失败」的几个）──
 D="$R/usr/lib/aurora-input/data"
+# 瘦身包（`AURORA_SLIM_DATA=1` 构建的产物）刻意不带「出厂默认关」的那几组数据，对它们的断言
+# 必须跳过——否则校验会在这种包上整体误报，而包本身是对的。**校验瘦身包时同样要带这个变量**：
+#   AURORA_SLIM_DATA=1 scripts/linux/verify-rpm.sh dist/linux/xxx.rpm
+# 路径清单与 scripts/dev.sh 的 SLIM_DATA_PATHS 同步（同构实现散在三个脚本里，改一处要改三处）。
+SLIM="${AURORA_SLIM_DATA:-}"
+slim_skip() {
+    [[ "$SLIM" = 1 ]] || return 1
+    case "$1" in
+        opencc/*) return 0 ;;                                       # 出厂关：简繁转换
+        schemas/wubi86/wubi86_jidian_extra_district.dict.yaml) return 0 ;;  # 出厂不勾选：行政区划
+        *) return 1 ;;
+    esac
+}
 check_min() {
     local p="$D/$1" min="$2"
+    if slim_skip "$1"; then ok "词库 $1（瘦身包已剔除,跳过）"; return; fi
     if [[ ! -f "$p" ]]; then bad "词库缺失: $1"; return; fi
     local sz; sz=$(stat -c%s "$p")
     if (( sz < min )); then bad "词库过小(${sz}B < ${min}B): $1"; else ok "词库 $1 (${sz}B)"; fi
@@ -165,6 +183,26 @@ while IFS= read -r f; do
     ok "$rel ($desc)"
 done < <(find "$R" -type f | sort)
 (( n >= 3 )) || bad "只找到 $n 个 ELF（期望 aurora_input / aurora_setting / libaurorainput.so）"
+
+# ── 符号表必须已摘除（防回归）──
+# 打包脚本现在显式 `strip --strip-all`：cargo 的 `strip = true` 之外再兜一层，因为 rpm 的
+# brp-strip 只做 `-g`（留 .symtab）、dpkg 侧根本不做 strip。历史产物实测残留 4.76 MiB 符号表，
+# 而它装到用户机器上只白占磁盘——这类包装得上、跑得动，只能靠门禁拦。
+# ⚠ 判据取 `not stripped`：file(1) 对未 strip 的 ELF 输出是 `..., not stripped`，反向去搜
+# `stripped` 会被这个子串命中、把「没 strip」误判成「已 strip」。
+STRIP_CHECK="usr/lib/aurora-input/aurora_input usr/lib/aurora-input/aurora_setting"
+if [[ -n "$ADDON" ]]; then
+    ADDON_REL="${ADDON#"$R"/}"
+    STRIP_CHECK="$STRIP_CHECK $ADDON_REL"
+fi
+for f in $STRIP_CHECK; do
+    [[ -f "$R/$f" ]] || continue          # 缺文件已由上面的关键文件检查报过，不重复报
+    if file -b "$R/$f" | grep -q 'not stripped'; then
+        bad "$f 带符号表（未 strip；打包脚本的 strip --strip-all 没生效？）"
+    else
+        ok "$f 已 strip"
+    fi
+done
 
 # 手工核对几个「不查就会在别人机器上炸」的 NEEDED：它们不是来自我们自己的包，
 # 必须由 Requires（或 Requires 的传递闭包）提供。这里只查本机装不装得上不出来的几个：

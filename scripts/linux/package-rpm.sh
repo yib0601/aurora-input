@@ -129,6 +129,29 @@ install -Dm644 "$REPO/LICENSE"   "$S/usr/share/licenses/aurora-input/LICENSE"
 install -Dm644 "$REPO/NOTICE.md" "$S/usr/share/licenses/aurora-input/NOTICE.md"
 install -Dm644 "$REPO/aurora_linux/README.md" "$S/usr/share/doc/aurora-input/README.md"
 
+# ── 显式 strip（在权限归一之前；strip 不改权限位，两件事互不影响）──
+# 为什么不指望上游：cargo 的 `[profile.release] strip = true` 通常已经把符号摘干净，但这条链上
+# 有两个**静默**漏口：
+#   1. rpm 自己的 brp-strip 只做 `strip -g`（/usr/lib/rpm/brp-strip 里那条就是 `$STRIP -g`），
+#      即剥调试信息、**保留 .symtab** —— 所以「rpm 构建时会 strip」这句话只对了一半；
+#   2. dpkg 侧完全不做 strip（build-deb.sh 里同样显式做一遍）。
+# 实测历史产物：aurora_setting 带着 .symtab/.strtab 共 4.76 MiB（21,072,944 → 16,083,952 B，
+# −23.7%），装到用户机器上白占磁盘。故这里明确用 --strip-all，而不是 -g（-g 正是上面那个漏口的形态）。
+if command -v strip >/dev/null 2>&1; then
+    ADDON_SO="$(find "$S/usr/lib64/fcitx5" "$S/usr/lib/fcitx5" -name libaurorainput.so 2>/dev/null \
+        | head -1 || true)"
+    ELF_FILES=("$S/usr/lib/aurora-input/aurora_input" "$S/usr/lib/aurora-input/aurora_setting")
+    if [ -n "$ADDON_SO" ]; then ELF_FILES+=("$ADDON_SO"); fi
+    for f in "${ELF_FILES[@]}"; do
+        [ -f "$f" ] || continue
+        before="$(stat -c%s "$f")"
+        strip --strip-all "$f"
+        gray "strip $(basename "$f")：${before} → $(stat -c%s "$f") B"
+    done
+else
+    gray "未找到 strip（binutils），跳过显式 strip —— 只能依赖 cargo 的 strip=true"
+fi
+
 # 权限归一：`cp -a` 把宿主 umask（002 → 0775/0664）原样带进包，装到系统里就是 root 组可写。
 # 目录 755；带执行位的文件 755、其余 644（符号链接不动）。
 find "$S" -type d -exec chmod 755 {} +
@@ -150,11 +173,22 @@ sed -e "s/@VERSION@/$VERSION/g" \
     -e "s/@CHANGELOG_DATE@/$DATE_RFC/g" \
     "$REPO/scripts/linux/aurora-input.spec.in" >"$SPEC_DIR/aurora-input.spec"
 
+# 载荷压缩器：rpm 6 的默认是 zstd -19（`rpm --eval '%{_binary_payload}'` → `w19.zstdio`）。
+# 换 xz -9 的实测收益（本机把真实 payload 79,658,615 B / 147 文件各打一遍 rpm，同一个 rpmbuild）：
+#   zstd19 → 27,226,008 B；xz -9 → 24,621,009 B ⇒ 省 2,604,999 B ≈ 2.48 MiB（−9.6%）；
+#   与独立复测的口径（27.25 MB → 24.68 MB，−9.4%）吻合。
+# 代价只有**安装时一次性解包变慢**：同一 payload 实测 0.44 s → 1.37 s（rpm2cpio | cpio）。
+# 服务启动时间不受影响——解包发生在安装期，不是每次启动；而载荷体积直接等于所有人的下载量，
+# 这 9.6% 值这个代价。
+# 语法 `w<级别>.<压缩器><后缀>`：与默认的 `w19.zstdio` 同一格式族。本机 rpm 6.0.2 认这一档 ——
+# `rpm -qp --qf '%{PAYLOADCOMPRESSOR} %{PAYLOADFLAGS}\n'` 输出 `xz 9`，解出的文件 sha256 与源一致。
+# 若哪天 rpm 换了版本不认，回落 `w6.xzdio`（更快、略大）。
 rpmbuild -bb "$SPEC_DIR/aurora-input.spec" \
     --define "_topdir $WORK_DIR/rpmbuild" \
     --define "buildroot_src $S" \
     --define "debug_package %{nil}" \
     --define "_build_id_links none" \
+    --define "_binary_payload w9.xzdio" \
     --quiet
 
 RPM_BUILT="$(find "$WORK_DIR/rpmbuild/RPMS" -name 'aurora-input-*.rpm' -type f | head -1)"

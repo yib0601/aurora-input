@@ -8,7 +8,11 @@
 #   2. 包内每个 ELF 的机器类型与架构一致（防构建脚本悄悄用了别的 target）；
 #   3. 动态符号引用的 glibc 版本不超过 2.35（Depends 写的是 libc6 >= 2.35，超了就是谎报）；
 #   4. 关键文件齐全、词库不是残缺的；
-#   5. 没有 group/other 可写的文件；maintainer 脚本能过 sh -n。
+#   5. 没有 group/other 可写的文件；maintainer 脚本能过 sh -n；
+#   6. 三个 ELF 都已被 strip（符号表白占磁盘；dpkg 侧不做 strip，全靠打包脚本显式做）。
+#
+# 瘦身包：以 `AURORA_SLIM_DATA=1` 构建的包不含出厂默认关的那几组数据，校验时**也要带同一个
+# 变量**，否则相关断言会整体误报（见下方 slim_skip）。
 set -euo pipefail
 
 DEB="${1:?用法: verify-deb.sh <deb> [amd64|arm64]}"
@@ -90,8 +94,22 @@ fi
 
 # 词库完整性（同 dev.sh verify_dist_data 的口径，只取最能说明「下载/生成失败」的几个）
 D="$R/usr/lib/aurora-input/data"
+# 瘦身包（`AURORA_SLIM_DATA=1` 构建的产物）刻意不带「出厂默认关」的那几组数据，对它们的断言
+# 必须跳过——否则校验会在这种包上整体误报，而包本身是对的。**校验瘦身包时同样要带这个变量**：
+#   AURORA_SLIM_DATA=1 scripts/linux/verify-deb.sh dist/linux/xxx.deb
+# 路径清单与 scripts/dev.sh 的 SLIM_DATA_PATHS 同步（同构实现散在三个脚本里，改一处要改三处）。
+SLIM="${AURORA_SLIM_DATA:-}"
+slim_skip() {
+    [[ "$SLIM" = 1 ]] || return 1
+    case "$1" in
+        opencc/*) return 0 ;;                                       # 出厂关：简繁转换
+        schemas/wubi86/wubi86_jidian_extra_district.dict.yaml) return 0 ;;  # 出厂不勾选：行政区划
+        *) return 1 ;;
+    esac
+}
 check_min() {
     local p="$D/$1" min="$2"
+    if slim_skip "$1"; then ok "词库 $1（瘦身包已剔除,跳过）"; return; fi
     if [[ ! -f "$p" ]]; then bad "词库缺失: $1"; return; fi
     local sz; sz=$(stat -c%s "$p")
     if (( sz < min )); then bad "词库过小(${sz}B < ${min}B): $1"; else ok "词库 $1 (${sz}B)"; fi
@@ -131,6 +149,25 @@ while IFS= read -r f; do
     fi
 done < <(find "$R" -type f \( -perm /111 -o -name '*.so*' \))
 (( n >= 3 )) || bad "只找到 $n 个 ELF（期望 aurora_input / aurora_setting / libaurorainput.so）"
+
+# ── 符号表必须已摘除（防回归）──
+# dpkg 这条链**完全不 strip**，全靠 build-deb.sh 里显式那句 `strip --strip-all`；漏了就静默地把
+# 符号表塞进包（历史产物实测 4.76 MiB）。这里把它钉成硬门禁。
+# ⚠ 判据取 `not stripped`：file(1) 对未 strip 的 ELF 输出是 `..., not stripped`，反向去搜
+# `stripped` 会被这个子串命中、把「没 strip」误判成「已 strip」。
+STRIP_CHECK="usr/lib/aurora-input/aurora_input usr/lib/aurora-input/aurora_setting"
+if [[ -n "$addon" ]]; then
+    ADDON_REL="${addon#"$R"/}"
+    STRIP_CHECK="$STRIP_CHECK $ADDON_REL"
+fi
+for f in $STRIP_CHECK; do
+    [[ -f "$R/$f" ]] || continue          # 缺文件已由上面的关键文件检查报过，不重复报
+    if file -b "$R/$f" | grep -q 'not stripped'; then
+        bad "$f 带符号表（未 strip；build-deb.sh 的 strip --strip-all 没生效？）"
+    else
+        ok "$f 已 strip"
+    fi
+done
 
 # 权限
 # 先取结果再判断：`find | grep -q` 在 pipefail 下，grep 一匹配就退出、find 吃 SIGPIPE(141)，

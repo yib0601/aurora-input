@@ -77,6 +77,26 @@ install -Dm644 $SRC_DIR/aurora_linux/README.md "$S/usr/share/doc/aurora-input/RE
 install -Dm644 $SRC_DIR/scripts/linux/pkg/fcitx5-notifications.conf \
     "$S/etc/xdg/fcitx5/conf/notifications.conf"
 
+# ── 显式 strip（在权限归一之前；strip 不改权限位）──
+# dpkg 这条链**完全不 strip**：cargo 的 `[profile.release] strip = true` 是唯一防线，一旦某次
+# 构建命中别的 profile（debuginfo 打开、或产物来自别的 target 目录），符号表就整份进包，且全程
+# 零提示。实测历史产物：aurora_setting 留下 .symtab/.strtab 共 4.76 MiB（21,072,944 →
+# 16,083,952 B，−23.7%）。所以这里显式做一遍，用 --strip-all。
+# （rpm 那边同样显式做——它的 brp-strip 只做 `-g`，同样留 .symtab。见 package-rpm.sh。）
+if command -v strip >/dev/null 2>&1; then
+    DEB_ADDON_SO="$(find "$S/usr/lib" -name libaurorainput.so -path '*fcitx5*' | head -1)"
+    ELF_FILES=("$S/usr/lib/aurora-input/aurora_input" "$S/usr/lib/aurora-input/aurora_setting")
+    if [ -n "$DEB_ADDON_SO" ]; then ELF_FILES+=("$DEB_ADDON_SO"); fi
+    for f in "${ELF_FILES[@]}"; do
+        [ -f "$f" ] || continue
+        before="$(stat -c%s "$f")"
+        strip --strip-all "$f"
+        echo "strip $(basename "$f")：${before} → $(stat -c%s "$f") B"
+    done
+else
+    echo "未找到 strip（binutils），跳过显式 strip —— 只能依赖 cargo 的 strip=true"
+fi
+
 # 权限归一：`cp -a` 把宿主 umask（002 → 0775/0664）原样带进包，装到系统里就是 root 组可写。
 # 目录 755；带执行位的文件 755、其余 644（符号链接不动）。
 find "$S" -type d -exec chmod 755 {} +
@@ -153,4 +173,11 @@ exit 0
 POSTRM
 chmod 755 "$S/DEBIAN/postrm"
 
-dpkg-deb --root-owner-group --build "$S" "$OUT_DIR/aurora-input_${DEB_VERSION}_${ARCH}.deb"
+# 载荷压缩：dpkg-deb 的默认是 zstd（22.04 的 dpkg 1.21 起），换 xz -9。收益与代价同 rpm 侧
+# （那组数字是在本机对同一份 79.8 MB / 147 文件 payload 打 rpm 实测的，deb 载荷内容基本相同：
+# zstd19 27,226,008 B → xz -9 24,621,009 B，省 ≈2.48 MiB（−9.6%）；解包 0.44 s → 1.37 s，
+# 一次性、发生在安装期，不影响服务启动）。`-Zxz` 与 `-z9` 是 dpkg-deb 一直支持的选项
+# （压缩类型 + 级别）。⚠ 本机是 Fedora、没装 dpkg-deb，这两个 flag 无法在本机实测，实际由 CI
+# 的 ubuntu-22.04 runner / package-deb.sh 容器执行；发版前值得用 `dpkg-deb --info` 核一下压缩器。
+# `--root-owner-group` 保持原样：包内属主必须是 root:root，否则 dpkg 装出来的文件归构建用户。
+dpkg-deb --root-owner-group -Zxz -z9 --build "$S" "$OUT_DIR/aurora-input_${DEB_VERSION}_${ARCH}.deb"
