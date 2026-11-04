@@ -227,8 +227,9 @@ impl Coordinator {
         coordinator.send_candidate_font(&coordinator.rt().config);
         coordinator.push_theme(&name, coordinator.resolve_theme_dark());
         // 下发候选布局方向（ui.candidate.layout）。
-        let orientation =
-            aurora_config::Orientation::from_layout_str(&coordinator.rt().config.ui.candidate.layout);
+        let orientation = aurora_config::Orientation::from_layout_str(
+            &coordinator.rt().config.ui.candidate.layout,
+        );
         let _ = coordinator.ui_tx.send(UiCommand::SetCandidateLayout {
             vertical: orientation.vertical,
             rotated: orientation.rotated(),
