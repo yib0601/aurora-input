@@ -27,7 +27,7 @@
 // msvc target clippy）仍然照常查死代码，真长出无用实现照样会被点名。
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use aurora_ui_types::diag::CaretOverlayView;
+use aurora_ui_types::caret_overlay::CaretOverlayView;
 
 #[cfg(windows)]
 use crate::text::dwrite::TextRenderer;
@@ -198,7 +198,7 @@ impl CaretOverlay {
     }
 }
 
-/// 系统 DPI 缩放因子（与 `input_diag_hud` / `status_tip` 同源——本 crate 没有共享入口）。
+/// 系统 DPI 缩放因子（与 `status_tip` 同源——本 crate 没有共享入口）。
 #[cfg(windows)]
 fn dpi_scale() -> f32 {
     use windows::Win32::Foundation::HWND;
@@ -318,7 +318,7 @@ impl Canvas<'_> {
 mod tests {
     use super::*;
     // 只有测试构造样例时用到；放在顶层会让非测试构建报未使用导入（CI 的 clippy 按 -D warnings 跑）。
-    use aurora_ui_types::diag::RectVerdict;
+    use aurora_ui_types::caret_overlay::RectVerdict;
 
     fn view() -> CaretOverlayView {
         CaretOverlayView {

@@ -43,6 +43,13 @@ pub const CMD_INPUT_STATE_REPORT: u16 = 0x0213;
 /// （见 `TextService.cpp` 的 `focusIpcT0` 计时），首字延迟直接挂在它身上；本命令要做
 /// 三次窗口类名查询 + band 查询，塞进去等于给每次焦点切换加固定开销。故独立成命令、
 /// 异步发送，且由 [`CONFIG_KEY_DIAG_SNAPSHOT`] 门控——HUD 关闭时 DLL 一次都不采集。
+///
+/// ⚠ **消费方「输入诊断 HUD」已整块删除**：core 不再推开 [`CONFIG_KEY_DIAG_SNAPSHOT`]，
+/// 因此 DLL 侧采集器恒为默认关、本命令不会再被发出。命令码 / 载荷布局**保留未删**——
+/// 它与 C++ `BinaryProtocol.h` 的 `static_assert` 与
+/// `diag_snapshot_head_layout_is_frozen` 是冻结线格式的一对闸门，删一侧就得同步改
+/// 跨语言两侧（C++ 在本机编不了，另立任务处理）。core 侧对应消费点已删（不再 override
+/// `handle_diag_snapshot`），即便有陈旧 DLL 发来也只是落进 trait 默认空实现。
 pub const CMD_DIAG_SNAPSHOT: u16 = 0x0214;
 
 /// `CMD_FOCUS_LOST` 载荷的 reason 字段（第 9 字节）。与 C++ `BinaryProtocol.h` 的
@@ -1821,7 +1828,7 @@ pub const EVENT_KEY_DOWN: u8 = 0;
 pub const EVENT_KEY_UP: u8 = 1;
 
 #[cfg(test)]
-mod input_diag_wire_tests {
+mod input_scope_wire_tests {
     use super::*;
 
     #[test]

@@ -1,7 +1,7 @@
 //! 正向协议：协调器 → 渲染端的 [`UiCommand`]，及全局热键条目、翻页器 tag 常量。
 
 use crate::candidate::CandidateItem;
-use crate::diag::{CaretOverlayView, InputDiagView};
+use crate::caret_overlay::CaretOverlayView;
 use crate::menu::{MenuAnchor, MenuItemSpec, MenuPointerEvent};
 use crate::softkeyboard::SoftKeyCap;
 use crate::status_tip::StatusTipPlacement;
@@ -34,11 +34,6 @@ pub enum UiCommand {
         page: usize,
         /// 总页数（含动态加载估计）
         total_pages: usize,
-        /// 展开态的网格版式；`None` = 单行（单列）的普通候选窗。
-        ///
-        /// 为 `Some` 时 `candidates` / `selected` / `hover` 都是网格内的平铺下标，见
-        /// [`CandidateGrid`]；`page` / `total_pages` 照旧，此时读作「高亮行 / 总行数」。
-        grid: Option<crate::candidate::CandidateGrid>,
         caret_x: i32,
         caret_y: i32,
         /// 光标高度（用于上翻时定位到光标上方）
@@ -78,19 +73,11 @@ pub enum UiCommand {
     },
     /// 隐藏状态提示气泡（常驻模式失焦/切走输入法时）。
     HideStatusTip,
-    /// 显示/更新输入诊断 HUD（右键「高级」开）。惰性创建，可拖动，双击复制。
-    ShowInputDiag(InputDiagView),
     /// 候选窗定位调试浮窗：把宿主上报的几何与算出的锚点叠在屏幕上画出来。
     /// 仅 Dev 变体的菜单可开，默认关闭。
     ShowCaretOverlay(Box<CaretOverlayView>),
     /// 隐藏定位调试浮窗。
     HideCaretOverlay,
-    /// 隐藏输入诊断 HUD。
-    HideInputDiag,
-    /// 复制输入诊断 HUD 当前显示的文本到剪贴板（右键菜单）。
-    /// 走 UI 线程而非协调器直接写剪贴板：文本以**实际渲染的行**为准（含分区隐藏结果），
-    /// 那份只有 UI 侧有。
-    CopyInputDiagText,
     /// 更新常驻工具栏状态（中英/方案/标点/全半角）
     UpdateToolbar(ToolbarState),
     /// 隐藏工具栏

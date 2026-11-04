@@ -214,7 +214,7 @@ mod tests {
             s.legacy_put_common_char("槮", true).unwrap();
             s.legacy_put_common_char("的", false).unwrap();
             s.legacy_put_charset("rare", "key: rare\n").unwrap();
-            s.legacy_put_completions(&[(CompletionKind::UrlHistory, "example.com".into(), 3, 9)])
+            s.legacy_put_completions(&[(CompletionKind::QuickHistory, "example.com".into(), 3, 9)])
                 .unwrap();
             s.legacy_put_daily_stat(
                 "2026-10-14",
@@ -263,7 +263,7 @@ mod tests {
             Some("key: rare\n")
         );
         let c = s
-            .get_completion(CompletionKind::UrlHistory, "example.com")
+            .get_completion(CompletionKind::QuickHistory, "example.com")
             .unwrap()
             .unwrap();
         assert_eq!((c.count, c.last_used), (3, 9));

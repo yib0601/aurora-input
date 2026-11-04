@@ -14,13 +14,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{CaretData, KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, caret_source};
 use aurora_ui_types::UiCommand;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_PERIOD: u32 = 0xBE;
 const VK_NUMPAD1: u32 = 0x61;
@@ -68,7 +68,6 @@ fn open(
     cfg.schema.available = vec!["wubi86_pinyin".to_string()];
     cfg.schema.active = "wubi86_pinyin".to_string();
     cfg.input.default.chinese_mode = true;
-    cfg.input.symbol.smart_mode = false;
     cfg.input.association.kind = "word".to_string();
     cfg.input.association.mode = "one_shot".to_string();
     // 非嵌入：联想态才会往编码栏写「联想输入」标识（嵌入模式下不给）。
@@ -129,35 +128,6 @@ fn next_input_follows_caret(c: &Coordinator, rx: &std::sync::mpsc::Receiver<UiCo
         400,
         "候选窗应跟随新光标，实际下发位置 {xs:?}"
     );
-}
-
-/// ★ 现场复现：智能符号 `hold_composition` 下按标点，联想必须退出、候选窗必须隐藏，
-/// 下一次输入的候选窗位置跟随光标。
-#[test]
-fn smart_hold_punct_exits_assoc() {
-    if !dict_ready() {
-        eprintln!("!!! 跳过：build_dev 词库不存在");
-        return;
-    }
-    let (c, rx) = open(|cfg| {
-        cfg.input.symbol.smart_mode = true;
-        cfg.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-    });
-    let hits = enter_assoc(&c);
-    let _ = rx.try_iter().count();
-    let act = c.handle_key_event(&key(VK_PERIOD));
-    match &act {
-        KeyAction::HoldComposition { text, .. } => {
-            assert!(
-                hits.iter().all(|h| !text.contains(h.as_str())),
-                "不该顶屏联想候选：{text:?}"
-            );
-        }
-        other => panic!("前提：智能符号 hold 出标点，实得 {other:?}"),
-    }
-    assert!(c.debug_assoc_texts().is_empty(), "标点之后联想态必须退出");
-    assert!(hid(&rx), "联想窗必须随标点收起");
-    next_input_follows_caret(&c, &rx);
 }
 
 /// 普通标点：联想候选清掉之外，编码栏的「联想输入」标识也得清掉——与 Esc 取消一致。
@@ -249,47 +219,6 @@ fn softkeyboard_key_exits_assoc() {
     );
 }
 
-/// 联想态下按右括号**跳出**已插入的配对：跳出语义保留（`MoveCursorRight`），但占位组合
-/// 不能被晾在宿主里——`MoveCursorRight` 不碰组合，必须另行收口：下一个透传键改判为
-/// 「收组合 + 交还按键」。
-#[test]
-fn right_bracket_jump_out_in_assoc_releases_placeholder() {
-    if !dict_ready() {
-        eprintln!("!!! 跳过：build_dev 词库不存在");
-        return;
-    }
-    let (c, _rx) = open(|cfg| {
-        cfg.input.auto_pair.chinese = true;
-        cfg.input.auto_pair.jump_out_keys = vec!["right_symbol".into()];
-    });
-    // Shift+9 = 「（」，自动补「）」，光标落在中间。
-    let act = c.handle_key_event(&KeyEventData {
-        modifiers: aurora_ipc::protocol::MOD_SHIFT,
-        ..key(0x39)
-    });
-    assert!(
-        matches!(act, KeyAction::InsertTextWithCursor { .. }),
-        "前提：左括号配对插入，实得 {act:?}"
-    );
-    enter_assoc(&c);
-    // 走按键唯一出口（`handle_key_event_policed`）：两道占位收口挂在那里。
-    let act = c.handle_key_event_policed(&KeyEventData {
-        modifiers: aurora_ipc::protocol::MOD_SHIFT,
-        ..key(0x30)
-    });
-    assert!(
-        matches!(act, KeyAction::MoveCursorRight { .. }),
-        "前提：右括号跳出配对，实得 {act:?}"
-    );
-    assert!(c.debug_assoc_texts().is_empty(), "联想应已退出");
-    // 下一个透传键（←）：占位组合若还悬着，必须顺带收掉。
-    let act = c.handle_key_event_policed(&key(0x25));
-    assert!(
-        matches!(act, KeyAction::ClearCompositionThenPassThrough),
-        "占位组合应被收口，实得 {act:?}"
-    );
-}
-
 /// 联想态 + CapsLock 开着按标点：占位组合不能被晾着——要么服务端出标点（结束组合），
 /// 要么按 CapsLock 的英文语义交还宿主时**顺带收组合**；绝不能是裸透传。联想退出。
 #[test]
@@ -312,40 +241,4 @@ fn capslock_punct_in_assoc_is_committed_by_server() {
         "占位组合必须收口，实得 {act:?}"
     );
     assert!(c.debug_assoc_texts().is_empty(), "联想应已退出");
-}
-
-/// 智能符号 press1 收掉联想后，时限内同键 press2 照常换英文形，联想不会回来。
-#[test]
-fn smart_symbol_press2_after_assoc_exit() {
-    if !dict_ready() {
-        eprintln!("!!! 跳过：build_dev 词库不存在");
-        return;
-    }
-    for method in [
-        aurora_config::config::SmartMethod::DeleteReplace,
-        aurora_config::config::SmartMethod::HoldComposition,
-    ] {
-        let (c, _rx) = open(|cfg| {
-            cfg.input.symbol.smart_mode = true;
-            cfg.input.symbol.smart_method = method;
-        });
-        enter_assoc(&c);
-        let first = c.handle_key_event_policed(&key(VK_PERIOD));
-        assert!(
-            c.debug_assoc_texts().is_empty(),
-            "{method:?}：press1 后联想退出"
-        );
-        let second = c.handle_key_event_policed(&KeyEventData {
-            prev_char: '。' as u16,
-            ..key(VK_PERIOD)
-        });
-        assert!(
-            matches!(
-                second,
-                KeyAction::ReplaceBackward { .. } | KeyAction::CommitReplacingHeld { .. }
-            ),
-            "{method:?}：press2 应换英文形，press1={first:?} press2={second:?}"
-        );
-        assert!(c.debug_assoc_texts().is_empty(), "{method:?}：联想不得回来");
-    }
 }

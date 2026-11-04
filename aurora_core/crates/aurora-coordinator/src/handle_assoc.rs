@@ -1126,8 +1126,8 @@ mod tests {
     //! 二三候选/数字选词走的都是主输入路的既有分支，验它们必须有真实词库，
     //! 那组在 `tests/assoc_end_to_end.rs`。
     use super::*;
-    use std::sync::Arc;
     use aurora_config::Config;
+    use std::sync::Arc;
 
     /// 智能联想档 + 标点源（标点源不依赖词库，headless 下也出得来）。
     fn coord_smart() -> Arc<Coordinator> {
@@ -1144,7 +1144,6 @@ mod tests {
     fn coord_with(tweak: impl FnOnce(&mut Config)) -> Arc<Coordinator> {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
         cfg.input.association.kind = "smart".to_string();
         cfg.input.association.punct = true;
         tweak(&mut cfg);
@@ -1587,7 +1586,6 @@ mod tests {
     fn candidates_reach_the_candidate_window() {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
         cfg.input.association.kind = "smart".to_string();
         // 桌面基线里 punct 是关的；headless 下它是唯一不依赖词库的源，不开就没候选。
         cfg.input.association.punct = true;
@@ -1616,7 +1614,6 @@ mod tests {
     fn no_mode_label_in_assoc() {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
         cfg.input.association.kind = "smart".to_string();
         // 桌面基线里 punct 是关的；headless 下它是唯一不依赖词库的源，不开就没候选。
         cfg.input.association.punct = true;

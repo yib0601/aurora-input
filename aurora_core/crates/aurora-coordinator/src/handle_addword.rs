@@ -3,7 +3,6 @@
 //! 从 coordinator.rs 拆出（同 crate 内 `impl Coordinator` 块，组织性重构，无逻辑变更）。
 
 use crate::coordinator::{CommittedSeg, Coordinator, LEARN_ADD_WEIGHT, State};
-use tracing::{debug, warn};
 use aurora_bridge::handler::{KeyAction, KeyEventData};
 use aurora_candidate::CandidateSource;
 use aurora_ipc::protocol::MOD_CTRL;
@@ -11,6 +10,7 @@ use aurora_keys::keymap;
 use aurora_ui_types::CandidateItem;
 use aurora_ui_types::UiCommand;
 use aurora_ui_types::{ToastKind, ToastPosition};
+use tracing::{debug, warn};
 
 /// 最小加词长度
 const ADD_WORD_MIN_LEN: usize = 1;
@@ -1528,7 +1528,6 @@ impl Coordinator {
             hover: -1,
             page: 1,
             total_pages: 1,
-            grid: None,
             caret_x: state.caret_x,
             caret_y: state.caret_y,
             caret_height: state.caret_height,
@@ -1565,10 +1564,10 @@ mod tests {
     //! 故写库测试手动注入 add_word_code。
     use super::{ADD_WORD_MAX_LEN, trim_segs_start};
     use crate::coordinator::{CommittedSeg, Coordinator};
-    use std::sync::Arc;
     use aurora_config::Config;
     use aurora_keys::keymap;
     use aurora_store::Store;
+    use std::sync::Arc;
 
     /// ★★ 自提交打点必须覆盖**一切真落屏**的返回变体，不只 `InsertText` 那两种。
     ///
@@ -1722,8 +1721,8 @@ mod tests {
         }
     }
 
-    use std::sync::atomic::Ordering;
     use aurora_bridge::handler::{KeyAction, MessageHandler};
+    use std::sync::atomic::Ordering;
 
     /// 撤销上屏计数（`last_commit_len`）随「同步落屏」按键更新：中文整词记字符数、
     /// 英文/标点逐键覆盖回 1（防残留旧中文计数误删）、emoji 按 UTF-16 单元、组合态不动。

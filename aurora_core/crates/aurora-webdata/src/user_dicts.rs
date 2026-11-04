@@ -3,9 +3,9 @@
 //! 同一实现；改了文件或开关都失效用到该数据方案的方案（同 `dict.reload` 的 `dicts:<数据方案>`）。
 
 use super::{WebDataRpc, parse_sort, resolve_engine_type, store_text, str_param, ui_text};
-use serde_json::{Value, json};
 use aurora_store::user_dicts::ID_PREFIX;
 use aurora_store::user_words::USER_DICTS_CHANGED;
+use serde_json::{Value, json};
 
 /// 方案 id、它的数据方案（拼音族折叠到 `pinyin`）与 store。混输没有自己的分库（随成员方案走）。
 fn target<'a, H: WebDataRpc + ?Sized>(
@@ -258,13 +258,13 @@ pub(super) fn set_enabled<H: WebDataRpc + ?Sized>(h: &H, params: &Value) -> anyh
 #[cfg(test)]
 mod tests {
     use crate::WebDataRpc;
-    use serde_json::{Value, json};
-    use std::path::PathBuf;
-    use std::sync::Arc;
     use aurora_config::Config;
     use aurora_coordinator::Coordinator;
     use aurora_coordinator::web_host::WebDataHost;
     use aurora_store::Store;
+    use serde_json::{Value, json};
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     struct Fx {
         dir: PathBuf,

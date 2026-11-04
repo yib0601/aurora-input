@@ -184,7 +184,10 @@ fn title_layer(n: usize) -> String {
         "[[apps]]\ntitle = \"*Doc*\"\ncomposition_placeholder = \"blank\"\n"
     );
     for k in 0..(n / 20) {
-        let _ = writeln!(s, "[[apps]]\ntitle = \"Other{k} *\"\nauto_pair = false\n");
+        let _ = writeln!(
+            s,
+            "[[apps]]\ntitle = \"Other{k} *\"\ncaret_use_top = false\n"
+        );
     }
     s
 }

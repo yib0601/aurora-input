@@ -16,9 +16,9 @@
 //! （`expand_candidates`）只重跑 `build_candidates`，放到 `update_candidates` 会在翻页时丢失。
 
 use crate::coordinator::{Coordinator, State};
-use std::sync::Arc;
 use aurora_aux_code::DirectPhraseRule;
 use aurora_candidate::{Candidate, CandidateSource, candidate_display_order};
+use std::sync::Arc;
 
 /// 「上一个整音节输入」的主候选快照（`State.direct_aux_prev`）：连打时前缀恰是几键前的整个
 /// 输入（`uidup` / `uidupl` 的前缀 `uidu` 就是敲到第 4 键时的输入），那一键的候选早已算好，
@@ -299,12 +299,12 @@ mod tests {
     //! `handle_key_event` 入口。真实数据（`build_dev/data`）那组在下方 `real_data_tests`。
     use crate::coordinator::Coordinator;
     use crate::pipeline::ModeKind;
-    use std::sync::Arc;
     use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
     use aurora_config::Config;
     use aurora_ipc::protocol::EVENT_KEY_DOWN;
     use aurora_keys::keymap;
     use aurora_store::Store;
+    use std::sync::Arc;
 
     /// 迷你词库。权重让「湿度」天然居首、「释读」垫底——直接辅助码要把它提上来。
     const DICT: &str = "释读\tshi du\t10\n湿度\tshi du\t5000\n适度\tshi du\t3000\n\
@@ -781,11 +781,11 @@ mod real_data_tests {
     //! 放在 crate 内而不是 `tests/`：要看候选的 `is_direct_aux` 标记，区分「被直接辅助提上来」
     //! 与「本来就排在那儿」。
     use crate::coordinator::Coordinator;
-    use std::sync::Arc;
     use aurora_bridge::handler::{KeyEventData, MessageHandler};
     use aurora_config::Config;
     use aurora_ipc::protocol::EVENT_KEY_DOWN;
     use aurora_keys::keymap;
+    use std::sync::Arc;
 
     fn data_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

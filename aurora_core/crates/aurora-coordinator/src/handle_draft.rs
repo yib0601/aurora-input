@@ -486,9 +486,9 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use crate::coordinator::Coordinator;
-    use std::sync::Arc;
     use aurora_config::config::Config;
     use aurora_store::Store;
+    use std::sync::Arc;
 
     fn cfg_with_ttl(hours: u32) -> Config {
         let mut cfg = Config::default();

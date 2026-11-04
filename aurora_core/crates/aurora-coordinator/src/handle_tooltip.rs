@@ -23,12 +23,12 @@
 
 use crate::coordinator::Coordinator;
 use crate::tooltip::RenderedTooltip;
-use tracing::{debug, warn};
-use unicode_segmentation::UnicodeSegmentation;
 use aurora_bridge::handler::KeyAction;
 use aurora_ui_types::{
     MenuAnchor, MenuCmd, MenuItemSpec, MenuKind, ToastKind, ToastPosition, TooltipHit, UiCommand,
 };
+use tracing::{debug, warn};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// 本页一个候选的气泡缓存。
 #[derive(Debug, Clone)]
@@ -84,7 +84,10 @@ pub(crate) fn tooltip_menu_items(
     if let (Some(e), Some(h)) = (entry, hit) {
         let s = usize::from(h.section);
         if let Some(sec) = e.rendered.doc.sections.get(s) {
-            let name = section_label(sec.title.as_ref().map(aurora_ui_types::StyledText::as_str), s);
+            let name = section_label(
+                sec.title.as_ref().map(aurora_ui_types::StyledText::as_str),
+                s,
+            );
             items.push(M::leaf(
                 format!("复制「{name}」"),
                 cmd(MenuCmd::TooltipCopySection),
@@ -462,8 +465,8 @@ mod tests {
 
     // ───────────────── 协调器端到端（需 build_dev/data 词库）─────────────────
 
-    use std::sync::mpsc::Receiver;
     use aurora_bridge::handler::{KeyEventData, MessageHandler};
+    use std::sync::mpsc::Receiver;
 
     fn data_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

@@ -22,14 +22,14 @@
 //! 语料：`AURORA_ASSOC_EVAL_CORPUS`（目录，递归读 .md/.mdx/.txt），默认文档站 `content/`。
 //! `AURORA_ASSOC_EVAL_N` 限测量事件数（默认 4000）。
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Instant;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
 
 const SCHEMA: &str = "wubi86";
 
@@ -137,7 +137,6 @@ fn coord(tag: &str, seed: impl FnOnce(&aurora_store::Store)) -> Arc<Coordinator>
     cfg.schema.available = vec![SCHEMA.into()];
     cfg.schema.active = SCHEMA.into();
     cfg.input.default.chinese_mode = true;
-    cfg.input.symbol.smart_mode = false;
     cfg.input.association.kind = "word".into();
     // 联想按选词次数重排只在调频开着时生效；`Config::default()` 码表调频默认关。
     cfg.schema.codetable.frequency.enabled = true;

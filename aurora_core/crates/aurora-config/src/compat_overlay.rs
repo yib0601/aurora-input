@@ -991,11 +991,12 @@ mod tests {
 
     #[test]
     fn unset_removes_a_field_from_below_and_is_carried_upwards() {
-        let base = obj(json!({"process": "A.exe", "first_show_mode": "wait", "auto_pair": true}));
+        let base =
+            obj(json!({"process": "A.exe", "first_show_mode": "wait", "caret_use_top": true}));
         let layer = obj(json!({"process": "A.exe", "unset": ["first_show_mode"]}));
         let out = compose(&base, &layer);
         assert!(out.get("first_show_mode").is_none());
-        assert_eq!(out["auto_pair"], json!(true));
+        assert_eq!(out["caret_use_top"], json!(true));
         assert_eq!(
             out["unset"],
             json!(["first_show_mode"]),
@@ -1029,16 +1030,16 @@ mod tests {
     #[test]
     fn overlay_is_per_process_case_insensitive_and_appends_new_ones() {
         let base = vec![
-            obj(json!({"process": "A.exe", "auto_pair": true})),
-            obj(json!({"process": "B.exe", "auto_pair": true})),
+            obj(json!({"process": "A.exe", "caret_use_top": true})),
+            obj(json!({"process": "B.exe", "caret_use_top": true})),
         ];
         let layer = vec![
             obj(json!({"process": " a.EXE ", "caret_use_top": true})),
-            obj(json!({"process": "C.exe", "auto_pair": false})),
+            obj(json!({"process": "C.exe", "caret_use_top": false})),
         ];
         let out = overlay("apps", base, &layer);
         assert_eq!(out.len(), 3);
-        assert_eq!(out[0]["auto_pair"], json!(true));
+        assert_eq!(out[0]["caret_use_top"], json!(true));
         assert_eq!(out[0]["caret_use_top"], json!(true));
         assert_eq!(process_of(&out[2]), "C.exe");
     }
@@ -1046,7 +1047,7 @@ mod tests {
     #[test]
     fn rows_without_a_usable_process_are_dropped() {
         let layer = vec![
-            obj(json!({"auto_pair": true})),
+            obj(json!({"caret_use_top": true})),
             obj(json!({"process": 1})),
             obj(json!({"process": "  "})),
         ];
@@ -1055,7 +1056,7 @@ mod tests {
 
     #[test]
     fn disabled_is_an_ordinary_overlaid_field() {
-        let base = obj(json!({"process": "A.exe", "disabled": true, "auto_pair": true}));
+        let base = obj(json!({"process": "A.exe", "disabled": true, "caret_use_top": true}));
         let enabled = compose(&base, &obj(json!({"process": "A.exe", "disabled": false})));
         assert!(!is_disabled(&enabled), "更高层用 disabled = false 重新启用");
         let stays = compose(
@@ -1208,7 +1209,7 @@ mod tests {
             &sys,
             &mut user2,
             "excel.exe",
-            &[FieldEdit::Clear("auto_pair".into())],
+            &[FieldEdit::Clear("caret_use_top".into())],
             true,
         );
         assert!(
@@ -1265,7 +1266,7 @@ mod tests {
     fn editing_one_field_never_disturbs_the_others_in_the_user_row() {
         let sys = vec![sys_wechat()];
         let mut user = vec![obj(
-            json!({"process": "Weixin.exe", "auto_pair": true, "unknown_future_key": 1}),
+            json!({"process": "Weixin.exe", "ignore_host_ime_close": true, "unknown_future_key": 1}),
         )];
         apply_edits::<AppCompatRule>(
             "apps",
@@ -1275,7 +1276,7 @@ mod tests {
             &[FieldEdit::Set("first_show_mode".into(), json!("fast"))],
             true,
         );
-        assert_eq!(user[0]["auto_pair"], json!(true));
+        assert_eq!(user[0]["ignore_host_ime_close"], json!(true));
         assert_eq!(
             user[0]["unknown_future_key"],
             json!(1),
@@ -1288,7 +1289,7 @@ mod tests {
         let raw = Raw {
             apps: vec![obj(json!({
                 "first_show_mode": "wait", "process": "A.exe", "comment": "带\"引号\"和中文",
-                "caret_use_top": false, "unset": ["auto_pair"], "unknown_z": 1, "classes_like": ["a", "b"]
+                "caret_use_top": false, "unset": ["caret_use_top"], "unknown_z": 1, "classes_like": ["a", "b"]
             }))],
             ..Default::default()
         };
@@ -1378,8 +1379,8 @@ mod tests {
     fn sanitize_drops_invalid_values_and_reports_them_but_keeps_unknown_keys() {
         use crate::app_compat::AppCompatRule;
         let rows = vec![obj(json!({
-            "process": "a.exe", "first_show_mode": "wiat", "auto_pair": true, "caret_offset_x": "12",
-            "future_key": [1, 2], "disabled": "yes", "unset": "auto_pair"
+            "process": "a.exe", "first_show_mode": "wiat", "caret_use_top": true, "caret_offset_x": "12",
+            "future_key": [1, 2], "disabled": "yes", "unset": "caret_use_top"
         }))];
         let (clean, report) = sanitize::<AppCompatRule>("apps", &rows);
         let c = &clean[0];
@@ -1388,11 +1389,11 @@ mod tests {
                 && c.get("caret_offset_x").is_none()
                 && c.get("disabled").is_none()
         );
-        assert_eq!(c["auto_pair"], json!(true));
+        assert_eq!(c["caret_use_top"], json!(true));
         assert_eq!(c["future_key"], json!([1, 2]), "认不出的键不归清理管");
         assert_eq!(
             c["unset"],
-            json!(["auto_pair"]),
+            json!(["caret_use_top"]),
             "单个字符串形态的 unset 归一成数组"
         );
         assert_eq!(report.len(), 3, "{report:?}");
@@ -1490,7 +1491,7 @@ mod window_match_tests {
     #[test]
     fn rule_id_voids_rows_without_any_condition_or_with_wrong_types() {
         for bad in [
-            json!({"auto_pair": true}),
+            json!({"caret_use_top": true}),
             json!({"process": "  ", "class": "", "title": " "}),
             json!({"process": 1}),
             json!({"process": "a.exe", "class": 1}),
@@ -1519,7 +1520,7 @@ mod window_match_tests {
     #[test]
     fn overlay_and_coalesce_use_the_rule_identity() {
         let base = vec![
-            obj(json!({"process": "AutoHotkey.exe", "auto_pair": true})),
+            obj(json!({"process": "AutoHotkey.exe", "password_force_english": true})),
             obj(json!({"process": "AutoHotkey.exe", "title": "Foo*", "initial_mode": "english"})),
         ];
         let layer = vec![
@@ -1539,7 +1540,7 @@ mod window_match_tests {
         assert_eq!(out[2]["class"], json!("Chrome_WidgetWin_*"));
 
         let raw = parse_raw(
-            "[[apps]]\nprocess = \"a.exe\"\nclass = \"X\"\nauto_pair = true\n\n[[apps]]\nprocess = \"a.exe\"\nauto_pair = false\n\n[[apps]]\nprocess = \"A.EXE\"\nclass = \" x \"\ncaret_use_top = true\n",
+            "[[apps]]\nprocess = \"a.exe\"\nclass = \"X\"\npassword_force_english = true\n\n[[apps]]\nprocess = \"a.exe\"\npassword_force_english = false\n\n[[apps]]\nprocess = \"A.EXE\"\nclass = \" x \"\ncaret_use_top = true\n",
         )
         .unwrap();
         assert_eq!(
@@ -1548,28 +1549,28 @@ mod window_match_tests {
             "同一段里同身份的多行合成一行: {:?}",
             raw.apps
         );
-        assert_eq!(raw.apps[0]["auto_pair"], json!(true));
+        assert_eq!(raw.apps[0]["password_force_english"], json!(true));
         assert_eq!(raw.apps[0]["caret_use_top"], json!(true));
     }
 
     #[test]
     fn class_and_title_cannot_be_unset() {
-        let base = obj(json!({"process": "a.exe", "class": "X", "auto_pair": true}));
+        let base = obj(json!({"process": "a.exe", "class": "X", "caret_use_top": true}));
         let layer = obj(
-            json!({"process": "a.exe", "class": "X", "unset": ["class", "title", "auto_pair"]}),
+            json!({"process": "a.exe", "class": "X", "unset": ["class", "title", "caret_use_top"]}),
         );
         let out = compose(&base, &layer);
         assert_eq!(out["class"], json!("X"));
-        assert_eq!(out["unset"], json!(["auto_pair"]));
+        assert_eq!(out["unset"], json!(["caret_use_top"]));
     }
 
     #[test]
     fn sanitize_reports_and_drops_rows_without_a_usable_identity() {
         use crate::app_compat::AppCompatRule;
         let rows = vec![
-            obj(json!({"auto_pair": true})),
-            obj(json!({"process": "a.exe", "class": 1, "auto_pair": true})),
-            obj(json!({"class": "X", "auto_pair": true})),
+            obj(json!({"caret_use_top": true})),
+            obj(json!({"process": "a.exe", "class": 1, "caret_use_top": true})),
+            obj(json!({"class": "X", "caret_use_top": true})),
         ];
         let (clean, report) = sanitize::<AppCompatRule>("apps", &rows);
         assert_eq!(
@@ -1601,7 +1602,7 @@ mod window_match_tests {
             json!({"process": "a.exe", "class": "X", "caret_use_top": true}),
         )];
         let mut user = vec![obj(
-            json!({"process": "a.exe", "class": "X", "auto_pair": true}),
+            json!({"process": "a.exe", "class": "X", "caret_use_top": true}),
         )];
         apply_edits::<AppCompatRule>(
             "apps",
@@ -1612,7 +1613,7 @@ mod window_match_tests {
             true,
         );
         assert_eq!(user.len(), 2, "纯进程键新建一行: {user:?}");
-        assert_eq!(user[0]["auto_pair"], json!(true));
+        assert_eq!(user[0]["caret_use_top"], json!(true));
         assert_eq!(
             user[1]["caret_use_top"],
             json!(true),
@@ -1625,7 +1626,7 @@ mod window_match_tests {
     fn render_puts_window_conditions_right_after_process_and_roundtrips() {
         let raw = Raw {
             apps: vec![obj(json!({
-                "auto_pair": true, "title": "Foo*", "comment": "c", "class": "X", "process": "a.exe"
+                "caret_use_top": true, "title": "Foo*", "comment": "c", "class": "X", "process": "a.exe"
             }))],
             ..Default::default()
         };
@@ -1707,17 +1708,17 @@ mod window_match_tests {
                 o.insert("caret_offset_x".into(), json!(i));
                 match next() % 6 {
                     0 => {
-                        o.insert("unset".into(), json!(["auto_pair"]));
+                        o.insert("unset".into(), json!(["caret_use_top"]));
                     }
                     // 对身份键与 `disabled` 的 unset：身份键不可 unset（叠加时被过滤），`disabled` 可以。
                     1 => {
                         o.insert(
                             "unset".into(),
-                            json!(["process", "class", "title", "disabled", "auto_pair"]),
+                            json!(["process", "class", "title", "disabled", "caret_use_top"]),
                         );
                     }
                     _ => {
-                        o.insert("auto_pair".into(), json!(next() % 2 == 0));
+                        o.insert("caret_use_top".into(), json!(next() % 2 == 0));
                     }
                 }
                 // 禁用行照样参与跨层叠加（`disabled` 是普通字段），可被后来的 `false` 重新启用。

@@ -57,9 +57,6 @@ pub(crate) fn intent_for(
         Some(ModeKind::Reverse) => Some(cfg.input.reverse.candidate_layout),
         Some(ModeKind::TempPinyin) => Some(cfg.input.temp_pinyin.candidate_layout),
         Some(ModeKind::TempEnglish) => Some(cfg.input.temp_english.candidate_layout),
-        Some(ModeKind::Url) => Some(cfg.input.url.candidate_layout),
-        Some(ModeKind::Email) => Some(cfg.input.email.candidate_layout),
-        Some(ModeKind::Unicode) => Some(cfg.input.unicode.candidate_layout),
         // 辅助码：候选布局沿用主路径（筛选不改呈现形态）。
         Some(ModeKind::AuxCode) => None,
         None => None,
@@ -232,9 +229,6 @@ mod tests {
         let mut c = Config::default();
         c.input.temp_pinyin.candidate_layout = intent;
         c.input.temp_english.candidate_layout = intent;
-        c.input.url.candidate_layout = intent;
-        c.input.email.candidate_layout = intent;
-        c.input.unicode.candidate_layout = intent;
         c.input.add_word.candidate_layout = intent;
         c.input.reverse.candidate_layout = intent;
         c.schema.mix_modes = vec![MixModeConfig {
@@ -274,9 +268,6 @@ mod tests {
         ModeKind::Special(0),
         ModeKind::TempPinyin,
         ModeKind::TempEnglish,
-        ModeKind::Url,
-        ModeKind::Email,
-        ModeKind::Unicode,
         ModeKind::Reverse,
     ];
 

@@ -112,7 +112,10 @@ pub(crate) fn candidate_backdrop(v: &RvViews, state: TextState) -> Option<Rgba> 
     {
         return None;
     }
-    let window = v.window.bg_color.unwrap_or(aurora_theme::fallback::WINDOW_BG);
+    let window = v
+        .window
+        .bg_color
+        .unwrap_or(aurora_theme::fallback::WINDOW_BG);
     if window[3] != 255 {
         return None;
     }
@@ -131,7 +134,9 @@ pub(crate) fn candidate_backdrop(v: &RvViews, state: TextState) -> Option<Rgba> 
         [v.candidate_list.bg_color, item, text]
             .into_iter()
             .flatten()
-            .fold(window, |under, top| aurora_theme::composite_over(top, under)),
+            .fold(window, |under, top| {
+                aurora_theme::composite_over(top, under)
+            }),
     )
 }
 

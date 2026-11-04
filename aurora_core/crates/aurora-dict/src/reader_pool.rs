@@ -33,7 +33,6 @@
 
 use crate::commentdict::CommentReader;
 use crate::datformat::WdatReader;
-use crate::emojidict::EmojiReader;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -115,7 +114,7 @@ fn bump_gen(path: &Path) {
 
 /// 圈住一次「替换池中文件」的动作：**建时给代数 +1，落时再 +1**。
 ///
-/// 凡是会替换 `.wdat` / `.wcmt` / `.wemj` 的写侧都要走它——不只是本 crate 的三个写盘口，
+/// 凡是会替换 `.wdat` / `.wcmt` 的写侧都要走它——不只是本 crate 的两个写盘口，
 /// 方案导入与备份还原同样在用户 schemas 目录里覆盖这些文件（那里的 sidecar `.wdat`
 /// 也是直接走本池打开的）。
 ///
@@ -175,7 +174,6 @@ type Pool<T> = OnceLock<Mutex<HashMap<PathBuf, Entry<T>>>>;
 
 static WDAT_POOL: Pool<WdatReader> = OnceLock::new();
 static COMMENT_POOL: Pool<CommentReader> = OnceLock::new();
-static EMOJI_POOL: Pool<EmojiReader> = OnceLock::new();
 
 #[allow(clippy::type_complexity)]
 static BUILD_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
@@ -225,17 +223,6 @@ pub fn open_wdat(path: &Path) -> anyhow::Result<Arc<WdatReader>> {
 pub fn open_comment(path: &Path) -> anyhow::Result<Arc<CommentReader>> {
     get_or_open(COMMENT_POOL.get_or_init(Default::default), path, |p| {
         CommentReader::open(p)
-    })
-}
-
-/// 打开 emoji 扩展表 `.wemj`；同一路径已有存活 reader 时复用，不再新建映射。
-///
-/// 本表全局只有一份（不像注释库那样按方案挂载），走池的理由不是省内存而是**保住释放
-/// 语义**：功能开关一关一开会重新解析，届时要 rename 覆盖缓存文件，而 Windows 上被
-/// mmap 的文件 rename 会 Access Denied（见本模块开头「为什么池里存 Weak」）。
-pub fn open_emoji(path: &Path) -> anyhow::Result<Arc<EmojiReader>> {
-    get_or_open(EMOJI_POOL.get_or_init(Default::default), path, |p| {
-        EmojiReader::open(p)
     })
 }
 
@@ -514,34 +501,6 @@ mod tests {
             fresh.lookup_first("啊"),
             Some("新释"),
             "注释库重建后必须读到新释义"
-        );
-        drop((held, fresh));
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// emoji 表同理：功能开关一关一开会重新解析并 rename 覆盖，`write_emoji_wemj`
-    /// 同样得通知本池。
-    #[test]
-    fn rebuilt_emoji_dict_is_not_served_from_stale_entry() {
-        let dir = temp_dir("rebuild-wemj");
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("e.wemj");
-        let row = |e: &str| vec![("你好".to_string(), vec![e.to_string()])];
-
-        crate::emojidict::write_emoji_wemj(&p, &row("😊")).unwrap();
-        let before = std::fs::metadata(&p).unwrap();
-        let held = open_emoji(&p).unwrap();
-        assert_eq!(held.lookup("你好"), Some("😊"));
-
-        // 两个 emoji 都是 4 字节 → 文件大小不变。
-        crate::emojidict::write_emoji_wemj(&p, &row("👋")).unwrap();
-        force_same_stamp(&p, &before);
-
-        let fresh = open_emoji(&p).unwrap();
-        assert_eq!(
-            fresh.lookup("你好"),
-            Some("👋"),
-            "emoji 表重建后必须读到新内容"
         );
         drop((held, fresh));
         std::fs::remove_dir_all(&dir).ok();

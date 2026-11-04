@@ -732,7 +732,6 @@ mod tests {
         // 注释模板可用的全部变量角色 + 字面文字（aurora-ui-types `TEXT_ROLES` 的注释那部分）。
         const COMMENT_ROLES: &[&str] = &[
             "code_hint",
-            "emoji",
             "code_rev",
             "code_rev_all",
             "shuangpin",

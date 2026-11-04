@@ -793,16 +793,6 @@ impl MobileCore {
         config_api::set(key, value)
     }
 
-    /// emoji 附加模块及当前开关（见 [`config_api::emoji_modules`]）。
-    pub fn emoji_modules(&self) -> Vec<config_api::EmojiModuleState> {
-        config_api::emoji_modules(&self.data_dir)
-    }
-
-    /// 打开 / 关闭一个 emoji 附加模块。只写盘，生效要另发 [`MobileCommand::ReloadConfig`]。
-    pub fn set_emoji_module(&self, id: &str, on: bool) -> Result<(), String> {
-        config_api::set_emoji_module(&self.data_dir, id, on)
-    }
-
     /// 候选提示各段及当前开关（长按候选那张卡显示哪些段，见 [`config_api::tooltip_sections`]）。
     pub fn tooltip_sections(&self) -> Vec<config_api::TooltipSectionState> {
         config_api::tooltip_sections(&self.data_dir)
@@ -852,7 +842,8 @@ impl MobileCore {
         let Some(store) = self.coord.user_store() else {
             return Vec::new();
         };
-        match aurora_store::stats_report::daily_range(store, self.coord.stat_collector(), from, to) {
+        match aurora_store::stats_report::daily_range(store, self.coord.stat_collector(), from, to)
+        {
             Ok(days) => days
                 .into_iter()
                 .map(|(date, r)| DailyTotal {

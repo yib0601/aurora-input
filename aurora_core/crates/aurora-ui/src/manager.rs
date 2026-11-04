@@ -6,8 +6,6 @@
 use crate::candidate_window::{CandidateWindow, CandidateWindowConfig};
 use crate::toast::{ToastKind, ToastPosition};
 
-/// re-export：使协调器以 `aurora_ui::manager::InputDiagView` 统一引用。
-pub use crate::input_diag_hud::{DiagSections, InputDiagView, WindowDiagView};
 use std::sync::mpsc;
 use tracing::{debug, error, info};
 #[cfg(windows)]
@@ -33,7 +31,6 @@ fn blocked_by_exclusive_fullscreen(what: &str) -> bool {
 }
 /// 类型定义已下沉至 aurora-ui-types（表现层协议 crate）；此处再导出以保持
 /// `aurora_ui::manager::*` 原路径成立（协调器与本 crate 内部均经此引用）。
-/// 注意 DiagSections 三件套走上方 input_diag_hud 的链式转发，勿在此重复列出。
 pub use aurora_ui_types::{
     CandidateOp, GlobalHotkeyEntry, HOVER_PAGE_NEXT, HOVER_PAGE_PREV, MenuAnchor, MenuCmd,
     MenuItemSpec, MenuKind, MenuPlacement, MenuPointerEvent, ToolbarAction, UiCommand, UiEvent,
@@ -132,8 +129,6 @@ impl UiManager {
         // `auto_hide` 的 `was_engaged` 字段，见下方使用处。
         let mut tip_was_interacting = false;
 
-        // 输入诊断 HUD（惰性创建：首次 ShowInputDiag 时构造，best-effort）
-        let mut input_diag_hud: Option<crate::input_diag_hud::InputDiagHud> = None;
         // 定位调试浮窗（惰性创建，同上）。仅 Windows：组合矩形出自 TSF。
         #[cfg(windows)]
         let mut caret_overlay: Option<crate::caret_overlay::CaretOverlay> = None;
@@ -413,7 +408,6 @@ impl UiManager {
                         hover,
                         page,
                         total_pages,
-                        grid,
                         caret_x,
                         caret_y,
                         caret_height,
@@ -439,7 +433,6 @@ impl UiManager {
                         } else {
                             preedit
                         };
-                        candidate_window.set_grid(grid);
                         candidate_window.update(
                             &preedit,
                             preedit_caret,
@@ -471,7 +464,9 @@ impl UiManager {
                         // host-render 侧先 hide（hide 必达，幂等双发）
                         #[cfg(windows)]
                         if let Some(hr) = &host_render {
-                            use aurora_ipc::protocol::{HOST_WINDOW_CANDIDATE, HOST_WINDOW_TOOLTIP};
+                            use aurora_ipc::protocol::{
+                                HOST_WINDOW_CANDIDATE, HOST_WINDOW_TOOLTIP,
+                            };
                             hr.hide_kind(HOST_WINDOW_CANDIDATE);
                             hr.hide_kind(HOST_WINDOW_TOOLTIP);
                         }
@@ -795,18 +790,6 @@ impl UiManager {
                         }
                         tip_hide_at = None;
                     }
-                    UiCommand::ShowInputDiag(v) => {
-                        // 惰性创建：失败仅记 error，不影响其它窗口。
-                        if input_diag_hud.is_none() {
-                            match crate::input_diag_hud::InputDiagHud::new(event_tx.clone()) {
-                                Ok(h) => input_diag_hud = Some(h),
-                                Err(e) => error!("Failed to create input diag HUD: {}", e),
-                            }
-                        }
-                        if let Some(h) = input_diag_hud.as_mut() {
-                            h.show_or_update(&v);
-                        }
-                    }
                     UiCommand::ShowCaretOverlay(_v) => {
                         #[cfg(windows)]
                         {
@@ -826,16 +809,6 @@ impl UiManager {
                         #[cfg(windows)]
                         if let Some(o) = caret_overlay.as_mut() {
                             o.hide();
-                        }
-                    }
-                    UiCommand::HideInputDiag => {
-                        if let Some(h) = input_diag_hud.as_mut() {
-                            h.hide();
-                        }
-                    }
-                    UiCommand::CopyInputDiagText => {
-                        if let Some(h) = input_diag_hud.as_ref() {
-                            h.copy_text();
                         }
                     }
                     UiCommand::ShowToast {
@@ -1595,7 +1568,6 @@ mod menu_id_tests {
             MenuCmd::OpenAbout,
             MenuCmd::TakeScreenshot,
             MenuCmd::ScreenshotCandidateToClipboard,
-            MenuCmd::ToggleInputDiagnostics,
             MenuCmd::TogglePasswordSuppress,
             MenuCmd::FirstShowMode(0),
             MenuCmd::FirstShowMode(1),
@@ -1618,11 +1590,6 @@ mod menu_id_tests {
             MenuCmd::TooltipCommitSection,
             MenuCmd::TooltipCopyLine,
             MenuCmd::TooltipCommitLine,
-            MenuCmd::InputDiagCopy,
-            MenuCmd::InputDiagToggleFreeze,
-            MenuCmd::InputDiagToggleTopmost,
-            MenuCmd::InputDiagToggleSection(0),
-            MenuCmd::InputDiagToggleSection(3),
             MenuCmd::AutoPairRule(0),
             MenuCmd::AutoPairRule(2),
             MenuCmd::CompatRuleEnabled(0),

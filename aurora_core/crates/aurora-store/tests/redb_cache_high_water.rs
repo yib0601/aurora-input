@@ -50,7 +50,7 @@ use aurora_store::completion::CompletionKind;
 
 /// 负载用旧补全历史表（`legacy_*` 写读器直接走 redb）：P2–P4a 起运行期数据都不在 redb，页缓存
 /// 机制要拿仍能读写的 redb 表来测；P4b 随 redb 一起删。
-const K: CompletionKind = CompletionKind::UrlHistory;
+const K: CompletionKind = CompletionKind::QuickHistory;
 
 const N: usize = 190_000;
 

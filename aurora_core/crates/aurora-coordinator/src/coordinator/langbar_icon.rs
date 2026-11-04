@@ -93,7 +93,10 @@ pub(crate) fn parse_user_text_colors(
 /// 解析失败只让色相回落「与主字同色」并记警告，`alpha` 照旧生效——改错一个色值若连带
 /// 不透明度一起打回，用户对不上因果。
 #[cfg(all(feature = "desktop-ui", any(windows, test)))]
-pub(crate) fn badge_color_of(color: &str, alpha: Option<f32>) -> aurora_ui::langbar_icon::BadgeColor {
+pub(crate) fn badge_color_of(
+    color: &str,
+    alpha: Option<f32>,
+) -> aurora_ui::langbar_icon::BadgeColor {
     use aurora_ui::langbar_icon::BadgeColor;
     let t = color.trim();
     if t.is_empty() || t.eq_ignore_ascii_case("auto") {

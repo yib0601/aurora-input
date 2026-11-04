@@ -38,11 +38,11 @@ pub(crate) use crate::key_convert::{
 };
 use crate::preedit_cursor;
 use crate::theme_style::ThemeStyle;
+use aurora_keys::keymap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info, trace, warn};
-use aurora_keys::keymap;
 
 /// CapsLock 作中英切换键时，按住超过这么久（毫秒）松开算长按：开关大写锁定而不切中英。
 const CAPS_TOGGLE_LONG_PRESS_MS: u32 = 500;
@@ -684,32 +684,6 @@ pub(crate) struct State {
     /// 上一批的翻页史与新的这批无关）。**别在别处清**——`current_page` 归零的地方就是
     /// 它该归零的地方，两者分家就会漂移。
     pub(crate) paged: bool,
-    /// 候选展开态（多行网格）的可见区首行：`Some(p)` = 已展开，第 `p` 页在可见区第一行。
-    ///
-    /// 网格的**一行就是一页**，高亮行就是 `current_page`。于是页模型的一切——数字键、空格、
-    /// 扩容、末页放宽——原样适用，这里只多记一个滚动位置。设计见
-    /// `docs/design/candidate-grid-expand.md`。
-    ///
-    /// 清零在 [`Coordinator::reset_candidate_view`]：候选重新装填（打字、退格、分步上屏后续查）
-    /// 即收起，与 `paged` 同一个时机、同一个理由；本次组合展开过的话，装填完再由
-    /// [`Self::grid_keep`] 展开回来。
-    pub(crate) grid_top: Option<usize>,
-    /// 本次组合展开过：候选重新装填后（继续打字、分步上屏）自动再展开，直到 Esc 收起或组合结束。
-    ///
-    /// 组合结束的出口有几十处，不逐个清：每次按键开头若已没有候选，就说明是一次新组合，在
-    /// `handle_key_event` 开头清掉。
-    pub(crate) grid_keep: bool,
-    /// 展开态当前的分类标签（P3）。非 `All` 时 `candidates` 是**筛过的子集**，完整列表暂存在
-    /// [`Self::grid_full`]——下标在几十处调用里按 `candidates` 解释，就地换成子集，选词、序号、
-    /// 右键、置顶删除就都不用知道筛选的存在。重建候选的几处（扩容、末页放宽）之后要重新套一次
-    /// 筛选，见 `Coordinator::grid_reapply_filter`。
-    ///
-    /// 与 `grid_top` 同一个清零点（`reset_candidate_view`）。
-    pub(crate) grid_tab: aurora_ui_types::GridTab,
-    /// 筛选期间的完整候选列表；`grid_tab == All` 时为空。
-    pub(crate) grid_full: Vec<Candidate>,
-    /// 连续切分类时的锚点，见 [`crate::candidate_grid::GridTabAnchor`]。
-    pub(crate) grid_tab_anchor: Option<crate::candidate_grid::GridTabAnchor>,
     /// 动态分级加载：当前候选对应的输入码
     pub(crate) candidate_input: String,
     /// 动态分级加载：当前加载上限
@@ -766,26 +740,6 @@ pub(crate) struct State {
     pub(crate) temp_english_cursor: usize,
     /// 临时英文前缀字符（触发键符号，如 "/"；触发键进入时非空，Shift+字母进入时为空）
     pub(crate) temp_english_prefix: String,
-    /// 网址模式输入缓冲（原样累积的 URL 文本）
-    pub(crate) url_buffer: String,
-    /// 网址模式编码区光标（`url_buffer` 内字节偏移）
-    pub(crate) url_cursor: usize,
-    /// 邮箱模式输入缓冲（**含 `@` 与用户名**，如 `abc@gmail.com`）。
-    ///
-    /// 连用户名一起存是刻意的，同 [`Self::unicode_buffer`] 连前缀一起存：编码区要把
-    /// 用户打的整串原样显示出来，且退格退到只剩 `abc@` 时才是夺取边界，
-    /// `Rewind::host_text` 拿它直接比对。拆后缀是候选查询时的事（`email_suffix_part`）。
-    pub(crate) email_buffer: String,
-    /// 邮箱模式编码区光标（`email_buffer` 内字节偏移）
-    pub(crate) email_cursor: usize,
-    /// Unicode 模式输入缓冲（**含触发前缀**，如 `u+4e00`）。
-    ///
-    /// 连前缀一起存是刻意的：编码区要把用户打的整串原样显示出来（`U+` 起手时显示的
-    /// 就该是 `U+`），且退格退到只剩前缀时才是「夺取边界」，`Rewind::host_text`
-    /// 拿它直接比对。码点解析时再把前缀剥掉（`unicode_hex_part`）。
-    pub(crate) unicode_buffer: String,
-    /// Unicode 模式编码区光标（`unicode_buffer` 内字节偏移）
-    pub(crate) unicode_cursor: usize,
     /// 统一夺取回退登记（仅在夺取式模式激活时为 Some，见 pipeline::Rewind）
     pub(crate) rewind: Option<Rewind>,
     /// 特殊模式编码缓冲（自带码表的查询码）
@@ -961,37 +915,8 @@ pub(crate) enum PunctEmptyCodePolicy {
     Clear,
     /// 丢弃废码，标点本身也不上屏——整个按键当没按过。
     ///
-    /// ⚠️ 标点不上屏 ⇒ **没有可 hold 的对象**。这一态必须在智能符号 `hold_info` 之前短路，
-    /// 否则会挂一个屏幕上并不存在的 hold 态，下一次同键 press2 会去删一个从未上屏的符号。
+    /// ⚠️ 标点不上屏 ⇒ 不会有任何东西真的落屏，调用方据此决定这次按键的收尾。
     ClearNoInput,
-}
-
-/// 智能符号模式待命态：press1 提交一个参与集合内的标点后武装，等待时限内同键 press2
-/// 触发替换。对齐 Go `smartSymbol*` 字段。
-#[derive(Default)]
-pub(crate) struct SmartSymbolArm {
-    pub(crate) armed: bool,
-    /// 武装的触发键（原始英文标点字符）
-    pub(crate) key: char,
-    /// press1 产出的标点串（…… 为多 rune），删除数 = 其 rune 数。
-    /// 正向存中文串、反向存英文串——恒等于**实际上屏的那个串**，press2 的删除数按它算。
-    pub(crate) str: String,
-    /// 替换方向：false=正向（press1 中文 → press2 英文，原有语义）；
-    /// true=反向（press1 英文 → press2 中文）。反向来源：数字后智能标点、英文标点状态、
-    /// 英文输入模式。
-    pub(crate) reverse: bool,
-    /// press1 当时的 `(chinese_mode, chinese_punct)` 快照。press2 要求两者都没变——三种上下文
-    /// （中文标点 / 英文标点 / 英文输入模式）各有独立开关与独立产物，press1 后用户切了模式，
-    /// 再按同键就该当成全新 press1，而不是在新上下文里按旧方向删字。
-    pub(crate) mode_snapshot: (bool, bool),
-    /// 武装时刻（None=未武装）；用于时限判定
-    pub(crate) at: Option<std::time::Instant>,
-    /// HoldComposition 模式下 press1 进入组合态的中文文本（用于 disarm 时清理）。
-    /// DeleteReplace 模式下始终为 None。
-    pub(crate) held_text: Option<String>,
-    /// HoldComposition + has_input 时 press1 设为 true：已武装但调用方须先顶屏上屏候选，
-    /// 再开 HoldComposition；coordinator 标点分支检测此标志并生成 CommitAndHoldComposition。
-    pub(crate) hold_pending_commit: bool,
 }
 
 /// 当前焦点进程派生的 caret 兼容态，字段取自 `compat.toml` 的 `[[apps]]` 规则。
@@ -1033,14 +958,6 @@ pub(crate) struct ActiveCompat {
     /// （出厂默认）下这会把模式重置成配置默认，用户在 Word 手切的英文切到 Chrome
     /// 就没了，与 Everything 毫无关系。
     pub(crate) has_initial_rule: bool,
-    /// 本进程的符号自动配对开关；`None` = 跟随全局 `input.auto_pair.*`。
-    ///
-    /// ⚠ 消费点三条，缺一即半截修复（见 `AppCompatRule::auto_pair` 的说明）：中文标点态、
-    /// 英文标点流水线、以及推给 DLL 的英文配对配置——纯英文模式的配对完全在 C++ 侧独立
-    /// 处理，协调器收不到那些键，只关前两条的话切到英文模式配对照旧。
-    pub(crate) auto_pair: Option<bool>,
-    /// 本进程的智能符号替换方案；`None` = 跟随全局 `input.symbol.smart_method`。
-    pub(crate) smart_method: Option<aurora_config::config::SmartMethod>,
     /// 光标坐标校正偏移（dp，96dpi 基准逻辑像素，正=右/下）。宿主报告的 caret 系统性偏移时用，
     /// 与 `caret_use_top` 在同两处消费（`apply_focus_caret` / `handle_caret_update`）。
     /// 应用时按目标点所在显示器的 DPI 换算成物理像素，见 [`Coordinator::apply_caret_compat`]。
@@ -1446,8 +1363,6 @@ pub struct Coordinator {
     pub(crate) storage_readonly: Option<String>,
     /// 标点转换器（引号左右状态）
     pub(crate) punct: Mutex<PunctuationConverter>,
-    /// 智能符号模式待命态（同键连按删中文标点改英文）
-    pub(crate) smart_symbol: Mutex<SmartSymbolArm>,
     /// 滑窗草稿的**落屏文本流**缓冲。独立于 `State` 的理由同 `auto_phrase`。
     ///
     /// 与 `auto_phrase` 的分界：那边缓冲「连续单字序列」（多字词即终止），这边缓冲
@@ -1557,18 +1472,6 @@ pub struct Coordinator {
     /// `None` = 尚未建 / 已失效。见 [`crate::aux_code_source`]。
     pub(crate) aux_code_runtime:
         std::sync::RwLock<Option<Arc<crate::aux_code_source::AuxCodeRuntime>>>,
-    /// emoji 扩展表（`[input.emoji]`，mmap 只读）。`None` = 功能关闭 / 数据缺失 / 建缓存失败。
-    ///
-    /// ★ 功能关闭时恒为 `None` 且**数据文件根本不打开**——未启用的用户为本功能付出的
-    /// 常驻内存与启动开销都是零。这是 `.wemj` 走 mmap 的同一条理由的延伸：本表按需读页，
-    /// 常驻内存与库大小基本无关，但「不加载」比「加载得很省」还要省。
-    pub(crate) emoji_dict: std::sync::RwLock<Option<EmojiTables>>,
-    /// 上次生效的 emoji 加载参数 `(enabled, categories, 开着的附加模块 id)`，
-    /// `sync_emoji_dict` 的去重依据。
-    ///
-    /// 只记**影响加载结果**的几项：`show_as` / `max_per_word` 这些是查询期参数，改了不必
-    /// 重建 mmap。判据写宽了会让每次 reload 都重解析一遍词表。
-    pub(crate) emoji_spec: Mutex<Option<EmojiSpec>>,
     /// 「辅助码触发键被音节分隔符占用」的告警是否已发过（每方案一次，随
     /// `invalidate_aux_code_table` 复位）。见 `handle_aux_code::warn_aux_code_key_taken`。
     pub(crate) aux_code_key_warned: std::sync::atomic::AtomicBool,
@@ -1637,8 +1540,6 @@ pub struct Coordinator {
     /// reload 变更检测用。白名单也进变更判据——只比路径的话，用户改完「适用方案」
     /// 会因「路径没变」被判成空操作，表现是「改了要重启才生效」。见 `sync_comment_dicts`。
     pub(crate) comment_dict_paths: Mutex<Vec<(std::path::PathBuf, Vec<String>)>>,
-    /// 标点配对跟踪栈（用于智能跳过）；中/英配对表在 rt bundle 内。
-    pub(crate) pair_tracker: Mutex<aurora_transform::pair_tracker::PairTracker>,
     /// 最近一次有效光标坐标 (x,y,height)；用于无效坐标时回退，避免候选窗跑到左上角
     last_valid_caret: Mutex<(i32, i32, i32)>,
     /// 延迟首次显示：新组合首帧不立即显示候选窗，待 handle_caret_update 收到 reflow 后的权威坐标、
@@ -1654,8 +1555,8 @@ pub struct Coordinator {
     /// 重新套上。只设一次（构造后），故用 `OnceLock` 而不加锁。
     config_overlay: std::sync::OnceLock<fn(&mut Config)>,
     /// 暂停学习（隐私 / 无痕输入）：置位期间上屏照常、候选照常，但**不把这次输入写进任何
-    /// 用户数据**（词频、自动造词 / 草稿、联想历史与下一词、英文造词、输入统计、快捷输入 /
-    /// 网址 / 邮箱历史、上屏历史）。见 [`Coordinator::set_learning_suspended`]。
+    /// 用户数据**（词频、自动造词 / 草稿、联想历史与下一词、英文造词、输入统计、快捷输入
+    /// 历史、上屏历史）。见 [`Coordinator::set_learning_suspended`]。
     ///
     /// 纯运行时、**不进配置**：它描述的是「当前这个输入框」的属性（Android 的
     /// `IME_FLAG_NO_PERSONALIZED_LEARNING`），宿主每次聚焦重新声明；持久化下来反而会让
@@ -1813,7 +1714,7 @@ pub struct Coordinator {
     /// 分两处填：`handle_caret_update` 知道宿主上报了什么、判据走了哪条；
     /// `notify_ui_update` 知道候选窗**实际**用了哪个锚点。两者合起来才回答得了
     /// 「算出来的位置对不对」，所以先暂存，下发时补齐锚点再推给 UI。
-    caret_overlay_frame: Mutex<Option<aurora_ui_types::diag::CaretOverlayView>>,
+    caret_overlay_frame: Mutex<Option<aurora_ui_types::caret_overlay::CaretOverlayView>>,
     /// 坐标校正判据的比较基准（x, y, 有效）——「上一次**被认可**的插入点位置」。
     ///
     /// ⚠ 与 [`Self::shown_anchor`] 只差一处，但那一处正是缺陷发生的地方，**不可合并**：
@@ -2174,11 +2075,11 @@ pub struct Coordinator {
     #[cfg(windows)]
     #[allow(dead_code)] // Task 6/7 接线写帧/隐藏后即被读取
     host_render: std::sync::OnceLock<Arc<aurora_bridge::host_render_windows::HostRenderManager>>,
-    /// 最近一次输入诊断快照（compartment 禁用态 / InputScope 密码位），供 Task 6 HUD 展示。
-    pub(crate) last_input_diag: Mutex<crate::input_diag::InputDiagState>,
-    /// 最近一次窗口 / TSF 上下文诊断快照（`CMD_DIAG_SNAPSHOT`）。
-    /// 与 `last_input_diag` 分开存：两者上报时机不同，合成一个就得回答「只到了一半算什么」。
-    pub(crate) last_window_diag: Mutex<crate::input_diag::WindowDiagView>,
+    /// 最近一次输入诊断快照（compartment 禁用态 / InputScope 密码位）。
+    ///
+    /// 唯一的消费者是 [`Self::input_block`] 的「密码框 / context 禁用」两档呈现（语言栏图标与
+    /// 悬停提示的措辞）——诊断浮窗已删，这里留下的只有呈现所需的那几位。
+    pub(crate) last_input_scope: Mutex<crate::input_scope::InputScopeState>,
     /// 密码框强制英文抑制态：命中密码 InputScope 时置 true，输入闸据此强制英文透传
     /// （**不改 `chinese_mode` 持久值**）。
     ///
@@ -2215,17 +2116,6 @@ pub struct Coordinator {
     /// 见 `set_password_suppress_enabled`）。这是**全局**值：未配 per-app 规则的进程跟随它；
     /// 判定一律经 `password_force_english_for_pid`，不要直接读本字段做抑制决策。
     pub(crate) password_suppress_enabled: std::sync::atomic::AtomicBool,
-    /// 输入诊断 HUD 是否可见（Task 6/7 接线；本任务先占位默认 false）。
-    pub(crate) input_diag_hud_visible: std::sync::atomic::AtomicBool,
-    /// HUD 分区显示开关（右键菜单「显示分类」）。会话级，不持久化。
-    pub(crate) input_diag_sections: Mutex<aurora_ui_types::DiagSections>,
-    /// HUD 冻结中（右键菜单「停止刷新」）：新快照不再推给 UI。
-    ///
-    /// 冻结落在**推送**这一层而不是 UI 渲染层：数据照常进 `last_*_diag`（解冻后立即有
-    /// 最新值），只是不往屏幕上送。若改在 UI 侧丢弃，解冻后得等下一次焦点事件才恢复。
-    pub(crate) input_diag_frozen: std::sync::atomic::AtomicBool,
-    /// HUD 窗口置顶（右键菜单）。默认开——诊断浮窗被盖住就失去意义。
-    pub(crate) input_diag_topmost: std::sync::atomic::AtomicBool,
     /// 按应用方案（compat.toml `schema`）的运行时态：全局方案、`@remember` 记忆表等，
     /// 见 `coordinator/app_schema.rs`。
     pub(crate) app_schema: app_schema::AppSchemaState,
@@ -2543,8 +2433,8 @@ impl Coordinator {
     /// 判断收口在各条**学习入口**（`record_selection_cased_in`、`learn_phrase_on_commit_in`、
     /// `bump_selected_temp_word`、`promote_draft_on_commit`、`note_draft_commit`、
     /// `learn_english_raw`、`record_assoc_pick`、`learn_next_word`、`record_commit_ks` /
-    /// `handle_english_stats`、`learn_quick_history`、`learn_url_history`、
-    /// `learn_email_suffix`、`push_commit_history`），而不是散在各个 store 写函数里：
+    /// `handle_english_stats`、`learn_quick_history`、`push_commit_history`），
+    /// 而不是散在各个 store 写函数里：
     /// 用户**主动**的操作（加词、删词、置顶、清空）也走同一批 store 写函数，那是用户意图、
     /// 不是学习，暂停期间必须照常生效。读路径一概不看本开关。
     ///
@@ -3021,11 +2911,6 @@ impl Coordinator {
                 candidates: Vec::new(),
                 selected_index: 0,
                 current_page: 0,
-                grid_top: None,
-                grid_keep: false,
-                grid_tab: aurora_ui_types::GridTab::All,
-                grid_full: Vec::new(),
-                grid_tab_anchor: None,
                 paged: false,
                 candidate_input: String::new(),
                 candidate_limit: 0,
@@ -3042,12 +2927,6 @@ impl Coordinator {
                 temp_english_buffer: String::new(),
                 temp_english_cursor: 0,
                 temp_english_prefix: String::new(),
-                url_buffer: String::new(),
-                email_buffer: String::new(),
-                email_cursor: 0,
-                url_cursor: 0,
-                unicode_buffer: String::new(),
-                unicode_cursor: 0,
                 rewind: None,
                 special_buffer: String::new(),
                 special_cursor: 0,
@@ -3088,7 +2967,6 @@ impl Coordinator {
             capslock_hook: Mutex::new(None),
             capslock_press_tx,
             caps_press_claimed: std::sync::atomic::AtomicBool::new(false),
-            smart_symbol: Mutex::new(SmartSymbolArm::default()),
             draft_window: Mutex::new(crate::draft_window::DraftWindowBuf::new()),
             draft_queue: Mutex::new(Vec::new()),
             draft_flushing: std::sync::atomic::AtomicBool::new(false),
@@ -3120,10 +2998,6 @@ impl Coordinator {
             state_writer: state_writer::StateWriter::new(persists_state, Config::state_dir()),
             reverse: std::sync::RwLock::new(reverse),
             aux_code_runtime: std::sync::RwLock::new(None),
-            // 空初值 + 下面 new() 里的 sync_emoji_dict 首次加载：与注释库/拆字字体同一套
-            // 「声明式变更」写法，启动与后续 reload 走**同一条**代码路径。
-            emoji_dict: std::sync::RwLock::new(None),
-            emoji_spec: Mutex::new(None),
             aux_code_key_warned: std::sync::atomic::AtomicBool::new(false),
             quick_formats,
             softkeyboard,
@@ -3147,7 +3021,6 @@ impl Coordinator {
             // 空初值 + new() 里的 sync_comment_dicts 首次加载：与拆字字体同一套「声明式变更
             // 检测」，构造期不做 IO，加载与热重载走同一条路径（不会出现只在启动生效的分叉）。
             comment_dict_paths: Mutex::new(Vec::new()),
-            pair_tracker: Mutex::new(aurora_transform::pair_tracker::PairTracker::new()),
             last_valid_caret: Mutex::new((0, 0, 0)),
             caret_independent: std::sync::atomic::AtomicBool::new(false),
             config_overlay: std::sync::OnceLock::new(),
@@ -3236,22 +3109,17 @@ impl Coordinator {
             focus_pid: std::sync::atomic::AtomicU32::new(0),
             #[cfg(windows)]
             host_render: std::sync::OnceLock::new(),
-            last_input_diag: Mutex::new(Default::default()),
+            last_input_scope: Mutex::new(Default::default()),
             input_block_gate: Mutex::new(InputBlockGate::default()),
             last_langbar_tooltip: Mutex::new(String::new()),
             tooltip_page: Mutex::new(Vec::new()),
             tooltip_menu_target: Mutex::new(None),
             #[cfg(ext_presenter)]
             candidate_menu_open: std::sync::atomic::AtomicBool::new(false),
-            last_window_diag: Mutex::new(Default::default()),
             password_suppress: std::sync::atomic::AtomicBool::new(false),
             password_suppress_enabled: std::sync::atomic::AtomicBool::new(
                 password_suppress_enabled_init,
             ),
-            input_diag_hud_visible: std::sync::atomic::AtomicBool::new(false),
-            input_diag_sections: Mutex::new(Default::default()),
-            input_diag_frozen: std::sync::atomic::AtomicBool::new(false),
-            input_diag_topmost: std::sync::atomic::AtomicBool::new(true),
             app_schema: app_schema::AppSchemaState::new(global_schema_init, app_schemas_init),
         });
         // CapsLock 钩子的动作消费线程。钩子回调只做非阻塞投递（它超时会被系统静默移除且
@@ -3459,8 +3327,6 @@ impl Coordinator {
                             .unwrap_or(false),
                         first_show_mode: rule.and_then(|r| r.first_show_mode),
                         has_initial_rule: initial_mode.is_some() || initial_punct.is_some(),
-                        auto_pair: rule.and_then(|r| r.auto_pair),
-                        smart_method: rule.and_then(|r| r.smart_method),
                         caret_offset_x: rule.map(|r| r.caret_offset_x).unwrap_or(0),
                         caret_offset_y: rule.map(|r| r.caret_offset_y).unwrap_or(0),
                         window_hash,
@@ -3475,7 +3341,7 @@ impl Coordinator {
         // 规则未命中与「命中但全 false」在日志里无从区分，查「某应用兼容项没生效」时看不到
         // 究竟是没匹配上进程名还是字段没读到。
         debug!(
-            "Compat rule for process={name} class={:?} title_len={}: matched={} caret_use_top={} stale_probe_guard={} composition_start_pair_guard={} pin_anchor_when_start_drifts={} first_show_mode={} initial_mode={} initial_punct={} auto_pair={} smart_method={} caret_offset=({},{})",
+            "Compat rule for process={name} class={:?} title_len={}: matched={} caret_use_top={} stale_probe_guard={} composition_start_pair_guard={} pin_anchor_when_start_drifts={} first_show_mode={} initial_mode={} initial_punct={} caret_offset=({},{})",
             win.class,
             win.title.chars().count(),
             rule_matched,
@@ -3492,16 +3358,6 @@ impl Coordinator {
             rule_initial_punct
                 .map(|m| m.as_config())
                 .unwrap_or("(follow-global)"),
-            match next.auto_pair {
-                Some(true) => "on",
-                Some(false) => "off",
-                None => "(follow-global)",
-            },
-            match next.smart_method {
-                Some(aurora_config::config::SmartMethod::DeleteReplace) => "delete_replace",
-                Some(aurora_config::config::SmartMethod::HoldComposition) => "hold_composition",
-                None => "(follow-global)",
-            },
             next.caret_offset_x,
             next.caret_offset_y
         );
@@ -3523,8 +3379,8 @@ impl Coordinator {
     /// 为什么需要：`pid_names` 是**一次写入、永不失效**的 pid→名字缓存，而
     /// `cached_proc_name` / `update_active_compat` 都是缓存优先。Windows 会复用已退出
     /// 进程的 PID，于是「A 退出 → B 拿到同一个 pid」之后，B 会被永久当成 A——整条
-    /// per-app 链一起错：compat 规则（`initial_mode` / `caret_*` / `auto_pair` /
-    /// `smart_method` / `first_show_mode`）与中英记忆表。而且**没有任何自愈路径**：
+    /// per-app 链一起错：compat 规则（`initial_mode` / `caret_*` / `first_show_mode`）
+    /// 与中英记忆表。而且**没有任何自愈路径**：
     /// `update_active_compat` 对同 pid 直接早退，连重查的机会都没有。
     ///
     /// 选连接时机校正，是因为新进程必然连一次，而同进程多次连接（多 TSF 实例、管道抖动
@@ -3534,7 +3390,7 @@ impl Coordinator {
     /// 由 `.app` 随焦点事件送进缓存。清掉会让 compat 规则在下一次 focus_gained 之前全部失配。
     ///
     /// ★ 真的改写了缓存时，给该进程的推送客户端**补推**按 pid 现算的 DLL 配置（密码框吃键
-    /// 门控、英文自动配对）：推送通道的握手可能早于主管道的这次校正，那时推过去的值是按
+    /// 门控）：推送通道的握手可能早于主管道的这次校正，那时推过去的值是按
     /// **旧名**算的——密码框门控错了就打破 core.suppress ⊆ C++.suppress（密码框丢键）。
     /// 首次落缓存（`None` 分支）不用补推：缓存为空时握手现查的就是真名。
     #[cfg(any(windows, test))]
@@ -3586,7 +3442,6 @@ impl Coordinator {
             self.forget_focus_windows_of_pid(pid);
             for token in self.push_server.tokens_of_pid(pid) {
                 self.push_password_suppress_config(token);
-                self.push_english_pair_config(token);
                 self.push_composition_placeholder_config(token);
                 self.push_multiline_commit_config(token);
                 // 标题采集开关按进程名算（本进程可能命中标题规则），名字纠正后同样要重推。
@@ -3613,8 +3468,8 @@ impl Coordinator {
     }
 
     /// 只刷新 `active_compat` 里「当前生效设置」那一半字段（`caret_use_top` /
-    /// `stale_probe_guard` / `composition_start_pair_guard` / `first_show_mode` / `auto_pair` /
-    /// `smart_method` / `caret_offset_*`），**刻意不碰
+    /// `stale_probe_guard` / `composition_start_pair_guard` / `first_show_mode` /
+    /// `caret_offset_*`），**刻意不碰
     /// `.pid` 与 `.has_initial_rule`**。
     ///
     /// 这两个字段的另一重身份是「上一次真实 `FOCUS_GAINED` 落在哪个进程」——
@@ -3668,8 +3523,6 @@ impl Coordinator {
             composition_start_pair_guard,
             pin_anchor_when_start_drifts,
             first_show_mode,
-            auto_pair,
-            smart_method,
             caret_offset_x,
             caret_offset_y,
         ) = self.with_compat_rule(&name, &win, |rule| {
@@ -3681,28 +3534,16 @@ impl Coordinator {
                 rule.and_then(|r| r.pin_anchor_when_start_drifts)
                     .unwrap_or(false),
                 rule.and_then(|r| r.first_show_mode),
-                rule.and_then(|r| r.auto_pair),
-                rule.and_then(|r| r.smart_method),
                 rule.map(|r| r.caret_offset_x).unwrap_or(0),
                 rule.map(|r| r.caret_offset_y).unwrap_or(0),
             )
         });
         debug!(
-            "Connected-pid compat refresh for process={name} (pid={pid}): caret_use_top={} stale_probe_guard={stale_probe_guard} composition_start_pair_guard={composition_start_pair_guard} first_show_mode={} auto_pair={} smart_method={} caret_offset=({},{})",
+            "Connected-pid compat refresh for process={name} (pid={pid}): caret_use_top={} stale_probe_guard={stale_probe_guard} composition_start_pair_guard={composition_start_pair_guard} first_show_mode={} caret_offset=({},{})",
             caret_use_top,
             first_show_mode
                 .map(|m| m.as_config())
                 .unwrap_or("(follow-global)"),
-            match auto_pair {
-                Some(true) => "on",
-                Some(false) => "off",
-                None => "(follow-global)",
-            },
-            match smart_method {
-                Some(aurora_config::config::SmartMethod::DeleteReplace) => "delete_replace",
-                Some(aurora_config::config::SmartMethod::HoldComposition) => "hold_composition",
-                None => "(follow-global)",
-            },
             caret_offset_x,
             caret_offset_y
         );
@@ -3713,8 +3554,6 @@ impl Coordinator {
             ac.composition_start_pair_guard = composition_start_pair_guard;
             ac.pin_anchor_when_start_drifts = pin_anchor_when_start_drifts;
             ac.first_show_mode = first_show_mode;
-            ac.auto_pair = auto_pair;
-            ac.smart_method = smart_method;
             ac.caret_offset_x = caret_offset_x;
             ac.caret_offset_y = caret_offset_y;
         }
@@ -3814,20 +3653,20 @@ impl Coordinator {
             .unwrap_or_default()
     }
 
-    /// 消费一次输入诊断上报（compartment 禁用态 + InputScope 掩码）：更新 `last_input_diag`
+    /// 消费一次输入诊断上报（compartment 禁用态 + InputScope 掩码）：更新 `last_input_scope`
     /// 快照，并按 `password_force_english_for_pid`（per-app 规则优先，否则全局开关）决定是否
     /// 强制英文抑制（密码框场景）。
-    pub(crate) fn apply_input_diag(&self, pid: u32, disabled: bool, reason_byte: u8, mask: u64) {
-        self.apply_input_diag_capped(pid, disabled, reason_byte, mask, true);
+    pub(crate) fn apply_input_scope(&self, pid: u32, disabled: bool, reason_byte: u8, mask: u64) {
+        self.apply_input_scope_capped(pid, disabled, reason_byte, mask, true);
     }
 
-    /// 同 [`Self::apply_input_diag`]，`allow_raise = false` 时本次**只降不升**：算出要抑制也先不置位。
+    /// 同 [`Self::apply_input_scope`]，`allow_raise = false` 时本次**只降不升**：算出要抑制也先不置位。
     ///
     /// 给「同一 token 刚换了窗口」用：DLL 那份门控按旧窗口算、新值的重推还在路上，此刻服务端
     /// 按新窗口当场置位就是 core 抑制而 DLL 照吃——违反 core.suppress ⊆ C++.suppress
     /// （同 [`Self::relax_password_suppress_for_focus`] 的口径）。置位留给 DLL 下一次
     /// input_state_report（那时它手里必然已有新值）。
-    pub(crate) fn apply_input_diag_capped(
+    pub(crate) fn apply_input_scope_capped(
         &self,
         pid: u32,
         disabled: bool,
@@ -3840,12 +3679,7 @@ impl Coordinator {
         // DLL 把 context 级 KEYBOARD_DISABLED 折进了 mask 的 IS_PASSWORD 位，折位前的区分只有
         // 它知道（见 `reason_from_report`）。reason 只管展示与提示语，**不参与**下面的抑制决策
         // ——抑制仍只看 mask，两种来源行为一致，避免「双重来源」歧义。
-        let reason = crate::input_diag::reason_from_report(disabled, reason_byte, mask);
-        let name = if pid != 0 {
-            self.cached_proc_name((pid as u64) << 32)
-        } else {
-            String::new()
-        };
+        let reason = crate::input_scope::reason_from_report(disabled, reason_byte, mask);
         // 抑制：命中密码 InputScope 位 且 策略开关开 → 强制英文。
         //
         // ⚠ 曾经这里还有一条 `&& !disabled`，理由是「disabled 时 DLL 已放行所有键、引擎收不到
@@ -3864,175 +3698,21 @@ impl Coordinator {
         // 开关取值按 pid 走 `password_force_english_for_pid`（per-app 规则优先，否则全局）——
         // 与推给该 DLL 的值**同一个函数**，这是上面那条不变量在按应用覆盖下成立的前提。
         let suppress = allow_raise
-            && crate::input_diag::is_password_scope(mask)
+            && crate::input_scope::is_password_scope(mask)
             && self.password_force_english_for_pid(pid);
         self.password_suppress.store(suppress, Relaxed);
         {
             let mut d = self
-                .last_input_diag
+                .last_input_scope
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            *d = crate::input_diag::InputDiagState {
+            *d = crate::input_scope::InputScopeState {
                 pid,
-                process_name: name,
                 disabled,
                 reason,
                 mask,
             };
         }
-        self.push_input_diag_hud_if_visible();
-    }
-
-    /// 消费一次诊断快照：存 DLL 上报的窗口链 / TSF 实例。
-    ///
-    /// ⚠ host-render 运行态（白名单 / 活跃）**不在这里算**——它们是服务端随时可查的实时值，
-    /// 存进快照就等于被冻结在「快照到达那一刻」。而 `active_target` 恰恰要到**首次按键**
-    /// 才置位（searchapp/SearchHost 这类 transient DocMgr 宿主不发 focus_gained，note_focus
-    /// 只能走 CMD_KEY_EVENT），快照却在 OnSetFocus 就发出了 ⇒ 存下来的必然是 `活跃: 否`，
-    /// 让人误判成 host render 没生效。现算在 [`Self::push_input_diag_hud`]。
-    pub(crate) fn apply_diag_snapshot(&self, snap: &aurora_ipc::protocol::DiagSnapshotPayload) {
-        // 进程名：服务端按 pid 现查（DLL 不上报——它未必有权限打开别的进程）。
-        // 快照来源进程与前台进程分别查：多进程宿主下它们本就可能不同，而「本快照来自谁」
-        // 是判读整份数据的前提（见 `WindowDiagView::pid`）。
-        let proc_name = |pid: u32| {
-            if pid != 0 {
-                self.cached_proc_name((pid as u64) << 32)
-            } else {
-                String::new()
-            }
-        };
-        let process_name = proc_name(snap.pid);
-        let fg_process_name = proc_name(snap.fg_pid);
-
-        {
-            let mut w = self
-                .last_window_diag
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            *w = crate::input_diag::WindowDiagView {
-                pid: snap.pid,
-                process_name,
-                focus_hwnd: snap.focus_hwnd,
-                focus_class: snap.focus_class.clone(),
-                focus_source_label: aurora_ipc::protocol::window_source::label(
-                    snap.focus_hwnd_source,
-                )
-                .to_string(),
-                root_hwnd: snap.root_hwnd,
-                root_class: snap.root_class.clone(),
-                root_band: snap.root_band,
-                fg_hwnd: snap.fg_hwnd,
-                fg_class: snap.fg_class.clone(),
-                fg_pid: snap.fg_pid,
-                fg_process_name,
-                docmgr_id: snap.docmgr_id,
-                context_id: snap.context_id,
-                focus_session_id: snap.focus_session_id,
-                docmgr_changed: snap.docmgr_changed(),
-                host_band: snap.host_band,
-                // 这两项由 push 时现算填入（见本函数文档），此处留默认值。
-                host_whitelisted: false,
-                host_active: false,
-                received: true,
-            };
-        }
-        self.push_input_diag_hud_if_visible();
-    }
-
-    /// 下发诊断快照采集开关给 DLL（随 HUD 显隐 + 握手时）。
-    ///
-    /// 采集要查三次窗口类名 + band，故默认关；**握手时必须也推一次**——DLL 每次重连都从
-    /// 默认值（关）起步，只在切换时推会让重连后的宿主永远不采集，而 SearchHost 这类
-    /// transient 宿主恰恰最常重连，也恰恰最需要 HUD（它是 AppContainer，写不了日志）。
-    pub fn push_diag_snapshot_config(&self, client_token: u64) {
-        let enabled = self
-            .input_diag_hud_visible
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let value = aurora_ipc::codec::encode_diag_snapshot_value(enabled);
-        let msg = aurora_ipc::codec::encode_sync_config(
-            aurora_ipc::protocol::CONFIG_KEY_DIAG_SNAPSHOT,
-            &value,
-        );
-        if client_token != 0 {
-            self.push_server.push_to_token(client_token, &msg);
-        } else {
-            self.push_server.push_to_active(&msg);
-        }
-    }
-
-    /// HUD 推送（数据到达路径）：HUD 可见且**未冻结**时下发一帧。
-    pub(crate) fn push_input_diag_hud_if_visible(&self) {
-        self.push_input_diag_hud(false);
-    }
-
-    /// HUD 推送。`force=true` 时无视冻结照常下发。
-    ///
-    /// ⚠ 冻结只该挡住**数据变化**引起的刷新，不该挡住用户自己的操作（切分区/切置顶/
-    /// 切冻结本身）。两者混为一谈的后果是"点了菜单屏幕毫无反应"——而那与"菜单坏了"
-    /// 在用户眼里完全一样。故所有菜单动作一律走 `force=true`。
-    pub(crate) fn push_input_diag_hud(&self, force: bool) {
-        use std::sync::atomic::Ordering::Relaxed;
-        if !self.input_diag_hud_visible.load(Relaxed) {
-            return;
-        }
-        if !force && self.input_diag_frozen.load(Relaxed) {
-            return;
-        }
-        let d = self
-            .last_input_diag
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        // 取 state 快照：HUD 要显示决定工具栏可见性的两个正交状态位。
-        // 先 drop 掉 last_input_diag 的锁再取 state 锁，避免与其它路径形成反序嵌套。
-        let (process_name, pid, disabled, reason, mask) =
-            (d.process_name.clone(), d.pid, d.disabled, d.reason, d.mask);
-        drop(d);
-        let (ime_active, has_edit_context) = {
-            let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            (s.ime_active, s.has_edit_context)
-        };
-        // 窗口快照独立取（锁序：last_input_diag → state → last_window_diag，全程不嵌套）。
-        #[cfg_attr(not(windows), allow(unused_mut))] // host-render 现算段仅 Windows 有
-        let mut window = self
-            .last_window_diag
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        // host-render 运行态**在此现算**，不沿用快照里的值：它们随时可查，存进快照就会被
-        // 冻结在快照到达那一刻（详见 `apply_diag_snapshot` 文档）。
-        //
-        // ⚠ 必须按**快照来源进程**的 pid 直查，不得走 `ActiveCompat` 全局焦点槽——开始菜单
-        // 弹出会连带激活兄弟进程污染该槽，那正是当初 avail 位被污染、DLL 陷入销毁重建循环的
-        // 成因（`docs/redesign/host-render-windows-port.md` §11.2）。
-        #[cfg(windows)]
-        if window.pid != 0
-            && let Some(mgr) = self.host_render()
-        {
-            window.host_whitelisted = mgr.is_process_whitelisted(window.pid);
-            window.host_active = mgr.active_target().is_some_and(|t| t.pid == window.pid);
-        }
-        let sections = *self
-            .input_diag_sections
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let view = aurora_ui_types::InputDiagView {
-            process_name,
-            pid,
-            disabled,
-            reason_text: crate::input_diag::reason_label(reason).to_string(),
-            // 展示宿主**原始**报的 scope：context 级禁用那档要摘掉 DLL 折进去的 IS_PASSWORD 位，
-            // 否则 HUD 上会出现宿主根本没报过的 0x80000001（t197 楼主被它误导成「scope 变密码」）。
-            mask: crate::input_diag::display_mask(reason, mask),
-            ime_active,
-            has_edit_context,
-            window,
-            sections,
-            topmost: self.input_diag_topmost.load(Relaxed),
-            frozen: self.input_diag_frozen.load(Relaxed),
-        };
-        let _ = self
-            .ui_tx
-            .send(aurora_ui_types::UiCommand::ShowInputDiag(view));
     }
 
     /// 查 `compat.toml` 中该进程（该窗口）的候选窗首显规则；`None` = 未配置（跟随全局）。
@@ -4350,7 +4030,7 @@ impl Coordinator {
     /// 三个信号源都已由 DLL 上报到位，无需新增 IPC：
     /// · 线程级禁用 → `focus_gained` 的 `disabled` 字段（DLL 注释写明该字段**统一是线程级**，
     ///   密码框那一层折在 mask 的 IS_PASSWORD 位里，两者不可混为一谈）；
-    /// · 密码框     → `apply_input_diag` 据 mask 置位的 `password_suppress`，与输入闸同源；
+    /// · 密码框     → `apply_input_scope` 据 mask 置位的 `password_suppress`，与输入闸同源；
     /// · 无编辑上下文 → `focus_lost(NoEditCtx/CtxLost)` / `focus_gained` 维护的 `has_edit_context`。
     ///
     /// ⚠ `ime_active` 为假时一律返回 `None`：那说明本输入法根本没在服务任何宿主
@@ -4366,7 +4046,7 @@ impl Coordinator {
             return InputBlock::None;
         }
         if self
-            .last_input_diag
+            .last_input_scope
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .disabled
@@ -4379,11 +4059,11 @@ impl Coordinator {
         {
             // 同一个抑制态，成因分两档展示（见 `InputBlock::ContextDisabled`）。
             let ctx_only = self
-                .last_input_diag
+                .last_input_scope
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .reason
-                == crate::input_diag::InputDiagReason::ContextDisabled;
+                == crate::input_scope::InputScopeReason::ContextDisabled;
             return if ctx_only {
                 InputBlock::ContextDisabled
             } else {
@@ -4752,206 +4432,6 @@ impl Coordinator {
         }
         *cur = paths;
     }
-
-    /// 同步 emoji 扩展表（`[input.emoji]`）。调用点=启动、`reload_user_config`，与
-    /// [`Self::sync_comment_dicts`] 同一套「声明式变更」写法：变了才重载。
-    ///
-    /// 变更判据只取 `(enabled, categories)` ——**只有这两项影响加载结果**。`show_as`
-    /// `max_per_word` 之类是查询期参数，把它们写进判据会让每次 reload 都重解析一遍
-    /// 4600 行词表并重建缓存。
-    ///
-    /// # 加载失败**不记录** spec
-    ///
-    /// 三种结局分开处置：功能关（记录，置 None）、加载成功（记录）、加载失败（**不记录**）。
-    /// 失败不记录 ⇒ 下次 sync 会重试，于是用户补跑 `gen-data` 后不必改配置就能生效；
-    /// 重试成本只是解析一次路径后发现文件不在，可以忽略。
-    pub(crate) fn sync_emoji_dict(&self) {
-        let (enabled, categories, modules) = {
-            let rt = self.rt();
-            let e = &rt.config.input.emoji;
-            // 列表含用户放进 `emoji/` 的文件：扫目录发生在这里（启动 / 配置重载），
-            // 不在按键路径上。新放的文件要重载配置（或重开设置保存一次）才挂上。
-            let modules: Vec<aurora_config::EmojiModuleEntry> =
-                Config::emoji_modules(Config::data_dir().as_deref())
-                    .into_iter()
-                    .filter(|m| e.module_enabled(&m.id))
-                    .collect();
-            (e.enabled, e.categories, modules)
-        };
-        // 值域校验放在去重之前：`scope`/`show_as` 不影响加载、不进变更判据，但配置变更
-        // 时正是唯一该告警的时机。放进热路径的话每次按键都会刷一条。
-        {
-            let rt = self.rt();
-            let e = &rt.config.input.emoji;
-            const SCOPES: &[&str] = &["off", "exact", "all"];
-            const SHOW_AS: &[&str] = &["after", "tail", "comment"];
-            if !SCOPES.contains(&e.scope.as_str()) {
-                warn!(
-                    "input.emoji.scope 值不认识: {:?}（应为 {:?}），本次按 exact 处理",
-                    e.scope, SCOPES
-                );
-            }
-            if !SHOW_AS.contains(&e.show_as.as_str()) {
-                warn!(
-                    "input.emoji.show_as 值不认识: {:?}（应为 {:?}），本次按 after 处理",
-                    e.show_as, SHOW_AS
-                );
-            }
-        }
-        let spec: EmojiSpec = (
-            enabled,
-            categories,
-            modules.iter().map(|m| m.id.clone()).collect(),
-        );
-        {
-            let cur = self.emoji_spec.lock().unwrap_or_else(|e| e.into_inner());
-            if cur.as_ref() == Some(&spec) {
-                return;
-            }
-        }
-        // 关闭：连数据文件都不打开。未启用的用户为本功能付出的开销就此归零。
-        if !enabled {
-            *self.emoji_dict.write().unwrap_or_else(|e| e.into_inner()) = None;
-            *self.emoji_spec.lock().unwrap_or_else(|e| e.into_inner()) = Some(spec);
-            info!("emoji 扩展已关闭");
-            return;
-        }
-        // 一表一缓存之前是主表 + 分类表合建的一份 `emoji.wemj`，现已无人读它
-        if let Some(dir) = Config::cache_dir() {
-            for f in ["emoji.wemj", "emoji.wemj.fp", "emoji.wemj.st"] {
-                let _ = std::fs::remove_file(dir.join("emoji").join(f));
-            }
-        }
-        // ★ 先放掉旧表，再重建。`categories` 翻转会改变指纹源 ⇒ `load_or_build` 要写新的
-        // `.wemj` 并 rename 覆盖旧文件，而旧表此刻还被本字段的 Arc 持着 mmap——Windows 上
-        // 覆盖被映射的文件返回拒绝访问（本机以 mmap + `os.replace` 探针实测 WinError 5，
-        // `emojidict.rs` 的测试也为此显式 `drop(r)`）。不先放掉，表现为「打开分类词后
-        // emoji 整个消失，随便再改一项配置又回来」——spec 未记录使下次 sync 重试成功，
-        // 恰好把这个缺陷藏成了偶发。
-        //
-        // 池里只存 Weak（`reader_pool` 模块文档），本字段是唯一的强引用；写锁会等正在
-        // `apply_emoji_suggestions` 里的读者退出，之后旧映射即释放。
-        *self.emoji_dict.write().unwrap_or_else(|e| e.into_inner()) = None;
-        let loaded = Self::load_emoji_dict(categories, &modules);
-        let ok = loaded.is_some();
-        *self.emoji_dict.write().unwrap_or_else(|e| e.into_inner()) = loaded;
-        if ok {
-            *self.emoji_spec.lock().unwrap_or_else(|e| e.into_inner()) = Some(spec);
-        }
-    }
-
-    /// 实际加载 emoji 表：解析路径 → （繁简归一）→ 建/复用 `.wemj` 缓存 → mmap。
-    ///
-    /// **一表一缓存**（`<cache>/emoji/<id>.wemj`），查询期按顺序合并（[`EmojiTables`]）：
-    /// 开关一个模块只是挂 / 不挂那张表，其余的缓存原样复用、永不因别人重建。合建一份的话，
-    /// 翻任何一个开关都要重写整份 `.wemj`，而 Windows 上覆盖被映射的文件会被拒（见
-    /// `sync_emoji_dict` 里「先放掉旧表」那段）。
-    ///
-    /// 顺序：rime-emoji 主表 → 分类表 → 附加模块（[`aurora_config::EMOJI_MODULES`] 的顺序）。
-    /// 主表在前，开了附加模块的用户原有的首个 emoji 不变。
-    ///
-    /// 一张都没加载成返回 `None`（＝功能不可用），**不降级成内存表**——理由见
-    /// [`aurora_dict::emojidict::load_or_build`]：本功能是纯锦上添花的可选项，而「常驻内存
-    /// 随功能数量累积」正是它要避开的东西。
-    fn load_emoji_dict(
-        categories: bool,
-        modules: &[aurora_config::EmojiModuleEntry],
-    ) -> Option<EmojiTables> {
-        let data_dir = Config::data_dir();
-        let dd = data_dir.as_deref();
-        let Some(cache_dir) = Config::cache_dir() else {
-            warn!("无缓存目录，emoji 扩展不可用");
-            return None;
-        };
-        let cache_of = |id: &str| cache_dir.join("emoji").join(format!("{id}.wemj"));
-        let mut readers = Vec::new();
-
-        // ── rime-emoji 主表 / 分类表：键是繁体，必须归一 ──
-        match Self::load_emoji_norm(dd) {
-            Some((norm, norm_path)) => {
-                let mut rime = vec![("word", "emoji/emoji_word.txt", true)];
-                rime.push(("category", "emoji/emoji_category.txt", categories));
-                for (id, rel, on) in rime {
-                    if !on {
-                        continue;
-                    }
-                    let Some(src) = Config::resolve_data_file(dd, rel) else {
-                        warn!(
-                            "emoji 表缺失（data/{rel}），已跳过（安装包应已附带；源码构建请跑 gen-data）"
-                        );
-                        continue;
-                    };
-                    // 归一表进 `fp_extra`：它不参与解析但决定解析结果，漏传会让 OpenCC 数据
-                    // 升级后旧缓存被永久复用（见 `cache_fp::EMOJI_TAG`）。
-                    if let Some(r) = aurora_dict::emojidict::load_or_build(
-                        &[src],
-                        std::slice::from_ref(&norm_path),
-                        &cache_of(id),
-                        &[],
-                        Some(&|s: &str| norm.convert_once(s)),
-                    ) {
-                        readers.push(r);
-                    }
-                }
-            }
-            None => warn!("emoji 繁简归一表不可用，rime-emoji 主表与分类表已跳过"),
-        }
-
-        // ── 附加模块（rime-frost 与用户放置的 OpenCC 表，键是简体，不归一）──
-        for m in modules {
-            let Some(src) = Config::resolve_data_file(dd, &m.file) else {
-                warn!("emoji 模块 {} 的源文件缺失（{}），已跳过", m.id, m.file);
-                continue;
-            };
-            // 用户模块的缓存名加前缀：用户文件名任意，别和内置模块、主表的缓存撞名。
-            let cache_id = if m.user {
-                format!("user.{}", m.id)
-            } else {
-                m.id.clone()
-            };
-            if let Some(r) = aurora_dict::emojidict::load_or_build(
-                &[src],
-                &[],
-                &cache_of(&cache_id),
-                &m.sections,
-                None,
-            ) {
-                readers.push(r);
-            }
-        }
-
-        if readers.is_empty() {
-            warn!("emoji 表一张都没加载成，功能不可用");
-            return None;
-        }
-        let n: u32 = readers.iter().map(|r| r.entry_count()).sum();
-        info!("Loaded emoji dict: {} 张表 {} entries", readers.len(), n);
-        Some(EmojiTables(readers))
-    }
-
-    /// rime-emoji 的繁→简归一表。上游键全是繁体（实测 国0/國28、爱0/愛16），而本仓候选
-    /// 恒简体 ⇒ 缺了它主表与分类表**一条都命中不了**，此时宁可不挂这两张，也不挂上一张
-    /// 看着启用、实际全空的表。
-    fn load_emoji_norm(
-        dd: Option<&std::path::Path>,
-    ) -> Option<(aurora_transform::s2t::Dict, std::path::PathBuf)> {
-        let Some(norm_path) = Config::resolve_data_file(dd, "opencc/TSCharactersDerived.octrie")
-        else {
-            warn!(
-                "emoji 繁简归一表缺失（opencc/TSCharactersDerived.octrie）（安装包应已附带；源码构建请跑 gen-data）"
-            );
-            return None;
-        };
-        let norm_bytes = std::fs::read(&norm_path)
-            .map_err(|e| warn!("读 emoji 归一表失败 {}: {}", norm_path.display(), e))
-            .ok()?;
-        let norm = aurora_transform::s2t::Dict::parse(&norm_bytes).or_else(|| {
-            warn!("emoji 归一表格式无效: {}", norm_path.display());
-            None
-        })?;
-        Some((norm, norm_path))
-    }
-
     /// 辅助码来源缓存失效：方案切换后置 `None`，下次进入辅助码时按新方案的
     /// `[engine.aux_code]` 重建（`ensure_aux_code_runtime` 另按来源清单比对，来源没变也会
     /// 因这里置空而重读文件表——切方案时顺带刷新磁盘上改过的码表）。
@@ -5080,10 +4560,6 @@ impl Coordinator {
                 // 改动本身不会把 schema 标脏，放进那个分支等于「改了挂载列表没反应，
                 // 直到下次切方案才生效」。自身按路径序列做变更检测，未变即空操作。
                 self.sync_comment_dicts();
-                // emoji 扩展表同理跟随全局配置（`[input.emoji]`），不属 schema——它按候选
-                // 文本查表、与编码域无关，本就不是某个方案的属性。自带变更检测（只看
-                // enabled/categories），未变即空操作。
-                self.sync_emoji_dict();
                 // 用户词文本手改后，保存配置 / 设置页触发热重载时一并生效（设计 §5）。
                 if let Some(store) = &self.store {
                     let changed = store.sync_user_texts();
@@ -5211,20 +4687,13 @@ impl Coordinator {
                 self.sync_direct_switch_hotkey(); // keys.activate_ime 改键/清空即时生效
                 // capslock 绑定的增删即时生效：配上才装全局钩子，删掉立刻卸载。
                 self.sync_capslock_hook();
-                // 推送英文自动配对配置到 TSF 客户端（client_token=0 = 广播到所有活跃客户端）
-                self.push_english_pair_config(0);
-                self.push_jump_out_keys_config(0); // 配对跳出键同步（英文模式跳出 + 中文转发放行）
                 // 密码框抑制策略：内存开关随配置回灌（关掉即解除当前抑制）+ 推给 DLL 吃键门控。
                 self.set_password_suppress_enabled(new_cfg.input.password_force_english);
                 self.push_custom_en_punct_config(0); // 英半列自定义标点：DLL 据此吃键转发
                 self.push_cn_passthrough_punct_config(0); // 中文模式该透传的标点：DLL 据此**不**吃
                 self.push_en_passthrough_punct_config(0); // 同上，英文标点态那份（超集）
                 self.push_space_custom_cols_config(0); // 空格行自定义列：DLL 据此吃空缓冲空格
-                self.push_pair_state_ttl_config(0); // 配对状态时效（DLL 侧闸门据此判陈旧）
                 self.push_ctrl_space_toggle_config(0); // Ctrl+空格 切换开关：DLL 据此吃不吃该键（GH#172）
-                // 诊断采集开关本身与配置文件无关（会话级），这里重推纯属幂等保险——
-                // 与 password_suppress 同样处理，让"重载一次"能修好任何 DLL 侧状态漂移。
-                self.push_diag_snapshot_config(0);
                 // ★★ 热键表重新下发。上面的 `ConfigBundle::build` 已经**重编**过一遍
                 // （`Compiler::compile` 读的就是这份新配置），但编出来的表要经 activation
                 // push 才到得了 DLL —— 而 TSF 侧的 `RegisterHotKey` 抢占（GLOBAL 位）与
@@ -5666,8 +5135,6 @@ impl Coordinator {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = hidden;
         if hidden {
-            // 看不见的网格里 ←→ 还会移高亮而不移编码光标：随候选窗一起收起（§5.5）。
-            self.collapse_grid(&mut self.state.lock().unwrap_or_else(|e| e.into_inner()));
             self.clear_hover();
             let _ = self.ui_tx.send(UiCommand::HideCandidates);
         }
@@ -5770,19 +5237,6 @@ impl Coordinator {
             .chinese_mode
     }
 
-    /// 展开态专属键（见 `grid_key`）的完整处置：键归网格时返回结局，否则 `None`。
-    pub(crate) fn grid_key_action(
-        &self,
-        state: &mut State,
-        data: &KeyEventData,
-    ) -> Option<KeyAction> {
-        let changed = self.grid_key(state, data)?;
-        if changed && let Some(act) = self.after_nav_changed(state) {
-            return Some(act);
-        }
-        Some(KeyAction::Consumed)
-    }
-
     /// 会话态按键绑定的统一执行（配置驱动，见 `keys.session_actions`）：翻页 / 移高亮 /
     /// 取消。普通模式与所有 overlay 模式共用；`include_printable` 区分码表型（`-`/`=` 作
     /// 翻页）与文本/表达式型（临英/快捷输入，`-`/`=` 作输入字符，不夺为动作）。
@@ -5801,12 +5255,6 @@ impl Coordinator {
         data: &KeyEventData,
         include_printable: bool,
     ) -> Option<KeyAction> {
-        // 展开态专属键（←→ / Esc）先于绑定表：它们在网格里另有含义，且必须赶在各模式的
-        // 光标移动臂与 Esc 臂之前截下——本函数恰好是所有模式都先经过的那一处
-        // （快捷输入例外，它的光标与 Esc 臂在本函数之前，自己先调 `grid_key_action`）。
-        if let Some(act) = self.grid_key_action(state, data) {
-            return Some(act);
-        }
         let shift = data.modifiers & MOD_SHIFT != 0;
         let action = self.session_action_for(data.key_code, shift, include_printable)?;
         if action.requires_candidates() && state.candidates.is_empty() {
@@ -5827,11 +5275,6 @@ impl Coordinator {
                 // 判据与 `cancel_session` 的适用范围一致，见那里。
                 if !Self::has_input_session(state) {
                     return None;
-                }
-                // 展开态下取消键先收起（与 Esc 同一条两段式，见 `grid_key`）。
-                if Self::grid_active(state) && self.collapse_grid(state) {
-                    self.notify_ui_update(state);
-                    return Some(KeyAction::Consumed);
                 }
                 return Some(self.cancel_session(state));
             }
@@ -5910,8 +5353,7 @@ impl Coordinator {
             //
             // 只在主路生效：overlay（临拼 / 快捷输入 / Url / Email / Special）各有自己的
             // 缓冲光标与 ←→ 臂，`state.active` 非 `None` 时放行让位——绑了本动词不能把
-            // overlay 的编辑键抢走。展开态（网格）的 ←→ 在本函数最前已被 `grid_key_action`
-            // 截走，轮不到这里。无会话放行：空闲方向键是宿主的。
+            // overlay 的编辑键抢走。无会话放行：空闲方向键是宿主的。
             //
             // `caret_right` 在**末尾**改为上屏高亮候选（macOS「→ 进选词」）；无候选时没有
             // 可上屏的东西，纯吞键——组合进行中把 → 交给宿主会移动宿主光标，与组合区错位。
@@ -5984,27 +5426,13 @@ impl Coordinator {
         let flipped = self
             .candidate_flipped
             .load(std::sync::atomic::Ordering::Relaxed);
-        //
-        // 展开态（`grid_top` 有值）整组改写：高亮上下 = 换行、翻页 = 滚一行（PageUp/PageDown
-        // 可翻一屏），见 `candidate_grid`。
-        // 网格只在横排出现，`flipped`（竖排专属）在这里恒为 false，两支不会相遇。
-        // 收起态按下翻页先试展开：展开了就只展开、不翻页（设计 D3）。
-        let changed = if Self::grid_active(state) {
-            match nav {
-                keymap::NavAction::HighlightUp => self.grid_move_row(state, false),
-                keymap::NavAction::HighlightDown => self.grid_move_row(state, true),
-                keymap::NavAction::PagePrev => self.grid_page_key(state, false, data.key_code),
-                keymap::NavAction::PageNext => self.grid_page_key(state, true, data.key_code),
-            }
-        } else {
-            match nav {
-                keymap::NavAction::HighlightUp if flipped => self.move_down(state),
-                keymap::NavAction::HighlightDown if flipped => self.move_up(state),
-                keymap::NavAction::HighlightUp => self.move_up(state),
-                keymap::NavAction::HighlightDown => self.move_down(state),
-                keymap::NavAction::PagePrev => self.page_prev(state),
-                keymap::NavAction::PageNext => self.try_expand_grid(state) || self.page_next(state),
-            }
+        let changed = match nav {
+            keymap::NavAction::HighlightUp if flipped => self.move_down(state),
+            keymap::NavAction::HighlightDown if flipped => self.move_up(state),
+            keymap::NavAction::HighlightUp => self.move_up(state),
+            keymap::NavAction::HighlightDown => self.move_down(state),
+            keymap::NavAction::PagePrev => self.page_prev(state),
+            keymap::NavAction::PageNext => self.page_next(state),
         };
         if changed {
             if let Some(act) = self.after_nav_changed(state) {
@@ -6134,9 +5562,6 @@ impl Coordinator {
         match state.active {
             Some(ModeKind::TempPinyin) => self.exit_temp_pinyin(state),
             Some(ModeKind::TempEnglish) => self.exit_temp_english(state),
-            Some(ModeKind::Url) => self.exit_url_mode(state),
-            Some(ModeKind::Email) => self.exit_email_mode(state),
-            Some(ModeKind::Unicode) => self.exit_unicode_mode(state),
             Some(ModeKind::Special(_)) | Some(ModeKind::RareChar) | Some(ModeKind::Reverse) => {
                 self.exit_special_mode(state)
             }
@@ -6742,9 +6167,9 @@ impl Coordinator {
                         "辅助码键"
                     }
                     // 共键两个身份都要点名：只写「辅助码键」会让用户以为把辅助码关掉就不冲突了。
-                    aurora_config::SessionAction::AuxCode(aurora_config::AuxCodeShare::PageNext) => {
-                        "辅助码/翻页键"
-                    }
+                    aurora_config::SessionAction::AuxCode(
+                        aurora_config::AuxCodeShare::PageNext,
+                    ) => "辅助码/翻页键",
                     aurora_config::SessionAction::CommitHighlighted => "上屏键",
                     aurora_config::SessionAction::Command(_) => "命令键",
                     _ => "翻页/高亮键",
@@ -6921,12 +6346,14 @@ impl Coordinator {
                 .caret_overlay_frame
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = None;
-            let _ = self.ui_tx.send(aurora_ui_types::UiCommand::HideCaretOverlay);
+            let _ = self
+                .ui_tx
+                .send(aurora_ui_types::UiCommand::HideCaretOverlay);
         }
     }
 
     /// 记录本帧组合矩形判据走了哪条分支（浮窗关闭时是无操作）。
-    pub(crate) fn note_overlay_verdict(&self, v: aurora_ui_types::diag::RectVerdict) {
+    pub(crate) fn note_overlay_verdict(&self, v: aurora_ui_types::caret_overlay::RectVerdict) {
         if !self
             .caret_overlay_enabled
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -6963,7 +6390,7 @@ impl Coordinator {
         view.comp_rect = data.composition_rect;
         view.caret_source = aurora_ipc::protocol::caret_source::name(data.source);
         if data.composition_rect.is_none() {
-            view.rect_verdict = aurora_ui_types::diag::RectVerdict::Absent;
+            view.rect_verdict = aurora_ui_types::caret_overlay::RectVerdict::Absent;
         }
         view.process = self.active_process_name();
     }
@@ -7049,43 +6476,15 @@ impl Coordinator {
     }
 
     /// 命令栏的数据类开关（`ime.toggle` / `ime.set` 直通，不进菜单与工具栏）：
-    /// - `emoji`：emoji 候选总开关（`input.emoji.enabled`）；
-    /// - `emoji:<模块id>`：附加模块（`input.emoji.modules.<id>`，含用户放进 `emoji/` 的文件）；
     /// - `dict:<注释库id>`：注释词库（`[[ui.comment_dicts]]` 的 `enabled`，中英释义、拆分等）。
     ///
     /// `want` = 目标状态，`None` = 取反（toggle）。已是目标状态时不写盘、不重载——`ime.set`
     /// 的语义就是「确保是这个状态」——但**照样提示**「…已是开启状态」：一点反应都没有的话，
     /// 用户分不清是状态本就如此还是命令没被调用（维护者实测反馈）。改了则写用户配置后热重载
-    /// （emoji 表 / 注释库按新开关重挂），提示「…已开启 / 已关闭」：命令栏与短语没有别的
+    /// （注释库按新开关重挂），提示「…已开启 / 已关闭」：命令栏与短语没有别的
     /// 反馈渠道，开了没反应和关掉了在界面上无从分辨。
     pub(crate) fn cmd_set_feature(&self, target: &str, want: Option<bool>) -> anyhow::Result<()> {
-        let (name, on) = if target == "emoji" {
-            let cur = self.rt().config.input.emoji.enabled;
-            let on = want.unwrap_or(!cur);
-            let name = "emoji 候选".to_string();
-            if on == cur {
-                return self.notify_feature_unchanged(target, &name, on);
-            }
-            Config::set_user_value(&["input", "emoji", "enabled"], toml::Value::Boolean(on))?;
-            (name, on)
-        } else if let Some(id) = target.strip_prefix("emoji:") {
-            let module = Config::emoji_modules(Config::data_dir().as_deref())
-                .into_iter()
-                .find(|m| m.id == id)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "没有 id 为 {id:?} 的 emoji 模块（见设置 → Emoji/OpenCC → 附加模块）"
-                    )
-                })?;
-            let cur = self.rt().config.input.emoji.module_enabled(id);
-            let on = want.unwrap_or(!cur);
-            let name = format!("emoji 模块「{}」", module.label);
-            if on == cur {
-                return self.notify_feature_unchanged(target, &name, on);
-            }
-            Config::set_user_value(&["input", "emoji", "modules", id], toml::Value::Boolean(on))?;
-            (name, on)
-        } else if let Some(id) = target.strip_prefix("dict:") {
+        let (name, on) = if let Some(id) = target.strip_prefix("dict:") {
             let configured = self.rt().config.ui.comment_dicts.clone();
             let auto: Vec<String> = self
                 .auto_comment_sources()
@@ -7256,14 +6655,6 @@ impl Coordinator {
         self.show_tip(mode.label());
     }
 
-    /// 用户是否隐藏了候选窗（candwin 切换 / `ui.candidate.hide_window`）。
-    pub(crate) fn candidate_window_hidden(&self) -> bool {
-        *self
-            .hide_candidate_window
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
     /// 切换候选窗显隐（运行时态）。隐藏时下次刷新即不显示候选。
     fn cmd_toggle_candwin(&self) {
         let hidden = {
@@ -7275,8 +6666,6 @@ impl Coordinator {
             *h
         };
         if hidden {
-            // 看不见的网格里 ←→ 还会移高亮而不移编码光标：随候选窗一起收起（§5.5）。
-            self.collapse_grid(&mut self.state.lock().unwrap_or_else(|e| e.into_inner()));
             self.clear_hover();
             let _ = self.ui_tx.send(UiCommand::HideCandidates);
         }
@@ -7550,20 +6939,7 @@ impl Coordinator {
         }
         let t_nu = std::time::Instant::now();
         // 仅推送当前页候选（窗口按 1..N 编号，翻页后重新编号）。
-        // 展开态推送可见区内的几页、逐行平铺（一行一页），见 `candidate_grid`。
-        let grid_range = self.grid_visible_range(state);
-        let (start, end) = grid_range.unwrap_or_else(|| self.page_range(state));
-        let per_page = self.per_page(state.active);
-        // 展开态一帧有好几页候选，悬停气泡**只为鼠标下的那一格**渲染——每格各渲染一份会把
-        // 持锁热路径上的开销放大成行数倍，而 UI 本来就只显示悬停那一格的气泡（悬停一变，
-        // `mouse_hover` 就会重新下发）。
-        let hover_now = self.hover_target();
-        // 展开态带序号的格子（平铺下标区间）：从高亮行行首起，按 `grid_index_fill` 往下顺延，
-        // 与数字键的选择范围 `select_range` 同源。
-        let grid_index = grid_range.map(|(vis_start, _)| {
-            let (sel_start, sel_end) = self.select_range(state);
-            (sel_start.saturating_sub(vis_start), sel_end - sel_start)
-        });
+        let (start, end) = self.page_range(state);
         // 候选序号标签：
         //  - 数字透镜：数字键正在录表达式 → 选词改用字母标签 a/b/c（实例关了字母选词除外）
         //  - 其余（含自由输入）：正常序号
@@ -7638,14 +7014,7 @@ impl Coordinator {
         };
         // 显示截断（超长加 …）：短语与普通候选统一按用户可配的 ui.candidate.max_chars。
         // 短语 text 在生成层已存完整原文（仅一行化），此处仅裁显示——上屏仍用完整原文。
-        // 展开态按列对齐，一个长词会撑宽整列，另有更紧的格宽上限。
-        let truncate = |full: &str| {
-            if grid_range.is_some() {
-                cand_cfg.truncate_grid_cell(full)
-            } else {
-                cand_cfg.truncate_display(full)
-            }
-        };
+        let truncate = |full: &str| cand_cfg.truncate_display(full);
         // 正确拼音提示（「苹(ping)果」）：按来源过滤、换算到显示文字、过了截断与前缀后的带提示正文。
         let hint_cfg = &rt.config.input.correction.hint;
         let tone_reverse = hint_cfg.tone.then_some(&*reverse);
@@ -7666,12 +7035,8 @@ impl Coordinator {
             .map(|(i, c)| {
                 let full = self.cand_display_text(state, c);
                 let disp = truncate(&full);
-                let tip_skipped = grid_range.is_some() && i as i32 != hover_now;
-                let rendered = if tip_skipped {
-                    Default::default()
-                } else {
-                    self.render_candidate_tooltip(state, c, &disp, &full, tip, &tip_ctx, &reverse)
-                };
+                let rendered =
+                    self.render_candidate_tooltip(state, c, &disp, &full, tip, &tip_ctx, &reverse);
                 let dict_schema = self.comment_dict_scope(
                     state,
                     c,
@@ -7721,14 +7086,6 @@ impl Coordinator {
                     code: c.code.clone(),
                     label: if alpha {
                         ((b'a' + i as u8) as char).to_string()
-                    } else if let Some((from, count)) = grid_index {
-                        // 带序号的格子从高亮行行首起顺延编号；其余格子的序号渲染端画成透明，
-                        // 这里照列号给一个，只为占住同样的宽度。
-                        if (from..from + count).contains(&i) {
-                            self.resolve_index_label(cand_cfg, i - from)
-                        } else {
-                            self.resolve_index_label(cand_cfg, i % per_page)
-                        }
                     } else {
                         self.resolve_index_label(cand_cfg, i)
                     },
@@ -7742,31 +7099,14 @@ impl Coordinator {
         *self.tooltip_page.lock().unwrap_or_else(|e| e.into_inner()) = tip_page;
         // 翻页信息改为结构化字段传给候选窗（窗口内渲染独立的页码指示）
         let total_pages = self.total_pages(state);
-        let grid = state.grid_top.zip(grid_index).map(|(top, (from, count))| {
-            aurora_ui_types::CandidateGrid {
-                cols: per_page as u16,
-                rows: self.grid_rows() as u16,
-                highlight_row: state.current_page.saturating_sub(top) as u16,
-                index_start: from as u16,
-                index_count: count as u16,
-                tabs: self.grid_tabs(state).iter().fold(0, |m, t| m | t.bit()),
-                active_tab: state.grid_tab as u8,
-            }
-        });
-        // 展开态的选中项是平铺下标：高亮行之前的整行都算进去。
-        let selected_flat = match grid {
-            Some(g) => g.highlight_row as usize * per_page + state.selected_index,
-            None => state.selected_index,
-        };
-        let selected = selected_flat.min(items.len().saturating_sub(1));
+        let selected = state.selected_index.min(items.len().saturating_sub(1));
         // 悬停目标独立于选中项：候选越界视为无悬停，翻页器 tag 原样透传
-        let hover =
-            match self.hover_target() {
-                h if (0..aurora_ui_types::HOVER_PAGE_PREV).contains(&h) => {
-                    if (h as usize) < items.len() { h } else { -1 }
-                }
-                h => h, // 翻页器 tag / -1
-            };
+        let hover = match self.hover_target() {
+            h if (0..aurora_ui_types::HOVER_PAGE_PREV).contains(&h) => {
+                if (h as usize) < items.len() { h } else { -1 }
+            }
+            h => h, // 翻页器 tag / -1
+        };
         // preedit 是否嵌入宿主（app_inline）：嵌入时编码插入宿主、光标随输入右移，候选窗须锚在
         // 组合起点（缓冲头部）而非跟随光标末尾；非嵌入时 preedit 在候选窗、宿主光标不动，用当前光标。
         // 该标志同时门控下方 preedit 是否下发候选窗渲染（嵌入时候选窗不重复显示 preedit）。
@@ -7859,7 +7199,6 @@ impl Coordinator {
             hover,
             page: state.current_page + 1,
             total_pages,
-            grid,
             caret_x,
             caret_y,
             caret_height,
@@ -7955,13 +7294,7 @@ impl Coordinator {
             UiEvent::SoftKeyboardMoved { right, bottom } => {
                 self.save_softkeyboard_anchor(right, bottom)
             }
-            // 只在这里换算平铺下标：`candidate_op` 的另一批调用方（Ctrl+数字热键等）传的
-            // 本来就是页内下标。
-            UiEvent::CandidateOp { op, page_local } => {
-                if let Some(page_local) = self.resolve_event_index(page_local, false) {
-                    self.candidate_op(op, page_local)
-                }
-            }
+            UiEvent::CandidateOp { op, page_local } => self.candidate_op(op, page_local),
             UiEvent::RequestCandidateMenu { page_local, x, y } => {
                 self.show_candidate_menu(page_local, x, y)
             }
@@ -7990,7 +7323,6 @@ impl Coordinator {
             UiEvent::SoftKeyboardFunctionKey(name) => self.ui_softkeyboard_fn_key(&name),
             UiEvent::StatusTipMoved { x, y } => self.save_status_tip_pos(x, y),
             UiEvent::CandidateWindowMoved { x, y } => self.save_candidate_pos(x, y),
-            UiEvent::CandidateDoubleClick => self.on_candidate_double_click(),
             UiEvent::RequestStatusMenu { x, y } => self.show_status_menu(x, y),
             UiEvent::RequestTooltipMenu {
                 x,
@@ -7999,7 +7331,6 @@ impl Coordinator {
                 hit,
                 doc_fingerprint,
             } => self.show_tooltip_menu(x, y, candidate, hit, doc_fingerprint),
-            UiEvent::RequestInputDiagMenu { x, y } => self.show_input_diag_menu(x, y),
             UiEvent::SystemThemeChanged => self.on_system_theme_changed(),
             UiEvent::CandidateFlipped(v) => self
                 .candidate_flipped
@@ -8322,63 +7653,16 @@ impl Coordinator {
         )
     }
 
-    /// 当前焦点应用是否启用符号自动配对。per-app 规则（`compat.toml` 的 `auto_pair`）
-    /// 优先，未配则跟随全局——全局开关仍在各自的 `input.auto_pair.chinese/english` 里，
-    /// 本函数只回答「这个宿主要不要一刀切关掉」。
-    ///
-    /// ⚠ 三个消费点必须都问它：`active_pairs()`、`english_pairs_via_pipeline()`、
-    /// `push_english_pair_config()`。前两条走协调器，第三条是 C++ 侧英文配对引擎——
-    /// 纯英文模式的标点键根本到不了协调器，漏接它等于「切到英文就又配对了」。
-    pub(crate) fn auto_pair_allowed_here(&self) -> bool {
-        self.active_compat
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .auto_pair
-            .unwrap_or(true)
-    }
-
-    /// 当前模式下生效的配对表（按中/英标点 + 各自开关）
-    pub(crate) fn active_pairs(&self, chinese_punct: bool) -> Option<Vec<(char, char)>> {
-        // per-app 关闭：返回 None 等价于「配对表为空」，插对与右符号跳出一并失效。
-        // 在取表这一层收口，而不是在每个使用点各加一个 if——后者是本仓栽过四次的形态。
-        if !self.auto_pair_allowed_here() {
-            return None;
-        }
-        let rt = self.rt();
-        if chinese_punct {
-            if rt.config.input.auto_pair.chinese {
-                return Some(rt.cn_pairs.clone());
-            }
-        } else if rt.config.input.auto_pair.english {
-            return Some(rt.en_pairs.clone());
-        }
-        None
-    }
-
-    /// 判断标点字符 `ch` 是否参与当前生效的自动配对（作为左符号或右符号）。
-    /// 智能符号与自动配对互斥的判定依据（见 `smart_symbol_arm_str`）。
-    pub(crate) fn is_auto_pair_char(&self, state: &State, ch: char) -> bool {
-        match self.active_pairs(state.chinese_punct) {
-            Some(pairs) => pairs.iter().any(|(l, r)| *l == ch || *r == ch),
-            None => false,
-        }
-    }
-
     /// 滚轮翻页：dir<0 上一页，dir>0 下一页；仅重绘候选窗，不上屏。
-    ///
-    /// 展开态下滚一行（翻页箭头同此）；收起态往下翻与翻页键同语义——先试展开。
     fn mouse_page(&self, dir: i32) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.candidates.is_empty() {
             return;
         }
-        let changed = if Self::grid_active(&state) {
-            // 鼠标往上滚到第一行就停住，不像 ↑ 那样收起：滚轮滚过头是常事。
-            self.grid_scroll(&mut state, dir > 0)
-        } else if dir < 0 {
+        let changed = if dir < 0 {
             self.page_prev(&mut state)
         } else {
-            self.try_expand_grid(&mut state) || self.page_next(&mut state)
+            self.page_next(&mut state)
         };
         if changed {
             self.notify_ui_update(&state);
@@ -8401,10 +7685,7 @@ impl Coordinator {
         {
             target // 翻页器悬停
         } else if target >= 0 {
-            // 展开态下悬停的是平铺下标，校验范围是整个可见区。
-            let (start, end) = self
-                .grid_visible_range(&state)
-                .unwrap_or_else(|| self.page_range(&state));
+            let (start, end) = self.page_range(&state);
             if (target as usize) < end - start {
                 target
             } else {
@@ -8539,7 +7820,7 @@ impl Coordinator {
     ///
     /// 偏移校正针对的是**宿主报告的坐标本身系统性偏移**（如 Windows Terminal，别家输入法
     /// 同样偏）。与主题里的候选窗偏移不是一回事：那个是候选窗相对光标的布局（样式层），
-    /// 这个修的是光标坐标（兼容层），故候选窗/状态气泡/HUD 等所有消费者一并受益。
+    /// 这个修的是光标坐标（兼容层），故候选窗/状态气泡等所有消费者一并受益。
     ///
     /// `caret_offset_*` 以 dp（96dpi 基准逻辑像素）配置，而宿主上报的 caret 坐标是物理像素
     /// （屏幕坐标，DPI-aware 进程下即物理像素）——同一份 dp 配置在 100%/200% 缩放的显示器上
@@ -8683,7 +7964,11 @@ impl Coordinator {
     }
 
     /// 以指定定位弹状态泡（焦点气泡的锚点超时用），光标仍从 state 里取（选屏参考）。
-    pub(crate) fn show_tip_placed(&self, text: &str, placement: aurora_ui_types::StatusTipPlacement) {
+    pub(crate) fn show_tip_placed(
+        &self,
+        text: &str,
+        placement: aurora_ui_types::StatusTipPlacement,
+    ) {
         let (raw_x, raw_y, raw_h) = {
             let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             (s.caret_x, s.caret_y, s.caret_height)
@@ -9103,7 +8388,7 @@ impl Coordinator {
     fn build_global_hotkey_entries(&self) -> Vec<GlobalHotkeyEntry> {
         let rt = self.rt();
         let k = &rt.config.keys;
-        let supported: [(&str, &str); 9] = [
+        let supported: [(&str, &str); 8] = [
             ("switch_engine", k.switch_engine.as_str()),
             ("toggle_full_width", k.toggle_full_width.as_str()),
             ("toggle_punct", k.toggle_punct.as_str()),
@@ -9112,7 +8397,6 @@ impl Coordinator {
             ("open_dictionary", k.open_dictionary.as_str()),
             ("take_screenshot", k.take_screenshot.as_str()),
             ("toggle_s2t", k.toggle_s2t.as_str()),
-            ("toggle_t2s", k.toggle_t2s.as_str()),
         ];
         let mut entries: Vec<GlobalHotkeyEntry> = Vec::new();
         for name in &k.global_hotkeys {
@@ -9384,9 +8668,6 @@ impl Coordinator {
         {
             owners.push("会话动作（keys.session_actions）");
         }
-        if rt.jump_out_keys.contains(&vk) {
-            owners.push("配对跳出键（input.auto_pair.jump_out_keys）");
-        }
         if vk == keymap::VK_CAPITAL {
             owners.push("系统大写锁定");
         }
@@ -9437,12 +8718,7 @@ impl Coordinator {
         }
         let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let state: &mut State = &mut guard;
-        // 展开态按分类筛选中：`candidates` 是子集，整句窗口按完整列表的位置滚，两者对不上。
-        // 筛选时把键让回原语义（多半是单字 / 词组标签里本就没有整句）。
-        if state.active.is_some()
-            || state.input_buffer.is_empty()
-            || state.sentence_pool.len() < 2
-            || state.grid_tab != aurora_ui_types::GridTab::All
+        if state.active.is_some() || state.input_buffer.is_empty() || state.sentence_pool.len() < 2
         {
             return None;
         }
@@ -9458,8 +8734,6 @@ impl Coordinator {
         let per_page = self.per_page(state.active);
         state.current_page = first / per_page;
         state.selected_index = first % per_page;
-        // 展开态下页码变了，可见区要跟上，否则高亮行落在可见区外（屏幕上高亮错格）。
-        self.grid_follow(state);
         self.clear_hover();
         // 高亮换了 ⇒ 组合区按高亮候选重算（双拼下简拼 / 整句的切法不同，审查查出漏了这步）。
         // 回传写法同方向键移动高亮（`handle_nav_key`）：只有形态真变了、且编码显示在宿主里时
@@ -9504,9 +8778,6 @@ impl Coordinator {
                 "会话动作 / 高亮 / 翻页（keys.session_actions / highlight_keys / page_keys）",
             );
         }
-        if !key.shift && rt.jump_out_keys.contains(&vk) {
-            owners.push("配对跳出键（input.auto_pair.jump_out_keys）");
-        }
         if !key.shift && rt.english_case_cycle_vk == Some(vk) {
             owners.push("英文大小写档位循环（input.english_case_cycle_key，它先处理、会先截走）");
         }
@@ -9539,8 +8810,8 @@ impl Coordinator {
     /// down 照旧走会话动作（含自动重复）；松开时若 CapsLock 是切换键、且这次按下没被会话
     /// 动作用掉，按 [`Self::caps_toggle_key_released`] 处理。
     fn handle_capslock_hook_event(&self, ev: aurora_keys::capslock_hook::CapsEvent) {
-        use std::sync::atomic::Ordering::Relaxed;
         use aurora_keys::capslock_hook::CapsEvent;
+        use std::sync::atomic::Ordering::Relaxed;
         match ev {
             CapsEvent::Down { first } => {
                 // 首个 down 先清账：上一次按下的 up 若丢了（钩子被系统摘掉），标志不该带过来。
@@ -9855,7 +9126,7 @@ impl Coordinator {
         // - 临时拼音 / mix（含快捷输入）：与下方普通组合一致，遵循 keys.commit_on_switch——
         //   切英文且有待输入且开关开时上屏「已转换前缀 committed_text + 剩余原码缓冲」，否则
         //   清空；触发键前缀（`/;）不输出，与各自回车上屏一致。
-        // - 其余独占模式（网址）：丢弃。
+        // - 其余独占模式（特殊 / 生僻字 / 反查 / 辅助码）：丢弃。
         // 独占模式下 input_buffer 必为空，与下方普通组合分支互斥，故在此提前返回。
         if state.active.is_some() {
             let text = if state.active == Some(ModeKind::TempEnglish)
@@ -16753,7 +16024,7 @@ mod initial_mode_tests {
         }
         c.password_suppress
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        c.last_input_diag.lock().unwrap().disabled = true;
+        c.last_input_scope.lock().unwrap().disabled = true;
         assert_eq!(c.input_block(), InputBlock::None, "未激活时不该表态");
 
         c.state.lock().unwrap().ime_active = true;
@@ -16763,7 +16034,7 @@ mod initial_mode_tests {
             "线程级禁用最高"
         );
 
-        c.last_input_diag.lock().unwrap().disabled = false;
+        c.last_input_scope.lock().unwrap().disabled = false;
         assert_eq!(c.input_block(), InputBlock::Password, "其次密码框");
 
         c.password_suppress
@@ -16982,11 +16253,11 @@ mod initial_mode_tests {
             "恢复方向不迟滞，立即回到常态文案"
         );
 
-        c.last_input_diag.lock().unwrap().disabled = true;
+        c.last_input_scope.lock().unwrap().disabled = true;
         let _ = c.langbar_tooltip(); // 起计时
         std::thread::sleep(INPUT_BLOCK_DELAY + std::time::Duration::from_millis(30));
         assert_eq!(c.langbar_tooltip(), "极光输入法 - 已禁用");
-        c.last_input_diag.lock().unwrap().disabled = false;
+        c.last_input_scope.lock().unwrap().disabled = false;
         // 先让闸门回到 None 再测下一档：从「已禁用」直接转向另一个非 None 档走的是
         // **进入**方向，仍会呈现旧值——那是闸门的正确行为，不是本条要测的东西。
         assert_eq!(c.langbar_tooltip(), "极光输入法 - 中文模式");
@@ -17209,8 +16480,6 @@ mod capslock_tests {
     fn coord_cn() -> Arc<Coordinator> {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        // 关闭智能符号，避免 CommitAndHoldComposition 干扰标点断言
-        cfg.input.symbol.smart_mode = false;
         Coordinator::new_headless(cfg, None)
     }
 
@@ -17299,50 +16568,6 @@ mod capslock_tests {
         );
     }
 
-    /// GH#197：中文 + CapsLock + 英文配对开 → 配对键与「英文 + 大写」同样出一对、可跳出。
-    /// DLL 对配对键开了透传例外（`_IsEnglishHalfEatenPunctKey`）吃下转发，此处若仍
-    /// PassThrough 就是「吃了再吐」，配对静默失效。
-    #[test]
-    fn capslock_on_english_pair_key_inserts_pair() {
-        let mut cfg = Config::default();
-        cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
-        cfg.input.auto_pair.english = true;
-        let c = Coordinator::new_headless(cfg, None);
-        set_caps_lock(&c, true);
-        let mut ev = kev_caps(0x39 /* '9' */, EVENT_KEY_DOWN);
-        ev.modifiers = MOD_SHIFT;
-        match c.handle_key_event(&ev) {
-            KeyAction::InsertTextWithCursor {
-                text,
-                cursor_offset,
-            } => {
-                assert_eq!(text, "()");
-                assert_eq!(cursor_offset, 1);
-            }
-            other => panic!("中文+CapsLock+Shift+9 应插入英文配对，实际: {:?}", other),
-        }
-        // 非配对标点仍按原样透传（保留原始 WM_KEYDOWN）。
-        assert!(matches!(
-            c.handle_key_event(&kev_caps(0xBC, EVENT_KEY_DOWN)),
-            KeyAction::PassThrough
-        ));
-    }
-
-    /// 对照：英文配对关时配对键仍透传（DLL 判据 `ShouldEat` 同样为假，不吃）。
-    #[test]
-    fn capslock_on_pair_key_passthrough_when_english_pair_off() {
-        let mut cfg = Config::default();
-        cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
-        cfg.input.auto_pair.english = false;
-        let c = Coordinator::new_headless(cfg, None);
-        set_caps_lock(&c, true);
-        let mut ev = kev_caps(0x39, EVENT_KEY_DOWN);
-        ev.modifiers = MOD_SHIFT;
-        assert!(matches!(c.handle_key_event(&ev), KeyAction::PassThrough));
-    }
-
     #[test]
     fn capslock_off_punct_commits_chinese_punct() {
         let c = coord_cn();
@@ -17353,44 +16578,6 @@ mod capslock_tests {
             other => panic!("CapsLock关+逗号应上屏中文标点，实际: {:?}", other),
         };
         assert_eq!(text, "，", "实际文本: {:?}", text);
-    }
-
-    // ── 智能符号 HoldComposition：press2 的替换语义 ──────────────────────────
-
-    /// press1 把中文符号放进 TSF 组合（hold 预览态），press2 必须返回
-    /// `CommitReplacingHeld` 而非普通 `InsertText`。
-    ///
-    /// 两者在 IPC 载荷上完全同构，C++ 端只能靠这个 action 带的 flags 位判断该
-    /// **覆盖**还是**追加** held 符号。退回 InsertText 的后果是 press2 打出「，,」
-    /// ——中文符号被并入前缀跟着一起上屏了。
-    #[test]
-    fn smart_symbol_hold_press2_replaces_held_symbol() {
-        let mut cfg = Config::default();
-        cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = true;
-        cfg.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-        let c = Coordinator::new_headless(cfg, None);
-
-        // press1：空缓冲 + 中文标点 → 中文符号进组合态，等 press2
-        let a1 = c.handle_key_event(&kev(0xBC, EVENT_KEY_DOWN));
-        match &a1 {
-            KeyAction::HoldComposition { text, .. } => {
-                assert_eq!(text, "，", "press1 应把中文逗号放进组合")
-            }
-            other => panic!("press1 应开 hold 组合，实际: {:?}", other),
-        }
-
-        // press2：超时窗口内重按同键 → 英文符号 + 替换语义
-        let a2 = c.handle_key_event(&kev(0xBC, EVENT_KEY_DOWN));
-        match &a2 {
-            KeyAction::CommitReplacingHeld { text, .. } => {
-                assert_eq!(text, ",", "press2 应换成英文逗号")
-            }
-            other => panic!(
-                "press2 必须返回 CommitReplacingHeld（替换语义），实际: {:?}",
-                other
-            ),
-        }
     }
 
     // ── 全角模式：提交全角字符 ───────────────────────────────────────────────
@@ -17474,7 +16661,6 @@ mod capslock_tests {
     fn coord_with_capslock(verb: &str) -> Arc<Coordinator> {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
         cfg.keys
             .session_actions
             .insert("capslock".to_string(), verb.to_string());
@@ -17564,7 +16750,6 @@ mod capslock_tests {
     fn coord_commit_upper(on: bool) -> Arc<Coordinator> {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
         cfg.input.capslock.commit_upper = on;
         Coordinator::new_headless(cfg, None)
     }
@@ -17649,7 +16834,6 @@ mod capslock_tests {
     fn caps_on_upper_when_capslock_is_toggle_key() {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
         cfg.input.capslock.commit_upper = true;
         cfg.keys.toggle_mode_keys = vec!["capslock".to_string()];
         let c = Coordinator::new_headless(cfg, None);
@@ -17666,7 +16850,6 @@ mod capslock_tests {
     fn coord_caps_toggle_key() -> Arc<Coordinator> {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
         cfg.keys.toggle_mode_keys = vec!["lshift".to_string(), "capslock".to_string()];
         Coordinator::new_headless(cfg, None)
     }
@@ -17712,7 +16895,6 @@ mod capslock_tests {
         for (on, want) in [(true, "WPS"), (false, "wps")] {
             let mut cfg = Config::default();
             cfg.input.default.chinese_mode = true;
-            cfg.input.symbol.smart_mode = false;
             cfg.input.capslock.commit_upper = on;
             cfg.keys.toggle_mode_keys = vec!["capslock".to_string()];
             let c = Coordinator::new_headless(cfg, None);
@@ -18123,9 +17305,8 @@ mod focus_ownership_tests {
 
 #[cfg(test)]
 mod per_app_compat_tests {
-    //! per-app 兼容规则：自动配对开关、智能符号方案、光标坐标校正。
+    //! per-app 兼容规则：光标坐标校正等。
     use super::*;
-    use aurora_config::config::SmartMethod;
 
     fn coord_with(cfg: Config) -> Arc<Coordinator> {
         Coordinator::new_headless(cfg, None)
@@ -18141,52 +17322,6 @@ mod per_app_compat_tests {
             composition_start_y: cs_y,
             source: 0,
             composition_rect: None,
-        }
-    }
-
-    fn pair_cfg() -> Config {
-        let mut cfg = Config::default();
-        cfg.input.auto_pair.chinese = true;
-        cfg.input.auto_pair.english = true;
-        cfg.input.auto_pair.chinese_pairs = vec!["（）".to_string()];
-        cfg.input.auto_pair.english_pairs = vec!["()".to_string()];
-        cfg
-    }
-
-    /// per-app 关闭后，`active_pairs` 在**中英两种标点态**都必须返回 None。
-    ///
-    /// 分别断言两种标点态而不是只测一种：全局开关本来就是 chinese / english 两个独立字段，
-    /// 只在其中一条上加闸门是本仓反复出现的「半截修复」形态。
-    #[test]
-    fn auto_pair_rule_off_kills_both_punct_modes() {
-        let c = coord_with(pair_cfg());
-        assert!(c.active_pairs(true).is_some(), "默认（未配规则）应跟随全局");
-        assert!(c.active_pairs(false).is_some());
-
-        c.active_compat.lock().unwrap().auto_pair = Some(false);
-        assert!(c.active_pairs(true).is_none(), "中文标点态应被关掉");
-        assert!(c.active_pairs(false).is_none(), "英文标点态应被关掉");
-
-        // 显式启用 = 跟随全局的开关，不是无条件开。
-        c.active_compat.lock().unwrap().auto_pair = Some(true);
-        assert!(c.active_pairs(true).is_some());
-    }
-
-    /// `is_auto_pair_char` 建立在 `active_pairs` 之上，规则关闭后必须一并失效——
-    /// 它是「智能符号与自动配对互斥」的判据，若还认为字符参与配对，智能符号会被误让位。
-    #[test]
-    fn auto_pair_rule_off_releases_smart_symbol_interlock() {
-        let c = coord_with(pair_cfg());
-        c.state.lock().unwrap().chinese_punct = true;
-        {
-            let state = c.state.lock().unwrap();
-            assert!(c.is_auto_pair_char(&state, '（'), "默认应认为参与配对");
-        }
-
-        c.active_compat.lock().unwrap().auto_pair = Some(false);
-        {
-            let state = c.state.lock().unwrap();
-            assert!(!c.is_auto_pair_char(&state, '（'), "规则关闭后互锁应解除");
         }
     }
 
@@ -18274,32 +17409,13 @@ mod per_app_compat_tests {
             (orig.composition_start_x, orig.composition_start_y)
         );
     }
-
-    /// 智能符号方案：per-app 覆盖优先，未配则跟随全局。
-    #[test]
-    fn smart_method_per_app_overrides_global() {
-        let mut cfg = Config::default();
-        cfg.input.symbol.smart_method = SmartMethod::DeleteReplace;
-        let c = coord_with(cfg);
-        assert_eq!(c.effective_smart_method(), SmartMethod::DeleteReplace);
-
-        c.active_compat.lock().unwrap().smart_method = Some(SmartMethod::HoldComposition);
-        assert_eq!(c.effective_smart_method(), SmartMethod::HoldComposition);
-
-        c.active_compat.lock().unwrap().smart_method = None;
-        assert_eq!(
-            c.effective_smart_method(),
-            SmartMethod::DeleteReplace,
-            "清除规则应回到全局值"
-        );
-    }
 }
 
 #[cfg(test)]
-mod input_diag_tests {
-    //! last_input_diag 存储 + 密码框强制英文抑制。
+mod input_scope_tests {
+    //! last_input_scope 存储 + 密码框强制英文抑制（InputScope 掩码判定 → 强制英文）。
     use super::*;
-    use crate::input_diag::InputDiagReason;
+    use crate::input_scope::InputScopeReason;
 
     fn test_coordinator() -> Arc<Coordinator> {
         Coordinator::new_headless(Config::default(), None)
@@ -18308,21 +17424,21 @@ mod input_diag_tests {
     #[test]
     fn password_scope_sets_suppress_and_state() {
         let c = test_coordinator();
-        c.apply_input_diag(1234, false, /*reason*/ 2, 1 << 31);
+        c.apply_input_scope(1234, false, /*reason*/ 2, 1 << 31);
         assert!(
             c.password_suppress
                 .load(std::sync::atomic::Ordering::Relaxed)
         );
-        let d = c.last_input_diag.lock().unwrap();
-        assert_eq!(d.reason, InputDiagReason::InputScopePassword);
+        let d = c.last_input_scope.lock().unwrap();
+        assert_eq!(d.reason, InputScopeReason::InputScopePassword);
         assert_eq!(d.pid, 1234);
     }
 
     #[test]
     fn suppress_cleared_when_mask_clears() {
         let c = test_coordinator();
-        c.apply_input_diag(1, false, 2, 1 << 31);
-        c.apply_input_diag(1, false, 0, 0);
+        c.apply_input_scope(1, false, 2, 1 << 31);
+        c.apply_input_scope(1, false, 0, 0);
         assert!(
             !c.password_suppress
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -18334,7 +17450,7 @@ mod input_diag_tests {
         let c = test_coordinator();
         c.password_suppress_enabled
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        c.apply_input_diag(1, false, 2, 1 << 31);
+        c.apply_input_scope(1, false, 2, 1 << 31);
         assert!(
             !c.password_suppress
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -18367,7 +17483,7 @@ mod input_diag_tests {
         );
 
         let pid = 4321u32;
-        c.apply_input_diag(pid, false, 2, 1 << 31);
+        c.apply_input_scope(pid, false, 2, 1 << 31);
         assert!(
             c.password_suppress
                 .load(std::sync::atomic::Ordering::Relaxed),
@@ -18385,7 +17501,7 @@ mod input_diag_tests {
         );
 
         // 解除抑制：mask 清零。
-        c.apply_input_diag(pid, false, 0, 0);
+        c.apply_input_scope(pid, false, 0, 0);
         assert!(
             !c.password_suppress
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -18396,17 +17512,6 @@ mod input_diag_tests {
             "解除抑制后字母键应进入中文组词流，不应透传，实际: {:?}",
             action
         );
-    }
-
-    #[test]
-    fn toggle_hud_flips_visibility() {
-        use std::sync::atomic::Ordering::Relaxed;
-        let c = test_coordinator();
-        assert!(!c.input_diag_hud_visible.load(Relaxed));
-        c.toggle_input_diag_hud();
-        assert!(c.input_diag_hud_visible.load(Relaxed));
-        c.toggle_input_diag_hud();
-        assert!(!c.input_diag_hud_visible.load(Relaxed));
     }
 
     /// 开关的初值取自配置（`input.password_force_english`，t197）：配置关掉时，构造出的
@@ -18423,7 +17528,7 @@ mod input_diag_tests {
         let c = Coordinator::new_headless(cfg, None);
         assert!(!c.password_suppress_enabled.load(Relaxed));
 
-        c.apply_input_diag(1, false, 2, 0x8000_0001); // IS_DEFAULT + IS_PASSWORD（t197 的掩码）
+        c.apply_input_scope(1, false, 2, 0x8000_0001); // IS_DEFAULT + IS_PASSWORD（t197 的掩码）
         assert!(
             !c.password_suppress.load(Relaxed),
             "配置关闭时密码位不应强制英文"
@@ -18436,7 +17541,7 @@ mod input_diag_tests {
     fn switching_off_clears_active_suppress() {
         use std::sync::atomic::Ordering::Relaxed;
         let c = test_coordinator();
-        c.apply_input_diag(1, false, 2, 0x8000_0001);
+        c.apply_input_scope(1, false, 2, 0x8000_0001);
         assert!(c.password_suppress.load(Relaxed), "前置条件：抑制已生效");
         c.set_password_suppress_enabled(false);
         assert!(!c.password_suppress_enabled.load(Relaxed));
@@ -18447,7 +17552,7 @@ mod input_diag_tests {
     fn focus_lost_clears_password_suppress() {
         use std::sync::atomic::Ordering::Relaxed;
         let c = test_coordinator();
-        c.apply_input_diag(1234, false, 2, 1 << 31);
+        c.apply_input_scope(1234, false, 2, 1 << 31);
         assert!(
             c.password_suppress.load(Relaxed),
             "前置条件：密码框抑制应已置位"
@@ -18476,7 +17581,7 @@ mod input_diag_tests {
         let c = Coordinator::new_headless(cfg, None);
 
         // disabled=true + 密码位：正是 Chromium 网页密码框改动前的上报组合。
-        c.apply_input_diag(4321, true, 1, 1 << 31);
+        c.apply_input_scope(4321, true, 1, 1 << 31);
         assert!(
             c.password_suppress
                 .load(std::sync::atomic::Ordering::Relaxed),
@@ -18500,15 +17605,15 @@ mod input_diag_tests {
     /// 「密码框」，抑制行为则与密码框一致（Chromium 密码框靠同一信号）。
     #[test]
     fn context_disabled_is_shown_apart_from_host_password() {
-        use crate::input_diag::InputDiagReason;
+        use crate::input_scope::InputScopeReason;
         use std::sync::atomic::Ordering::Relaxed;
         let c = test_coordinator();
         c.state.lock().unwrap().ime_active = true;
 
-        c.apply_input_diag(1, false, 4, 0x8000_0001);
+        c.apply_input_scope(1, false, 4, 0x8000_0001);
         assert_eq!(
-            c.last_input_diag.lock().unwrap().reason,
-            InputDiagReason::ContextDisabled
+            c.last_input_scope.lock().unwrap().reason,
+            InputScopeReason::ContextDisabled
         );
         assert!(
             c.password_suppress.load(Relaxed),
@@ -18517,15 +17622,15 @@ mod input_diag_tests {
         assert_eq!(c.input_block(), InputBlock::ContextDisabled);
 
         // 宿主真报了 IS_PASSWORD：reason 字节 2，仍是密码框。
-        c.apply_input_diag(1, false, 2, 0x8000_0001);
+        c.apply_input_scope(1, false, 2, 0x8000_0001);
         assert_eq!(c.input_block(), InputBlock::Password);
 
         // Chromium 网页密码框：context 禁用 + IS_PRIVATE（rawScope=0x2000000000000000，靶机实测），
         // 宿主虽没明说密码，两个信号同时出现按密码框展示——图标提示不能说「被应用禁用」。
-        c.apply_input_diag(1, false, 4, 0x8000_0000 | (1 << 61));
+        c.apply_input_scope(1, false, 4, 0x8000_0000 | (1 << 61));
         assert_eq!(
-            c.last_input_diag.lock().unwrap().reason,
-            InputDiagReason::ContextPassword
+            c.last_input_scope.lock().unwrap().reason,
+            InputScopeReason::ContextPassword
         );
         assert_eq!(c.input_block(), InputBlock::Password);
     }
@@ -18534,7 +17639,7 @@ mod input_diag_tests {
     fn context_disabled_tooltip_does_not_claim_password() {
         let c = test_coordinator();
         c.state.lock().unwrap().ime_active = true;
-        c.apply_input_diag(1, false, 4, 0x8000_0001);
+        c.apply_input_scope(1, false, 4, 0x8000_0001);
         let _ = c.langbar_tooltip(); // 起计时
         std::thread::sleep(INPUT_BLOCK_DELAY + std::time::Duration::from_millis(30));
         let tip = c.langbar_tooltip();
@@ -18558,10 +17663,10 @@ mod input_diag_tests {
 
         // 线程级禁用 + 密码位：reason 展示为 compartment（优先级最高），suppress 仍置位。
         // suppress=true 在此场景无害：DLL 已全放行，引擎收不到键，取值无从被观测。
-        c.apply_input_diag(1, true, 1, 1 << 31);
+        c.apply_input_scope(1, true, 1, 1 << 31);
         assert_eq!(
-            c.last_input_diag.lock().unwrap().reason,
-            crate::input_diag::InputDiagReason::CompartmentDisabled,
+            c.last_input_scope.lock().unwrap().reason,
+            crate::input_scope::InputScopeReason::CompartmentDisabled,
             "disabled=true 时 reason 展示应为 compartment"
         );
         assert!(
@@ -18570,7 +17675,7 @@ mod input_diag_tests {
         );
 
         // 无密码位：无论 disabled 与否都不抑制。
-        c.apply_input_diag(1, true, 1, 0);
+        c.apply_input_scope(1, true, 1, 0);
         assert!(
             !c.password_suppress.load(Relaxed),
             "mask 无密码位时不应抑制"
@@ -18588,12 +17693,12 @@ mod input_diag_tests {
             "前置条件：开关已关"
         );
 
-        c.apply_input_diag(1, true, 1, 1 << 31);
+        c.apply_input_scope(1, true, 1, 1 << 31);
         assert!(
             !c.password_suppress.load(Relaxed),
             "开关关闭时密码框不应强制英文"
         );
-        c.apply_input_diag(1, false, 2, 1 << 63);
+        c.apply_input_scope(1, false, 2, 1 << 63);
         assert!(
             !c.password_suppress.load(Relaxed),
             "数字密码位同样受开关约束"
@@ -18620,11 +17725,11 @@ mod input_diag_tests {
         let c = test_coordinator();
         pfe_rule(&c, 700, "misreport.exe", Some(false));
 
-        c.apply_input_diag(700, false, 2, 0x8000_0001);
+        c.apply_input_scope(700, false, 2, 0x8000_0001);
         assert!(!c.password_suppress.load(Relaxed), "规则关掉的进程不应抑制");
 
         c.pid_names.lock().unwrap().insert(701, "other.exe".into());
-        c.apply_input_diag(701, false, 2, 0x8000_0001);
+        c.apply_input_scope(701, false, 2, 0x8000_0001);
         assert!(
             c.password_suppress.load(Relaxed),
             "无规则的进程跟随全局（开）"
@@ -18639,11 +17744,11 @@ mod input_diag_tests {
         c.set_password_suppress_enabled(false);
         pfe_rule(&c, 800, "bank.exe", Some(true));
 
-        c.apply_input_diag(800, false, 2, 1 << 31);
+        c.apply_input_scope(800, false, 2, 1 << 31);
         assert!(c.password_suppress.load(Relaxed), "规则开应压过全局关");
 
         c.pid_names.lock().unwrap().insert(801, "other.exe".into());
-        c.apply_input_diag(801, false, 2, 1 << 31);
+        c.apply_input_scope(801, false, 2, 1 << 31);
         assert!(
             !c.password_suppress.load(Relaxed),
             "无规则的进程跟随全局（关）"
@@ -18693,7 +17798,7 @@ mod input_diag_tests {
                     assert!(got.contains(&msg(false)), "pid={pid} 没收到密码框配置");
                     false
                 };
-                c.apply_input_diag(pid, false, 2, 1 << 31);
+                c.apply_input_scope(pid, false, 2, 1 << 31);
                 assert_eq!(
                     c.password_suppress.load(Relaxed),
                     pushed,
@@ -18803,7 +17908,7 @@ mod input_diag_tests {
 
         // 每一轮：先「手写」翻转规则（只改文件，内存表不知道），再触发一个非密码类的重载。
         type Reload<'a> = (&'a str, &'a dyn Fn(&Coordinator));
-        let reloads: [Reload; 7] = [
+        let reloads: [Reload; 6] = [
             ("set_first_show_mode", &|c| c.set_first_show_mode(1)),
             ("set_candidate_position_rule", &|c| {
                 c.set_candidate_position_rule(1)
@@ -18811,7 +17916,6 @@ mod input_diag_tests {
             ("set_ignore_host_ime_close_rule", &|c| {
                 c.set_ignore_host_ime_close_rule(1)
             }),
-            ("set_auto_pair_rule", &|c| c.set_auto_pair_rule(2)),
             ("set_status_fallback_rule", &|c| {
                 c.set_status_fallback_rule(2)
             }),
@@ -18850,22 +17954,6 @@ mod input_diag_tests {
 // ─────────────────────────────────────────────────────────────────────────────
 // 注释词库：配置里的挂载表 × 词库自带 comment 列的自动派生项
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// `sync_emoji_dict` 的变更判据：`(enabled, categories, 开着的附加模块 id)`。
-pub(crate) type EmojiSpec = (bool, bool, Vec<String>);
-
-/// 已挂载的 emoji 表，按查询合并顺序（见 `Coordinator::load_emoji_dict`）。
-pub(crate) struct EmojiTables(pub(crate) Vec<std::sync::Arc<aurora_dict::emojidict::EmojiReader>>);
-
-impl EmojiTables {
-    /// 各表命中的值按表序拼成一串（空格分隔）。表间的重复（同一符号、或带 / 不带 U+FE0F）
-    /// 不在这里去：消费端本就要按 `emoji_dedup_key` 去重并截断到 `max_per_word`，在这里
-    /// 再去一遍只是多分配。
-    pub(crate) fn lookup(&self, text: &str) -> Option<String> {
-        let parts: Vec<&str> = self.0.iter().filter_map(|r| r.lookup(text)).collect();
-        (!parts.is_empty()).then(|| parts.join(" "))
-    }
-}
 
 /// 一个自动派生出的注释源：某个方案声明的词库自己带了 `comment` 列。
 #[derive(Debug, Clone, PartialEq)]
@@ -19308,8 +18396,8 @@ mod caret_for_ui_tests {
 #[cfg(test)]
 mod mode_icon_label_tests {
     use crate::coordinator::Coordinator;
-    use std::sync::Arc;
     use aurora_config::Config;
+    use std::sync::Arc;
 
     fn coord_with(english: &str, caps: &str) -> Arc<Coordinator> {
         let mut cfg = Config::default();
@@ -19712,48 +18800,6 @@ mod toolbar_items_tests {
     fn defining_a_button_does_not_show_it() {
         let buttons = [btn("sym", "符")];
         assert_eq!(parse_with(&[], &buttons), DEFAULT_TOOLBAR_ITEMS.to_vec());
-    }
-}
-
-#[cfg(test)]
-mod emoji_tables_tests {
-    use super::EmojiTables;
-    use aurora_dict::emojidict::{EmojiReader, write_emoji_wemj};
-
-    fn table(
-        dir: &std::path::Path,
-        name: &str,
-        rows: &[(&str, &[&str])],
-    ) -> std::sync::Arc<EmojiReader> {
-        let p = dir.join(format!("{name}.wemj"));
-        let rows: Vec<(String, Vec<String>)> = rows
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.iter().map(|s| s.to_string()).collect()))
-            .collect();
-        write_emoji_wemj(&p, &rows).unwrap();
-        std::sync::Arc::new(EmojiReader::open(&p).unwrap())
-    }
-
-    /// 多表按挂载顺序拼接：主表在前，附加模块的同词结果接在后面；只有一张表命中时就是它；
-    /// 都没命中为 None。去重留给消费端（`plan_emoji_insertions`）。
-    #[test]
-    fn lookup_concatenates_in_table_order() {
-        let dir = std::env::temp_dir().join(format!("wind-emoji-tables-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let t = EmojiTables(vec![
-            table(&dir, "word", &[("开心", &["😄"])]),
-            table(
-                &dir,
-                "frost",
-                &[("开心", &["😄", "😊"]), ("右箭头", &["➡️"])],
-            ),
-        ]);
-        assert_eq!(t.lookup("开心").as_deref(), Some("😄 😄 😊"));
-        assert_eq!(t.lookup("右箭头").as_deref(), Some("➡️"));
-        assert_eq!(t.lookup("无此词"), None);
-        drop(t);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

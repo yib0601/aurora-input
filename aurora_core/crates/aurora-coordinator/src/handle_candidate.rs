@@ -9,7 +9,6 @@ use crate::coordinator::{
 use crate::pipeline::ModeKind;
 use crate::preedit_cursor;
 use crate::short_code_yield;
-use tracing::{debug, warn};
 use aurora_bridge::handler::{KeyAction, KeyEventData};
 use aurora_candidate::{Candidate, CandidateMeta, CandidateSource};
 use aurora_engine::manager::ENGLISH_SCHEMA;
@@ -17,6 +16,7 @@ use aurora_ipc::protocol::MOD_SHIFT;
 use aurora_keys::keymap;
 use aurora_store::freq::FreqRecord;
 use aurora_ui_types::CandidateOp;
+use tracing::{debug, warn};
 
 /// 候选刷新各段超过它才记日志（偶发慢键排查用，平时不进日志）。
 const SLOW_STAGE: std::time::Duration = std::time::Duration::from_millis(15);
@@ -26,6 +26,19 @@ const SLOW_STAGE: std::time::Duration = std::time::Duration::from_millis(15);
 /// 召回的词从池尾起步、按 `base_pos / 2^有效次数` 前移；按有效次数取前 16 个（已验证是
 /// 词库词的）已经覆盖「能进前几页」的全部候选者，再多的只是在池尾附近换位置。
 const ENGLISH_RECALL_MAX: usize = 16;
+
+/// 调位（置顶 / 前移 / 后移）要用的位置，均为候选列表里的下标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReorderPositions {
+    /// 本条。
+    pub(crate) here: usize,
+    /// 前移的目标。
+    pub(crate) prev: usize,
+    /// 后移的目标。
+    pub(crate) next: usize,
+    /// 末位。
+    pub(crate) last: usize,
+}
 
 /// 候选词条操作（置顶 / 前移 / 后移 / 删除 / 恢复默认）的作用域快照。
 /// 由 [`Coordinator::candidate_op_scope`] 解析，菜单构建、写端、macOS 禁用位三处共用。
@@ -413,127 +426,19 @@ fn resolve_auto_commit_min_len(configured: usize, max_code_length: usize) -> usi
     }
 }
 
-/// 候选列表里**唯一的非 emoji 扩展候选**；不足一条或多于一条都返回 `None`。
+/// 候选列表里**唯一的非低置信候选**；不足一条或多于一条都返回 `None`。
 ///
 /// # 为什么抽成纯函数
 ///
 /// [`Coordinator::phrase_auto_commit`] 的其余判据要真实引擎与短语库才跑得起来（构造一个
-/// `Coordinator` 需临时目录 + schema 文件 + redb），而这一条是纯列表运算，**且正是最容易
-/// 被 emoji 扩展悄悄破坏的地方**：原判据写作 `let [c] = &state.candidates[..]`，插入任意
-/// 一条 emoji 候选后即恒假。抽出来才钉得住。
+/// `Coordinator` 需临时目录 + schema 文件 + redb），而这一条是纯列表运算。抽出来才钉得住。
 ///
-/// ⚠️ 只有「唯一性」类判据需要这样排除。候选窗显隐（`is_empty`）、翻页与选中索引
-/// （`len`）**照常把 emoji 计入**——用户要能翻到并选中它；而且没有宿主候选就不会有
-/// emoji，故 `is_empty` 的语义天然不受影响。
-fn sole_non_emoji(candidates: &[Candidate]) -> Option<&Candidate> {
-    // 低置信候选（换位纠错、误读召回）同样不计：满码唯一的短语不该被它们拦下。
-    let mut it = candidates
-        .iter()
-        .filter(|c| !c.is_emoji_suggestion && !c.is_low_confidence());
+/// ⚠️ 只有「唯一性」类判据需要这样排除：低置信候选（换位纠错、误读召回）不计，满码唯一的
+/// 短语不该被它们拦下。候选窗显隐（`is_empty`）、翻页与选中索引（`len`）照常把它们计入。
+fn sole_non_low_confidence(candidates: &[Candidate]) -> Option<&Candidate> {
+    let mut it = candidates.iter().filter(|c| !c.is_low_confidence());
     let first = it.next()?;
     it.next().is_none().then_some(first)
-}
-
-/// 规划 emoji 插入：返回 `(宿主下标, 该宿主要插入的 emoji)`，**不修改**候选列表。
-///
-/// emoji 去重键：剥掉 U+FE0F（变体选择符 16，要求 emoji 呈现）。
-///
-/// 上游表里过半符号带尾随 FE0F（`✅️` 而非 `✅`），同一个符号两种写法按字符串比是两条，
-/// 会挤占 `max_per_word` 配额（`奖项` → `🏅️ 🏅 🎖️`）。只用来比，**不改写**输出：FE0F 决定
-/// 彩色 emoji 还是黑白文本字形，谁先到用谁（见 `docs/design/text-mapping-tables.md` §2.3）。
-pub(crate) fn emoji_dedup_key(s: &str) -> String {
-    s.replace('\u{FE0F}', "")
-}
-
-/// # 为什么抽成纯函数
-///
-/// [`Coordinator::apply_emoji_suggestions`] 的其余部分要真实的 `Coordinator`（配置 + mmap
-/// 表）才跑得起来，而「选哪些宿主、查表、去重、截断」这套判据是纯计算。分开之后这些判据
-/// 才测得了，而剩下那半只是读配置与按 `show_as` 落位。
-///
-/// 判据（顺序即优先级）：
-/// - 只看**列表前 `max_hosts` 条**——不是「找够 max_hosts 个合格宿主」。前者可预测
-///   （首选没 emoji 就是没有），后者会让 emoji 随候选内容飘忽出现在不同位置；
-/// - 跳过已有的 emoji 扩展候选（避免二次扩展）与短于 `min_chars` 的词；
-/// - `exact_only` 时跳过前缀补全与子短语：那些候选本身就是「猜」出来的，再挂 emoji 只会
-///   放大噪音；
-/// - 去重集合**起手装入全部既有候选文本**：词库里本来就收了那个 emoji 时不再重复给一条，
-///   多个宿主命中同一个 emoji 时也只给一条。去重按 [`emoji_dedup_key`]（剥掉 U+FE0F）比，
-///   保留先到者的原形。
-fn plan_emoji_insertions(
-    candidates: &[Candidate],
-    exact_only: bool,
-    max_hosts: usize,
-    max_per_word: usize,
-    min_chars: usize,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> Vec<(usize, Vec<String>)> {
-    let mut seen: std::collections::HashSet<String> = candidates
-        .iter()
-        .map(|c| emoji_dedup_key(&c.text))
-        .collect();
-    let mut picks: Vec<(usize, Vec<String>)> = Vec::new();
-    for (i, c) in candidates.iter().enumerate().take(max_hosts) {
-        if c.is_emoji_suggestion || c.text.chars().count() < min_chars {
-            continue;
-        }
-        if exact_only && (c.is_prefix || c.is_partial) {
-            continue;
-        }
-        let Some(list) = lookup(&c.text) else {
-            continue;
-        };
-        let mut picked = Vec::new();
-        for e in list.split_whitespace() {
-            if picked.len() >= max_per_word {
-                break;
-            }
-            if seen.insert(emoji_dedup_key(e)) {
-                picked.push(e.to_string());
-            }
-        }
-        if !picked.is_empty() {
-            picks.push((i, picked));
-        }
-    }
-    picks
-}
-
-/// `show_as = "tail"` 的插入点：**最后一条常用候选之后**，且不越过任何放宽补充的候选。
-///
-/// 「列表末尾」的本意是「不动原有序号、又能看得见」。初版直接 `extend` 到物理末尾，真机
-/// 上在智能档下被排到生僻字之后——智能档只滤掉「同码位有常用字」的生僻字，孤儿码位的
-/// 生僻字照常留在列表尾部；`extend` 落在它们后面，等于要翻好几页才看得到，形同没有。
-///
-/// 判据与过滤器共用 [`aurora_candidate::is_common_like`]（常用字 / 短语 / 命令 / 分组），
-/// 两边对「什么算常用」不可分叉。三条边界：
-/// - 没有任何常用候选（全是生僻字）⇒ 落到放宽补充段之前的物理末尾，**不抢首位**；
-/// - 放宽补充的候选（`is_scope_filtered`，恒在末尾）永远排在 emoji 之后；
-/// - 全部字符档不沉底、生僻字与常用字按权重交错，此时「最后一条常用候选之后」可能落在
-///   列表中段——这是同一判据在该档的自然结果，emoji 仍不会挤到任何常用候选前面。
-fn emoji_tail_insert_at(candidates: &[Candidate]) -> usize {
-    let before_relaxed = candidates
-        .iter()
-        .position(|c| c.is_scope_filtered)
-        .unwrap_or(candidates.len());
-    candidates[..before_relaxed]
-        .iter()
-        .rposition(aurora_candidate::is_common_like)
-        .map_or(before_relaxed, |i| i + 1)
-}
-
-/// 造一条 emoji 扩展候选。
-///
-/// `code` 恒空、`source` 恒 `None`（同短语、同英文头部候选）：它没有编码来源。这一点被
-/// 三处下游依赖——引擎侧 `decide_auto_commit` 按 `code == input` 筛码表子集判唯一，词频
-/// 读写两端要求码非空，`AutoCommit` 只认 `source == CodeTable` 的显示首选。给它编个码
-/// 会同时破坏这三处。
-fn make_emoji_candidate(text: String) -> Candidate {
-    Candidate {
-        text,
-        is_emoji_suggestion: true,
-        ..Default::default()
-    }
 }
 
 /// 移动端拼音单字母的首批候选上限，见 [`Coordinator::main_path_candidate_limit`]。
@@ -551,7 +456,8 @@ impl Coordinator {
     /// 引擎本就跨线程共享（按键线程、`prepare`、反查索引后台构建都在用）。
     /// 上限与移动端单字母首批一致，查的正是用户第一下要的那一批。
     pub fn prewarm_single_initials(self: &std::sync::Arc<Self>) {
-        if self.engine_mgr.current_engine_type() != Some(aurora_engine::engine::EngineType::Pinyin) {
+        if self.engine_mgr.current_engine_type() != Some(aurora_engine::engine::EngineType::Pinyin)
+        {
             return;
         }
         let this = std::sync::Arc::clone(self);
@@ -609,31 +515,13 @@ impl Coordinator {
         self.record_selection_in(None, code, text, source);
     }
 
-    /// 同 [`Self::record_selection`]，但从候选本身判来源：**emoji 扩展候选恒不记词频**。
+    /// 同 [`Self::record_selection`]，但从候选本身判来源：英文头部候选要按它对应的词库词
+    /// 记账，码表自动造词要在这里登记草稿码。
     ///
-    /// 存在理由：「这条是 emoji 扩展」这个事实只在候选身上（`is_emoji_suggestion`），
-    /// `record_selection` 的三个参数都带不出来——它 `source` 为 `None`、`code` 为空，
-    /// 走普通路径会按输入码写进词频库。
-    ///
-    /// # 为什么恒不记、而不是做成开关
-    ///
-    /// emoji 在 `apply_freq_rerank` **之后**才插进列表（见 [`Self::apply_emoji_suggestions`]），
-    /// 词频读端永远看不到它 ⇒ 记下来的词频没有任何排序效果，只会逐条往库里堆垃圾行。
-    /// 一个「打开也不起作用」的开关比没有更糟——曾有 `input.emoji.learn_freq` 一项，
-    /// 设置页 hint 还许诺了「参与调频会把常用字挤下去」这种做不到的效果，因此撤掉。
-    ///
-    /// ⚠️ **不能在调用点整条跳过记账**：`record_selection` 里还有 `push_commit_history`，
-    /// 那是「`;` 重复上屏」的数据源，与词频是两条独立通路。跳过整条的话，刚上屏的 emoji
-    /// 无法被重复调出，而用户只会觉得重复上屏偶尔失灵（这条教训在 `exclude_blocks` 的
-    /// 注释里已经记过一次）。
-    ///
-    /// ★ 凡是从 `state.candidates` 取候选上屏的路径都该走本函数而非 `record_selection`。
-    /// emoji 只在 `build_candidates` 末端插入，故会消费到它的只有普通输入的选词 / 顶屏
-    /// 路径：`commit_selected`、`take_committed_with_highlight`、`commit_highlight_then_char`
-    /// 与标点顶屏两处。初版只接了后三处，主选词路径漏掉——按数字键选 emoji 照样记词频，
-    /// 正是「消费点接在走不到的调用点上」那种静默失效。
-    /// `every_record_selection_call_goes_through_freq_code` 同时扫描两个名字，记账码的
-    /// 口径约束对本函数同样成立。
+    /// ★ 凡是从 `state.candidates` 取候选上屏的路径都该走本函数而非 `record_selection`：
+    /// `commit_selected`、`take_committed_with_highlight`、`commit_highlight_then_char`
+    /// 与标点顶屏两处。`every_record_selection_call_goes_through_freq_code` 同时扫描两个
+    /// 名字，记账码的口径约束对本函数同样成立。
     ///
     /// ★ 英文方案的**头部候选**（原文 / 大小写变形）按它对应的词库词记（A2-39②，与临英、
     /// 快捷输入同一个 `english_head_dict_word`）：大写打 `Translation` 上屏，记到词库的
@@ -711,28 +599,15 @@ impl Coordinator {
 
     /// 同 [`Self::record_selection_cand`]，但可指定**归属方案**（overlay 用）。
     ///
-    /// # 为什么 overlay 也需要这道 emoji 守卫
-    ///
-    /// 临拼与 mix 的候选列表里现在同样会插入 emoji（见各自装配函数末尾的
-    /// `apply_emoji_suggestions`），于是它们的上屏出口也成了「从 `state.candidates` 取候选」
-    /// 的路径——`record_selection_cand` 文档里那句「★ 凡是从 `state.candidates` 取候选上屏的
-    /// 路径都该走本函数」对它们同样成立。
-    ///
-    /// 不走的话：emoji 候选 `code` 恒空、`source` 恒 `None`，`freq_code` 落回缓冲串，写出
-    /// `("pinyin", "ni", "🙂")` 这样的行；而读端 `apply_freq_rerank_in` 跑在 emoji 插入
-    /// **之前**，这些行永远命中不了——正是当初撤掉 `input.emoji.learn_freq` 的那个理由
-    /// （「一个打开也不起作用的开关比没有更糟」），等于从后门把它放回来。
+    /// 临拼与 mix 的上屏出口也是「从 `state.candidates` 取候选」，故同样走本函数而不是
+    /// `record_selection`——`record_selection_cand` 文档里那句「★ 凡是从
+    /// `state.candidates` 取候选上屏的路径都该走本函数」对它们同样成立。
     pub(crate) fn record_selection_cand_in(
         &self,
         schema_override: Option<&str>,
         code: &str,
         cand: &Candidate,
     ) {
-        if cand.is_emoji_suggestion {
-            // 只跳词频，历史照记。
-            self.push_commit_history(&cand.text);
-            return;
-        }
         // 词频记投影前的词库原文、历史记实际上屏的形态，理由见 `record_selection_cased_in`。
         self.record_selection_cased_in(
             schema_override,
@@ -769,8 +644,7 @@ impl Coordinator {
     /// - **历史**（「重复上屏」的数据源）要用户**实际上屏**的形态。他上屏的是 `Hill`，
     ///   `;` 调回来却给 `hill`，那是所见非所得。
     ///
-    /// 这条分歧与 emoji 那道守卫（只跳词频、历史照记）同型：两条通路本就独立，
-    /// 只是此前没有哪个调用点需要把它们分开。
+    /// 这条分歧的前提是两条通路本就独立，只是此前没有哪个调用点需要把它们分开。
     pub(crate) fn record_selection_cased_in(
         &self,
         schema_override: Option<&str>,
@@ -779,7 +653,7 @@ impl Coordinator {
         history_text: &str,
         source: CandidateSource,
     ) {
-        // 历史先记、与词频文本空不空无关：两条通路独立（理由见 emoji 守卫）。空显示标签的
+        // 历史先记、与词频文本空不空无关：两条通路独立。空显示标签的
         // `$CC` 纯文本命令就是 `freq_text` 空而上屏文本非空的例子。
         self.push_commit_history(history_text);
         self.record_freq_only(schema_override, code, freq_text, source);
@@ -828,83 +702,6 @@ impl Coordinator {
             };
             if let Err(e) = store.record_freq(&schema, code, text) {
                 warn!("record_freq failed: {}", e);
-            }
-        }
-    }
-
-    /// 按候选**文本**查 emoji 表，把命中的 emoji 作为候选插入（`[input.emoji]`）。
-    ///
-    /// # 为什么钉在候选管线的最末端
-    ///
-    /// 前面每一步都会咬它一口（设计文档 §3.2）：去重会让它参与 `merged_codes` 累积、造出
-    /// 假的同码关系；`apply_filter` 因 emoji 的 `is_common` 恒 false 而在同码有常用字时把它
-    /// **整批静默滤掉**；`apply_freq_rerank` 会让选过一次的 emoji 被码表侧不衰减的
-    /// used-first 永久顶到汉字前面；`apply_shadow` 会打乱用户调好的顺序。
-    ///
-    /// ⚠️ 本函数**只增不改**：绝不动既有候选的顺序与内容。首选位置恒定是盲打的前提，
-    /// 而 `after` 档插入的位置恒在宿主**之后**，故首选永远不会被 emoji 顶替。
-    ///
-    /// # 想给非首选的候选也配 emoji，靠 `max_hosts` 而不是「跟随高亮」
-    ///
-    /// 「打出的词不在首位（拼音下很常见）⇒ 那个词有 emoji 却够不着」是真实问题，解法是把
-    /// `max_hosts` 放大到首页条数。**刻意没有做「只扩当前高亮候选」那一档**：它要在每次
-    /// 导航后移除旧 emoji、按新高亮重插，而列表长度随之变化会与 `selected_index` 的语义
-    /// 打架——用户按下键时，「下一条」可能正是刚插进来的那个 emoji。这个交互得先在真机
-    /// 上定下来，不能凭空实现。
-    pub(crate) fn apply_emoji_suggestions(&self, candidates: &mut Vec<Candidate>) {
-        let (scope, show_as, max_per_word, max_hosts, min_chars) = {
-            let rt = self.rt();
-            let e = &rt.config.input.emoji;
-            if !e.enabled {
-                return;
-            }
-            (
-                e.scope.clone(),
-                e.show_as.clone(),
-                e.max_per_word,
-                e.max_hosts,
-                e.min_word_chars,
-            )
-        };
-        // `comment` 档不进候选——它由注释模板的 `${emoji}` 变量呈现，是另一条通路。
-        if scope == "off" || show_as == "comment" || max_per_word == 0 {
-            return;
-        }
-        let guard = self.emoji_dict.read().unwrap_or_else(|e| e.into_inner());
-        let Some(dict) = guard.as_ref() else {
-            return;
-        };
-        // 未知值按最保守的一档处理（值域告警在 `sync_emoji_dict` 里发，热路径不重复告警）。
-        let picks = plan_emoji_insertions(
-            candidates,
-            scope != "all",
-            max_hosts,
-            max_per_word,
-            min_chars,
-            |t| dict.lookup(t),
-        );
-        if picks.is_empty() {
-            return;
-        }
-
-        if show_as == "tail" {
-            // 「列表末尾」＝常用候选之后（不是物理末尾）：原有序号完全不动。
-            // 落点判据见 `emoji_tail_insert_at`。
-            let at = emoji_tail_insert_at(candidates);
-            let mut k = 0;
-            for (_, es) in picks {
-                for e in es {
-                    candidates.insert(at + k, make_emoji_candidate(e));
-                    k += 1;
-                }
-            }
-        } else {
-            // `after`：紧随宿主。**从后往前**插入，否则前面插入会把后面记下的下标
-            // 全部顶偏一位。
-            for (i, es) in picks.into_iter().rev() {
-                for (k, e) in es.into_iter().enumerate() {
-                    candidates.insert(i + 1 + k, make_emoji_candidate(e));
-                }
             }
         }
     }
@@ -2090,10 +1887,6 @@ impl Coordinator {
                 crate::english_candidates::dedup_by_text(&mut candidates);
             }
         }
-        // ── Emoji 扩展：钉在**所有加工之后** ────────────────────────────────
-        // 与上面英文头部候选同一条纪律（钉在最后），方向相反：英文头部钉在最前、emoji 钉在
-        // 最后。理由见 `apply_emoji_suggestions` —— 放进过滤链里它会被静默滤光。
-        self.apply_emoji_suggestions(&mut candidates);
         state.candidates = candidates;
         // 满码自动上屏「显示态」复评：引擎按未过滤候选判唯一（生僻同码字致不唯一被否决），
         // 但智能过滤后可能只剩唯一精确全码码表候选 → 据显示候选复评放行（逻辑与显示一致）。
@@ -2133,8 +1926,6 @@ impl Coordinator {
             // 惰性：`filter` 只在引擎已放行（`Some`）时才求值，故全量扫短语码表的代价不落在
             // 每次按键上——与 `phrase_vetoes_top_code` 的调用点选择同源。
             .filter(|_| !self.phrase_vetoes_auto_commit(state, &state.input_buffer))
-            // 追加候选否决（`input.emoji.block_auto_commit`，出厂关）：见 `emoji_vetoes_auto_commit`。
-            .filter(|_| !self.emoji_vetoes_auto_commit(&state.candidates))
         {
             Some(_) => {
                 // 一致性：自动上屏文本取「实际显示的首候选」，与空格/点选同源，杜绝
@@ -2220,18 +2011,12 @@ impl Coordinator {
         }
         // 唯一候选。
         //
-        // ⚠️ emoji 扩展候选**不计入**（`is_emoji_suggestion`）：它们是按已成形候选的文本
-        // 追加进来的，不是这个码检索出的词条，对「这个码只有一条候选」这个判断没有发言权。
-        // 不排除的话，凡是短语文本恰好命中 emoji 表（如短语 `ocd → 好的`）就会让本判据
-        // 恒假 ⇒ 该短语打全码不再自动上屏、要多按一次空格，而用户完全无从联想到 emoji。
+        // ⚠️ 低置信候选（换位纠错、误读召回）不计入：它们不是这个码检索出的可信词条，
+        // 对「这个码只有一条候选」这个判断没有发言权。
         //
-        // 引擎侧的 `decide_auto_commit` 不需要这道闸：它按 `c.code == input` 筛码表候选子集，
-        // 而 emoji 候选 `code` 恒空（同短语、同英文头部候选）。两处判据不同源，别互相照抄。
-        let c = sole_non_emoji(&state.candidates)?;
-        // 同码表侧：用户选择让追加候选阻止自动上屏时，这里同口径否决。
-        if self.emoji_vetoes_auto_commit(&state.candidates) {
-            return None;
-        }
+        // 引擎侧的 `decide_auto_commit` 不需要这道闸：它按 `c.code == input` 筛码表候选子集。
+        // 两处判据不同源，别互相照抄。
+        let c = sole_non_low_confidence(&state.candidates)?;
         // 精确码短语（非前缀枚举 / 非组）。命令留待下方按纯文本/副作用分流。
         if !c.is_phrase || c.is_prefix || c.is_group {
             return None;
@@ -2343,16 +2128,6 @@ impl Coordinator {
             ct.auto_commit_min_len,
             self.engine_mgr.active_full_code_length(),
         )
-    }
-
-    /// 候选里有追加出来的 emoji / 附加模块符号，且用户开了 `input.emoji.block_auto_commit`
-    /// ⇒ 否决全码唯一自动上屏（码表与短语两侧共用）。
-    ///
-    /// 判据是「列表里有追加候选」而不追溯宿主：走到自动上屏时列表通常只剩上屏目标这一条
-    /// 词库候选，追加候选也就挂在它身上。
-    fn emoji_vetoes_auto_commit(&self, candidates: &[Candidate]) -> bool {
-        self.rt().config.input.emoji.block_auto_commit
-            && candidates.iter().any(|c| c.is_emoji_suggestion)
     }
 
     /// `$CC` 命令候选的自动上屏结局分流（短语命令 / 词库命令词条共用）：
@@ -2589,9 +2364,7 @@ impl Coordinator {
     /// 根据输入缓冲更新候选（动态分级加载：首次小批量，翻页到边界再扩展）。
     /// 返回输入结局（全码自动上屏 / 满码空码清空）；多数调用方忽略，仅正向输入字母时消费。
     pub(crate) fn update_candidates(&self, state: &mut State) -> InputOutcome {
-        let outcome = self.refill_candidates(state);
-        self.grid_resume(state);
-        outcome
+        self.refill_candidates(state)
     }
 
     fn refill_candidates(&self, state: &mut State) -> InputOutcome {
@@ -2804,8 +2577,8 @@ impl Coordinator {
         if matches!(state.active, Some(ModeKind::AuxCode)) {
             return;
         }
-        let new_limit =
-            (state.candidate_limit.saturating_mul(2)).min(aurora_engine::engine::CANDIDATE_LIMIT_CAP);
+        let new_limit = (state.candidate_limit.saturating_mul(2))
+            .min(aurora_engine::engine::CANDIDATE_LIMIT_CAP);
         if new_limit <= state.candidate_limit {
             state.has_more = false;
             return;
@@ -2815,8 +2588,6 @@ impl Coordinator {
         let (engine_count, _) = self.build_candidates(state, new_limit);
         // 重建后立刻重新展开变体（列表整份重建，变体须随之重展）。
         self.expand_s2t_variants(state);
-        // 展开态正在按分类筛选：重建出来的是完整列表，重新筛一遍（见 `grid_reapply_filter`）。
-        self.grid_reapply_filter(state);
         // 可见列表可能变短（同组常用字进来、先前放行的生僻字被滤走），页码/高亮须夹回范围，
         // 下面两条出口都要——见 `clamp_candidate_view`。
         self.clamp_candidate_view(state);
@@ -2852,6 +2623,17 @@ impl Coordinator {
             .map(|n| n as usize - 1)
     }
 
+    /// 调位（置顶 / 前移 / 后移）要用的位置。shadow 规则写下的位置，读端按完整候选列表解释。
+    pub(crate) fn reorder_positions(state: &State, idx: usize) -> ReorderPositions {
+        let last = state.candidates.len().saturating_sub(1);
+        ReorderPositions {
+            here: idx,
+            prev: idx.saturating_sub(1),
+            next: (idx + 1).min(last),
+            last,
+        }
+    }
+
     /// 选中「当前页第 `offset` 项」（0=首选，1=次选，2=三选），按当前活跃模式派发到各自的
     /// 选中出口。越界（页内不足）返回 `None`，由调用方决定回落语义。
     ///
@@ -2863,7 +2645,7 @@ impl Coordinator {
         state: &mut State,
         offset: usize,
     ) -> Option<KeyAction> {
-        let (start, end) = self.select_range(state);
+        let (start, end) = self.page_range(state);
         let gi = start + offset;
         if gi >= end {
             return None;
@@ -2878,15 +2660,6 @@ impl Coordinator {
                 self.commit_special_candidate(state, gi)
             }
             Some(ModeKind::Mix(_)) => self.mix_select(state, offset),
-            // 网址 / 邮箱模式**有**候选（补全项），但**不能**按序号选中：数字在网址与
-            // 邮箱里都是合法字符（`www.163.com`、`abc123@qq.com`），放行序号选词等于
-            // 让用户再也打不出含数字的网址和用户名。高亮靠导航键移动、上屏走空格/回车
-            // （`handle_url_key` / `handle_email_key`），与 Unicode 同一条理由。
-            Some(ModeKind::Url) | Some(ModeKind::Email) => return None,
-            // Unicode 模式**有**一条候选，但**不能**按序号选中：候选恒只有一条，而数字键
-            // `0-9` 全是十六进制位。放行选词等于把 `u+1` 的 `1` 吃成「选第 1 条」，用户
-            // 再也打不出任何含数字的码点。上屏走空格/回车（`handle_unicode_key`）。
-            Some(ModeKind::Unicode) => return None,
             // 走 `aux_code_committed` 而**不是** `commit_selected` + 无条件收尾：
             // 部分消费（候选只吃掉缓冲前缀）时辅助码要留在模式内重建会话继续筛，
             // 否则「没时间」这类分步组句在按 `2` 时能继续、轻敲 Shift 选同一个候选
@@ -2914,8 +2687,7 @@ impl Coordinator {
     /// 按绑定键，上屏的字一样、词频却不一样」，没人会去对比。
     ///
     /// 与 [`Self::select_page_candidate`] 的分野：那个按**页内序号**选（二三候选键），本函数
-    /// 按**高亮**选，且网址 / 邮箱 / Unicode 三个模式在这里**有**出口（空格本就上屏它们的
-    /// 高亮补全项），在那里没有（数字是它们的合法字符）。
+    /// 按**高亮**选。
     pub(crate) fn commit_highlighted(&self, state: &mut State) -> Option<KeyAction> {
         if state.candidates.is_empty() {
             return None;
@@ -2957,9 +2729,6 @@ impl Coordinator {
                 let cand = state.candidates[gi].clone();
                 self.aux_code_committed(state, cand, offset as i32)
             }
-            Some(ModeKind::Url) => self.commit_url(state, true),
-            Some(ModeKind::Email) => self.commit_email(state, true),
-            Some(ModeKind::Unicode) => self.commit_unicode(state),
         })
     }
 
@@ -3253,13 +3022,6 @@ impl Coordinator {
                 &mut st.temp_english_buffer,
                 &mut st.temp_english_cursor,
             ),
-            ModeKind::Url => preedit_cursor::BufEdit::new(&mut st.url_buffer, &mut st.url_cursor),
-            ModeKind::Email => {
-                preedit_cursor::BufEdit::new(&mut st.email_buffer, &mut st.email_cursor)
-            }
-            ModeKind::Unicode => {
-                preedit_cursor::BufEdit::new(&mut st.unicode_buffer, &mut st.unicode_cursor)
-            }
             // 生僻字模式与 special 共用 `special_buffer`：按键处理走的是同一个
             // `handle_special_key`，缓冲另起一个字段的话，退格与光标会作用在一个没人读的
             // 字段上——组合区不动、候选不变，且没有任何报错。
@@ -3278,7 +3040,7 @@ impl Coordinator {
     /// `update_*_candidates` 的 `state.preedit` 组装同源（preedit = 前缀 + 主体）。
     ///
     /// 临拼 / mix 的主体是引擎 `preedit_display`（含插入的音节分隔符，与缓冲不同形），取自
-    /// `overlay_body`；临英 / 特殊 / URL 的主体恒等于自身缓冲，直接用缓冲。
+    /// `overlay_body`；临英 / 特殊的主体恒等于自身缓冲，直接用缓冲。
     fn overlay_caret_parts(state: &State) -> Option<(String, &str, &str, usize)> {
         Some(match state.active? {
             ModeKind::TempPinyin => (
@@ -3304,28 +3066,6 @@ impl Coordinator {
                 &state.special_buffer,
                 &state.special_buffer,
                 state.special_cursor,
-            ),
-            ModeKind::Url => (
-                String::new(),
-                &state.url_buffer,
-                &state.url_buffer,
-                state.url_cursor,
-            ),
-            // 邮箱：缓冲里**已经含用户名与 `@`**（`abc@gmail.com` 整串），同 Unicode，
-            // 只读前缀留空——那一段是可编辑缓冲的一部分（退格能删到它），不是装饰。
-            ModeKind::Email => (
-                String::new(),
-                &state.email_buffer,
-                &state.email_buffer,
-                state.email_cursor,
-            ),
-            // Unicode：缓冲里**已经含触发前缀**（`u+4e00` 整串），故只读前缀留空——
-            // 前缀那一段是可编辑缓冲的一部分（退格能删到它），不是外挂的装饰。
-            ModeKind::Unicode => (
-                String::new(),
-                &state.unicode_buffer,
-                &state.unicode_buffer,
-                state.unicode_cursor,
             ),
             // 辅助码：主体 = 辅助码缓冲，前缀 = overlay 里进入时拼好的显示前缀（基线 + 分隔符，
             // 只写一遍）。光标恒在串尾。
@@ -3491,8 +3231,7 @@ impl Coordinator {
     /// 按当前高亮候选类型重算 `state.preedit`（混输高亮跟随）。含已转换前缀（逐步转换）拼接。
     /// 普通模式走 [`Self::effective_preedit_body`]；临拼 / mix 走各自的 overlay 形态
     /// （[`Self::sync_overlay_preedit_to_highlight`]）。其余 overlay 各自维护 preedit，这里什么都不做
-    /// ——按普通模式重算会把编码栏改写成 `committed_text + input_buffer`，在那些模式下就是清空
-    /// （分类标签点击 `grid_click_tab` 不分模式调本函数）。
+    /// ——按普通模式重算会把编码栏改写成 `committed_text + input_buffer`，在那些模式下就是清空。
     ///
     /// 辅助码（`AuxCode`）例外，同普通模式：它叠在主路缓冲上，部分上屏后由 `update_candidates`
     /// 按主路重建组合区（已转换前缀 + 剩余编码），辅码前缀随后才拼上去。
@@ -3732,7 +3471,7 @@ impl Coordinator {
                 state.temp_english_buffer.clone(),
                 false,
             ),
-            // 其余 overlay（临拼 / 混输 / 网址）没有独立词库落点：`effective_data_schema`
+            // 其余 overlay（临拼 / 混输）没有独立词库落点：`effective_data_schema`
             // 对它们返回 None（2026-08-04 用户拍板，见其文档），放行会静默落回主方案。
             // 新增模式时**先补落点、再放行**，顺序不能反。
             _ => return None,
@@ -4194,7 +3933,7 @@ impl Coordinator {
     /// 数字键选词统一入口（num 为 1-based：1-9 选页内对应候选，10 表示主键盘 `0` 选第 10 个）。
     /// 命中当前页范围 → 选词上屏；越界 → 走 overflow 策略（对齐 Go handleNumberKey）。
     pub(crate) fn handle_number_key_select(&self, state: &mut State, num: usize) -> KeyAction {
-        let (start, end) = self.select_range(state);
+        let (start, end) = self.page_range(state);
         let idx = start + (num - 1);
         if idx < end {
             let cand = state.candidates[idx].clone();
@@ -4220,7 +3959,12 @@ impl Coordinator {
             self.exit_assoc(state, crate::handle_assoc::AssocExit::TopCommitKey);
             self.notify_ui_hide();
             let digit = self.overflow_digit_text(state, num);
-            self.record_commit(&digit, 0, -1, aurora_store::stats::CommitSource::Punctuation);
+            self.record_commit(
+                &digit,
+                0,
+                -1,
+                aurora_store::stats::CommitSource::Punctuation,
+            );
             return Self::commit_action(digit, true);
         }
         let hi = self.highlighted_global_index(state);
@@ -4244,7 +3988,12 @@ impl Coordinator {
                 self.reset_pinyin_composition(state);
                 self.notify_ui_hide();
                 let digit = self.overflow_digit_text(state, num);
-                self.record_commit(&digit, 0, -1, aurora_store::stats::CommitSource::Punctuation);
+                self.record_commit(
+                    &digit,
+                    0,
+                    -1,
+                    aurora_store::stats::CommitSource::Punctuation,
+                );
                 Self::commit_action(digit, true)
             }
             // "ignore" 及未知值：吞键无效（保留组合，不上屏）
@@ -4392,8 +4141,10 @@ impl Coordinator {
         if cand.source != CandidateSource::Pinyin || cand.code.is_empty() {
             return None;
         }
-        let syllables =
-            aurora_engine::pinyin::mixed_abbrev::syllables_from_boundary(&cand.code, cand.boundary)?;
+        let syllables = aurora_engine::pinyin::mixed_abbrev::syllables_from_boundary(
+            &cand.code,
+            cand.boundary,
+        )?;
         (syllables.len() == char_count)
             .then(|| syllables.get(char_index).map(|s| s.to_string()))
             .flatten()
@@ -4682,9 +4433,6 @@ impl Coordinator {
         // 余码是缓冲的后缀 → 影子串同步掐头，否则大写会在这里静默丢掉。
         preedit_cursor::keep_cased_tail(&state.input_buffer, &mut state.input_buffer_cased);
         state.input_cursor_pos = state.input_buffer.len(); // 顶码后余码续打，光标在余码末尾
-        // 首选已上屏，余码是新的一次组合：不继承上一次的展开（按键入口那道「没有输入会话」
-        // 判不到——这一键按下时候选还在）。
-        state.grid_keep = false;
         let _ = self.update_candidates(state); // 余码候选（不再消费其结局）
         let preedit = state.preedit.clone();
         // 顶码 = 部分上屏 + 余码续组合：宿主光标因 top_text 插入而前移，余码组合起点已变。
@@ -4795,7 +4543,7 @@ impl Coordinator {
     /// 方案、快捷输入传候选的成员方案（归不到成员时调用方不调）。
     ///
     /// ⚠️ 须在调用方 `take_committed` / 退出模式**之前**调用：那两步会清空已转换段。
-    /// 联想 / 组 / 命令 / emoji 候选没有对应编码，不参与（同各路选词出口的守卫）。
+    /// 联想 / 组 / 命令候选没有对应编码，不参与（同各路选词出口的守卫）。
     ///
     /// 高亮是**分步候选**（只消费缓冲前缀）时不造词、只推 6b：顶屏只上屏这一段，剩余码
     /// 被丢弃，拼出的词不是用户打全的那串（同临拼标点臂对分步候选的排除）。
@@ -4810,7 +4558,6 @@ impl Coordinator {
             || cand.source == CandidateSource::Assoc
             || cand.is_group
             || cand.is_command
-            || cand.is_emoji_suggestion
         {
             return;
         }
@@ -4961,7 +4708,7 @@ impl Coordinator {
         if state.candidates.is_empty() {
             return;
         }
-        let (start, end) = self.select_range(&state);
+        let (start, end) = self.page_range(&state);
         let idx = start + page_local;
         if idx >= end || idx >= state.candidates.len() {
             return;
@@ -5012,12 +4759,6 @@ impl Coordinator {
         if crate::handle_menu::candidate_is_group_member(&cand) {
             return;
         }
-        // emoji 扩展候选：一切词条操作拒绝（菜单侧五项灰显，此处是热键路径的同名守卫）。
-        // 它没有词库落点，shadow 按 (schema, code, text) 落键而它 code 恒空，写进去读端
-        // 永远命中不了。可调整性的规划见 design/emoji-suggestion.md §9。
-        if cand.is_emoji_suggestion {
-            return;
-        }
         // 拼音普通候选**只放行置顶**，前移/后移仍禁；命令候选不受限。
         // 引擎类型取自 scope（特殊模式问的是它引用的方案，不是主方案）。
         //
@@ -5034,8 +4775,7 @@ impl Coordinator {
         {
             return;
         }
-        // 位置一律按完整列表计（分类筛选中 `idx` 只是子集下标），见 `reorder_positions`。
-        let pos = self.reorder_positions(state, idx);
+        let pos = Self::reorder_positions(state, idx);
         // 已在首位：置顶是冗余规则，直接忽略（菜单已灰显，热键路径 defensive）。
         if matches!(op, CandidateOp::MoveTop) && pos.here == 0 {
             return;
@@ -5077,17 +4817,12 @@ impl Coordinator {
         // 重新构建候选（会重新应用 Shadow）并重绘。
         // **必须按模式分派**：主路径的 `update_candidates` 读 `input_buffer`，而特殊模式下它
         // 恒为空 —— 在快符里走主路径的后果不是「不刷新」而是候选窗当场被清空。
-        let grid = Self::grid_snapshot(state);
         if special {
             // 返回值是「全码策略请求自动上屏」的意向，此处**刻意丢弃**：编码一个字没变，
             // 用户只是在调整候选顺序，凭空上屏是错的。
             let _ = self.update_special_candidates(state);
         } else {
             self.update_candidates(state);
-        }
-        // 展开态：别跳回首行、丢掉分类——用户正在第几行调的就留在第几行。
-        if let Some(snap) = grid {
-            self.grid_restore(state, snap);
         }
         // 用户看到的那一半判据。「记录删掉了、但同文的系统词条目还在」与「根本没删到」
         // 在屏幕上完全同形（都是点了没反应），只有把这一行和上面的「删前命中」并排看
@@ -5433,7 +5168,7 @@ impl Coordinator {
                 .highlighted_global_index(&state)
                 .min(state.candidates.len() - 1),
             Some(n) => {
-                let (start, end) = self.select_range(&state);
+                let (start, end) = self.page_range(&state);
                 if start + n >= end {
                     return Some(KeyAction::Consumed);
                 }
@@ -5473,8 +5208,7 @@ impl Coordinator {
     ///
     /// overlay 模式（`active != None`）不经 `commit_selected`，而是走**各模式自己的键盘出口**
     /// （临英 / 临拼 / 快捷输入 / 快符与生僻字，派发见 [`Self::select_candidate_at`]），临拼与
-    /// 快捷输入的分步转换由此与数字键一致。只有网址 / 邮箱 / Unicode（键盘侧不按序号选词）
-    /// 仍走「整串提交 + 彻底复位」。
+    /// 快捷输入的分步转换由此与数字键一致。
     pub(crate) fn mouse_select(&self, page_local: usize) {
         let _ = self.mouse_select_action(page_local);
     }
@@ -5485,14 +5219,6 @@ impl Coordinator {
     /// 页内下标 → 绝对下标的换算在此，**页范围校验也在此**：桌面候选窗只画当前页，
     /// 点到页外即为坐标算错，必须拒绝。移动端不是这样（见 [`Self::select_candidate_at`]）。
     fn mouse_select_action(&self, page_local: usize) -> Option<KeyAction> {
-        // 展开态下 UI 回传的是网格平铺下标，先切到那一格再按页内下标选。
-        // 点的是展开态的分类标签（tag 段见 `GRID_TAB_TAG_BASE`）：切分类，不选词。
-        if let Some(tab) = self.grid_tab_of_event(page_local) {
-            self.grid_click_tab(tab);
-            return None;
-        }
-        // 切高亮时即重绘：选词可能不上屏（`$CC` 命令、组折叠），那时屏幕上要看到高亮已到这一格。
-        let page_local = self.resolve_event_index(page_local, true)?;
         let (start, end) = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             self.page_range(&state)
@@ -5542,21 +5268,6 @@ impl Coordinator {
         }
         // 非按键选词 ⇒ 解除智能符号待命态。
         //
-        // 这条通路（鼠标点候选窗、移动端滚动候选栏）**不经按键出口**，`handle_key_event_policed`
-        // 那道「非同键按键解除武装」看不见它；而选词会真往文档里写字、清空缓冲，于是
-        // `smart_symbol_press2` 的「缓冲非空」判据也随之放行。两道判据同时失效，留下的时序是：
-        // 按 `。` 武装 → 鼠标点一条（标点）联想候选上屏 → 时限内再按 `。` → 判成 press2，
-        // 把刚点上屏的那个词的末字删掉换成 `.`（宿主 `prev_char` 读不回时必中）。
-        //
-        // 放在越界检查**之后**：点到页外是坐标算错，那一下什么都没发生，不该牵连武装态。
-        //
-        // ⚠️ 如实交代：本行**当前没有独立会红的用例**，因为构造不出「武装还在、同时候选还可点」
-        // 的那一帧——标点 press1 的每条通路要么清空候选（普通上屏 / 顶屏 hold / 模式退出），
-        // 要么在吞键的同时已经解除了武装（`!punct_commit` / `clear_no_input` / 命令候选顶屏）；
-        // 标点上屏本身也不进联想（`maybe_enter_assoc` 只挂在候选提交路径上）。
-        // 它与那几处互为遮蔽。留着是因为这里是**唯一**覆盖「非按键写文档」的解除点：上面那些
-        // 遮蔽全都依赖各自那一行，任何一条被收窄，鼠标这条就是没人管的漏口。
-        self.disarm_smart_symbol();
         // 统计用的位置：**相对当前页首**，与数字键的 `num-1` 保持同一量纲（既有约定）。
         // 移动端不翻页（滚动条不动 `current_page`），页首恒为 0，于是如实记成绝对位次
         // ——「用户选了第 37 个」正是首选率统计要回答的问题。
@@ -5650,8 +5361,8 @@ impl Coordinator {
         // 有编码的候选记了选词，临英不补空格。返回值照主路一样带出来（分步时是
         // `UpdateComposition`，组合区留活），`debug_mouse_select` 由此可观测。
         //
-        // 派发写成**穷尽** `match`、不留通用兜底：那条通用分支对任何 overlay 都是错的出口
-        // （网址 / 邮箱 / Unicode 最后落在那里时还写出空码孤儿词频）。新增模式时编译器会
+        // 派发写成**穷尽** `match`、不留通用兜底：那条通用分支对任何 overlay 都是错的出口。
+        // 新增模式时编译器会
         // 逼着在这里选出口，而不是静默落进兜底。
         let page_local_pos = page_local as i32;
         let act = match state.active {
@@ -5664,21 +5375,6 @@ impl Coordinator {
             Some(ModeKind::Special(_)) | Some(ModeKind::RareChar) | Some(ModeKind::Reverse) => {
                 self.commit_special_candidate(&mut state, idx)
             }
-            // 网址 / 邮箱：键盘侧不按序号选词（数字是合法字符），但鼠标点选须与空格走同一个
-            // 出口（记统计、学后缀 / 网址历史）。出口按高亮取候选，故先把高亮移到被点的那条
-            // （移动端不翻页、`idx` 可越出当页，页码一并换算）。
-            Some(ModeKind::Url) | Some(ModeKind::Email) => {
-                let pp = self.per_page(state.active).max(1);
-                state.current_page = idx / pp;
-                state.selected_index = idx % pp;
-                if state.active == Some(ModeKind::Url) {
-                    self.commit_url(&mut state, true)
-                } else {
-                    self.commit_email(&mut state, true)
-                }
-            }
-            // Unicode 恒至多一条候选，出口取首条即被点的那条。
-            Some(ModeKind::Unicode) => self.commit_unicode(&mut state),
             // 主输入路（含辅助码）已在上方 `main_path` 分支返回，到不了这里。保守兜底：
             // 什么都不做（不上屏、不改状态），调试构建下直接暴露。
             None | Some(ModeKind::AuxCode) => {
@@ -5845,13 +5541,12 @@ mod auto_commit_min_len_tests {
 }
 
 #[cfg(test)]
-mod sole_non_emoji_tests {
-    //! 短语自动上屏的唯一性判据：emoji 扩展候选不得计入。
+mod sole_non_low_confidence_tests {
+    //! 短语自动上屏的唯一性判据：低置信候选（换位纠错、误读召回）不得计入。
     //!
     //! 这条判据的失效是**静默**的：短语照常出现在候选窗里，只是打全码后不再自动上屏、
-    //! 要多按一次空格，且只在该短语的文本恰好命中 emoji 表时发生。用户根本无从把这个
-    //! 现象与 emoji 功能联系起来，故必须由测试钉住。
-    use super::sole_non_emoji;
+    //! 要多按一次空格。故必须由测试钉住。
+    use super::sole_non_low_confidence;
     use aurora_candidate::Candidate;
 
     fn cand(text: &str) -> Candidate {
@@ -5862,10 +5557,10 @@ mod sole_non_emoji_tests {
         }
     }
 
-    fn emoji(text: &str) -> Candidate {
+    fn low_confidence(text: &str) -> Candidate {
         Candidate {
             text: text.into(),
-            is_emoji_suggestion: true,
+            is_misread_recall: true,
             ..Default::default()
         }
     }
@@ -5873,240 +5568,39 @@ mod sole_non_emoji_tests {
     #[test]
     fn single_real_candidate_is_sole() {
         let v = [cand("好的")];
-        assert_eq!(sole_non_emoji(&v).map(|c| c.text.as_str()), Some("好的"));
+        assert_eq!(
+            sole_non_low_confidence(&v).map(|c| c.text.as_str()),
+            Some("好的")
+        );
     }
 
-    /// ★ 核心：短语 + 追加的 emoji ⇒ 仍算「唯一」，自动上屏不受影响。
-    ///
-    /// 原判据 `let [c] = &candidates[..]` 在这里恒假 —— 这正是本次要修的回归。
+    /// ★ 核心：短语 + 低置信候选 ⇒ 仍算「唯一」，自动上屏不受影响。
     #[test]
-    fn appended_emoji_does_not_break_uniqueness() {
-        let v = [cand("好的"), emoji("👌")];
-        assert_eq!(sole_non_emoji(&v).map(|c| c.text.as_str()), Some("好的"));
-        // 多个 emoji 同样不影响（max_per_word 可配到 3）。
-        let v = [cand("好的"), emoji("👌"), emoji("🆗"), emoji("👍")];
-        assert_eq!(sole_non_emoji(&v).map(|c| c.text.as_str()), Some("好的"));
+    fn low_confidence_does_not_break_uniqueness() {
+        let v = [cand("好的"), low_confidence("好地")];
+        assert_eq!(
+            sole_non_low_confidence(&v).map(|c| c.text.as_str()),
+            Some("好的")
+        );
     }
 
-    /// 两条真候选仍判非唯一 —— 排除 emoji 不等于放宽原判据。
+    /// 两条真候选仍判非唯一 —— 排除低置信候选不等于放宽原判据。
     #[test]
     fn two_real_candidates_are_not_sole() {
-        let v = [cand("好的"), cand("好地"), emoji("👌")];
-        assert!(sole_non_emoji(&v).is_none());
+        let v = [cand("好的"), cand("好地"), low_confidence("豪的")];
+        assert!(sole_non_low_confidence(&v).is_none());
     }
 
-    /// 只有 emoji 没有宿主候选 ⇒ 无候选可上屏。
-    ///
-    /// 实际上这个状态构造不出来（emoji 是按宿主候选的文本追加的），但判据不该依赖
-    /// 那个前提——依赖了，将来 emoji 有了别的产出路径就会静默出错。
+    /// 只有低置信候选 ⇒ 无候选可上屏。
     #[test]
-    fn emoji_only_is_not_sole() {
-        let v = [emoji("👌")];
-        assert!(sole_non_emoji(&v).is_none());
+    fn low_confidence_only_is_not_sole() {
+        let v = [low_confidence("好地")];
+        assert!(sole_non_low_confidence(&v).is_none());
     }
 
     #[test]
     fn empty_is_not_sole() {
-        assert!(sole_non_emoji(&[]).is_none());
-    }
-}
-
-#[cfg(test)]
-mod plan_emoji_tests {
-    //! emoji 插入规划：选宿主、查表、去重、截断。
-    use super::plan_emoji_insertions;
-    use aurora_candidate::Candidate;
-
-    fn c(text: &str) -> Candidate {
-        Candidate {
-            text: text.into(),
-            ..Default::default()
-        }
-    }
-    fn prefix(text: &str) -> Candidate {
-        Candidate {
-            text: text.into(),
-            is_prefix: true,
-            ..Default::default()
-        }
-    }
-    /// 词表：只认「开心」「动物」两个词。
-    fn table(t: &str) -> Option<String> {
-        match t {
-            "开心" => Some("😄 😊 🙂 😁".into()),
-            "动物" => Some("🐶 🐱".into()),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn extends_first_host_only_by_default() {
-        let v = [c("开心"), c("动物")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
-        assert_eq!(got.len(), 1, "max_hosts=1 只扩首选");
-        assert_eq!(got[0].0, 0);
-    }
-
-    /// ★ `max_hosts` 的语义是「只看列表前 N 条」，**不是**「找够 N 个合格宿主」。
-    ///
-    /// 差别在这里：首条查不到 emoji 时，前者什么都不产出，后者会往下找到第二条。
-    /// 前者可预测（首选没有就是没有），后者会让 emoji 飘忽地出现在不同位置。
-    #[test]
-    fn max_hosts_is_a_window_not_a_quota() {
-        let v = [c("无表词"), c("开心")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
-        assert!(got.is_empty(), "窗口内首条没命中就不产出，不该顺延到第二条");
-        // 窗口放大到 2 才轮得到「开心」。
-        let got = plan_emoji_insertions(&v, true, 2, 3, 2, table);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].0, 1);
-    }
-
-    #[test]
-    fn truncates_to_max_per_word() {
-        let v = [c("开心")];
-        let got = plan_emoji_insertions(&v, true, 1, 2, 2, table);
-        assert_eq!(got[0].1, vec!["😄".to_string(), "😊".to_string()]);
-    }
-
-    #[test]
-    fn skips_short_words() {
-        let v = [c("开心")];
-        assert!(
-            plan_emoji_insertions(&v, true, 1, 3, 3, table).is_empty(),
-            "min_chars=3 时两字词不触发"
-        );
-    }
-
-    /// `exact` 档跳过前缀补全；`all` 档放行。
-    #[test]
-    fn exact_scope_skips_prefix_candidates() {
-        let v = [prefix("开心")];
-        assert!(plan_emoji_insertions(&v, true, 1, 3, 2, table).is_empty());
-        assert_eq!(plan_emoji_insertions(&v, false, 1, 3, 2, table).len(), 1);
-    }
-
-    /// 词库里本来就有那个 emoji 时不再重复给一条。
-    #[test]
-    fn does_not_duplicate_existing_candidate() {
-        let v = [c("开心"), c("😄")];
-        let got = plan_emoji_insertions(&v, true, 1, 3, 2, table);
-        assert_eq!(
-            got[0].1,
-            vec!["😊".to_string(), "🙂".to_string(), "😁".to_string()],
-            "已在候选里的 😄 应被跳过"
-        );
-    }
-
-    /// 同一符号带 / 不带 U+FE0F 只算一个：表内重复只留先到者的原形，已有候选也挡得住。
-    /// 回归：上游表开分类后「奖项」出 `🏅️ 🏅 🎖️`，三个配额两个是同一枚奖牌。
-    #[test]
-    fn dedups_variation_selector_forms() {
-        let fe0f = |t: &str| match t {
-            "奖项" => Some("🏅\u{FE0F} 🏅 🎖\u{FE0F} 🥇".to_string()),
-            "打勾" => Some("✅\u{FE0F} ✔\u{FE0F}".to_string()),
-            _ => None,
-        };
-        let got = plan_emoji_insertions(&[c("奖项")], true, 1, 3, 2, fe0f);
-        assert_eq!(
-            got[0].1,
-            ["🏅\u{FE0F}", "🎖\u{FE0F}", "🥇"],
-            "裸 🏅 是前一条的另一种写法，跳过；保留先到的带 FE0F 形态"
-        );
-        let got = plan_emoji_insertions(&[c("打勾"), c("✅")], true, 1, 3, 2, fe0f);
-        assert_eq!(got[0].1, ["✔\u{FE0F}"], "候选里已有 ✅，表里的 ✅️ 不再给");
-    }
-
-    /// 两个宿主命中同一个 emoji 时只给一条。
-    #[test]
-    fn dedups_across_hosts() {
-        let dup = |t: &str| match t {
-            "甲词" | "乙词" => Some("🌟".to_string()),
-            _ => None,
-        };
-        let v = [c("甲词"), c("乙词")];
-        let got = plan_emoji_insertions(&v, true, 2, 3, 2, dup);
-        assert_eq!(got.len(), 1, "第二个宿主的重复 emoji 被去掉后不产出空条目");
-        assert_eq!(got[0].0, 0);
-    }
-
-    /// 已经是 emoji 扩展的候选不再被当作宿主（防二次扩展）。
-    #[test]
-    fn skips_existing_emoji_candidates() {
-        let mut e = c("开心");
-        e.is_emoji_suggestion = true;
-        let v = [e];
-        assert!(plan_emoji_insertions(&v, true, 1, 3, 2, table).is_empty());
-    }
-}
-
-#[cfg(test)]
-mod emoji_tail_tests {
-    //! `show_as = "tail"` 的落点：常用候选之后、生僻与放宽补充之前。
-    use super::emoji_tail_insert_at;
-    use aurora_candidate::Candidate;
-
-    fn common(text: &str) -> Candidate {
-        Candidate {
-            text: text.into(),
-            is_common: true,
-            ..Default::default()
-        }
-    }
-    fn rare(text: &str) -> Candidate {
-        Candidate {
-            text: text.into(),
-            ..Default::default()
-        }
-    }
-    fn relaxed(text: &str) -> Candidate {
-        Candidate {
-            text: text.into(),
-            is_scope_filtered: true,
-            ..Default::default()
-        }
-    }
-
-    /// ★ 真机回归：智能档下孤儿码位的生僻字留在尾部，emoji 必须插在它们**前面**。
-    #[test]
-    fn lands_after_last_common_before_rare() {
-        let v = [common("开心"), common("开新"), rare("闓"), rare("鐦")];
-        assert_eq!(emoji_tail_insert_at(&v), 2);
-    }
-
-    /// 放宽补充段永远在 emoji 之后。
-    #[test]
-    fn never_crosses_relaxed_block() {
-        let v = [common("开心"), relaxed("闓")];
-        assert_eq!(emoji_tail_insert_at(&v), 1);
-        // 补充段里即便混着常用字（放宽时整批并回），也不算数。
-        let mut c = relaxed("开新");
-        c.is_common = true;
-        let v = [common("开心"), rare("闓"), c];
-        assert_eq!(emoji_tail_insert_at(&v), 1);
-    }
-
-    /// 没有任何常用候选：落到末尾，**不抢首位**。
-    #[test]
-    fn all_rare_appends_at_end_not_front() {
-        let v = [rare("闓"), rare("鐦")];
-        assert_eq!(emoji_tail_insert_at(&v), 2);
-        let v = [rare("闓"), relaxed("鐦")];
-        assert_eq!(emoji_tail_insert_at(&v), 1);
-    }
-
-    /// 短语 / 命令与常用字同级（与过滤器的「常用词类」判据一致）。
-    #[test]
-    fn phrase_counts_as_common() {
-        let mut p = rare("今天");
-        p.is_phrase = true;
-        let v = [common("开心"), p, rare("闓")];
-        assert_eq!(emoji_tail_insert_at(&v), 2);
-    }
-
-    #[test]
-    fn empty_list() {
-        assert_eq!(emoji_tail_insert_at(&[]), 0);
+        assert!(sole_non_low_confidence(&[]).is_none());
     }
 }
 
@@ -6114,8 +5608,8 @@ mod emoji_tail_tests {
 mod finalize_candidates_tests {
     //! 候选值展开汇聚点 `finalize_candidates`：所有输入方案共用，保证 `$` 语法一致生效。
     use super::*;
-    use std::sync::Arc;
     use aurora_config::config::Config;
+    use std::sync::Arc;
 
     fn coord() -> Arc<Coordinator> {
         Coordinator::new_headless(Config::default(), None)
@@ -6236,7 +5730,7 @@ mod finalize_candidates_tests {
             // 只看 `#[cfg(test)]` 之前的部分：测试自己用字面量直接构造键是合法的。
             let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
             // 三个名字都扫：
-            // - `record_selection_cand` 是从候选本身分流 emoji 的薄包装，记账码的口径约束
+            // - `record_selection_cand` 是从候选本身判来源的薄包装，记账码的口径约束
             //   对它同样成立，漏扫它就等于给新调用点开了后门；
             // - `record_selection_in` 此前**整个漏在守卫之外**（临英那处一直没被检查）。
             //   它多一个前置的 schema 实参，故记账码是第 2 个而不是第 1 个——不按位置分流
@@ -6371,7 +5865,7 @@ mod finalize_candidates_tests {
         ];
         const CALLS: &[&str] = &[
             ".record_selection_in(",
-            // emoji 守卫版：同样以 schema 为首个实参，归属约束一字不差地适用。
+            // 按候选本身判来源的版本：同样以 schema 为首个实参，归属约束一字不差地适用。
             ".record_selection_cand_in(",
             // 大小写投影版：首个实参同样是归属方案。
             ".record_selection_cased_in(",
@@ -6437,62 +5931,6 @@ mod finalize_candidates_tests {
         assert!(
             checked >= 21,
             "只扫到 {checked} 个方案归属调用点，少于预期——扫描方式失效了，先修测试"
-        );
-    }
-
-    /// **候选装配的平行实现必须一起接 emoji 扩展**。
-    ///
-    /// `[input.emoji]` 是**全局**开关，临时模式没有自己的那一份 —— 用户开了它，就该在临拼、
-    /// 快捷输入里同样生效（2026-09-08 用户拍板：「临时想用一下，就应该和正式的表现一致」）。
-    /// emoji 是「按候选文本查表追加」的加工，与哪个引擎出的候选无关，三条路一视同仁。
-    ///
-    /// ⚠️ **本条只锁「调用点存在」，锁不住行为**：`load_emoji_dict` 取 `Config::data_dir()`
-    /// （安装根目录）而非 `new_headless(cfg, Some(data_dir), ..)` 注入的那个，故集成测试里
-    /// emoji 表恒不加载 —— **主路径同样测不出来**，不是 overlay 独有的问题。要做行为测试，
-    /// 得先让那个加载点接受注入路径。在此之前，这条机械扫描是唯一守得住的东西。
-    #[test]
-    fn overlay_candidate_paths_apply_emoji_suggestions() {
-        const TARGETS: &[(&str, &str, &str)] = &[
-            ("handle_candidate.rs", "fn build_candidates", "主输入路"),
-            (
-                "handle_temp.rs",
-                "fn refill_temp_pinyin_candidates",
-                "临时拼音",
-            ),
-            ("handle_mode.rs", "fn refill_mix_candidates", "快捷输入/mix"),
-        ];
-        // 临英刻意不在表内：英文候选查 emoji 表恒不命中（表键是中文词），接了等于每键白跑
-        // 一趟查询。这与 `mark_common`/`apply_filter` 对临英无作用是同一条理由。
-        let src = |n: &str| -> &'static str {
-            match n {
-                "handle_candidate.rs" => include_str!("handle_candidate.rs"),
-                "handle_temp.rs" => include_str!("handle_temp.rs"),
-                _ => include_str!("handle_mode.rs"),
-            }
-        };
-        let mut bad: Vec<String> = Vec::new();
-        for (file, sig, label) in TARGETS {
-            let full = src(file);
-            let prod = full.split("#[cfg(test)]").next().unwrap_or(full);
-            let Some(off) = prod.find(sig) else {
-                panic!("{label}: 找不到 `{sig}` —— 函数被改名了，先修测试再说");
-            };
-            let rest = &prod[off + sig.len()..];
-            // 函数体 = 到下一个同级 fn 为止。
-            let end = rest
-                .find("\n    pub(crate) fn ")
-                .unwrap_or(rest.len())
-                .min(rest.find("\n    fn ").unwrap_or(rest.len()));
-            if !rest[..end].contains("self.apply_emoji_suggestions(") {
-                bad.push(format!("{label}（{file} 的 `{sig}`）"));
-            }
-        }
-        assert!(
-            bad.is_empty(),
-            "以下候选装配路径没有接 emoji 扩展：\n  {}\n\
-             `[input.emoji]` 是全局开关，用户开了它就该处处生效；临时模式没有独立开关，\n\
-             不接的表现是「正式方案里打「你好」有 🙂️、临时模式里没有」，且完全静默。",
-            bad.join("\n  ")
         );
     }
 
@@ -7255,9 +6693,9 @@ mod dynamic_candidate_shadow_tests {
     //! 求值型候选（`date`/`time` 等短语）的 shadow 接线：规则须按**稳定 id** 落键与匹配，
     //! 否则次日文本一变即失配——用户侧表现为「候选调整昨天设了、今天被还原」。
     use super::*;
-    use std::sync::Arc;
     use aurora_config::config::Config;
     use aurora_store::store::Store;
+    use std::sync::Arc;
 
     fn store_at(name: &str) -> Arc<Store> {
         let p = std::env::temp_dir().join(name);
@@ -8115,8 +7553,8 @@ mod mouse_command_overlay_tests {
     //! 键盘选同一候选对齐：命令输入取**该模式自己的编码缓冲**、退出走该模式的退出函数。
     //! 此前命令输入一律取主路 `input_buffer`（overlay 下恒空），复位只清拼音组合态。
     use super::*;
-    use std::sync::Arc;
     use aurora_config::config::Config;
+    use std::sync::Arc;
 
     fn coord() -> Arc<Coordinator> {
         Coordinator::new_headless(Config::default(), None)
@@ -8218,7 +7656,6 @@ mod mouse_command_overlay_tests {
             st.rewind = Some(crate::pipeline::Rewind {
                 snapshot: "z".into(),
                 host_text: "g".into(),
-                origin: crate::pipeline::RewindOrigin::Normal,
             });
             st.candidates = vec![Candidate {
                 text: "玨".into(),
@@ -8284,30 +7721,6 @@ mod mouse_command_overlay_tests {
         assert_eq!(st.active, Some(ModeKind::TempPinyin), "展开组不退出模式");
         assert_eq!(st.temp_pinyin_buffer, "zzbd", "组码应写进临拼缓冲");
         assert!(st.input_buffer.is_empty(), "主路缓冲不得被写入组码");
-    }
-
-    /// Unicode 模式（键盘侧不按序号选词）里鼠标点候选：仍走通用分支「整串上屏 + 退出」，
-    /// 并带回上屏动作——移动端 headless 下 push 无消费端，返回 None 会被当成 passthrough。
-    #[test]
-    fn unicode_plain_click_commits_and_exits() {
-        let c = coord();
-        {
-            let mut st = c.state.lock().unwrap();
-            st.active = Some(ModeKind::Unicode);
-            st.unicode_buffer = "u+4e2d".into();
-            st.unicode_cursor = st.unicode_buffer.len();
-            st.candidates = vec![Candidate {
-                text: "中".into(),
-                ..Default::default()
-            }];
-        }
-        match c.select_candidate_at(0) {
-            Some(KeyAction::InsertText { text, .. }) => assert_eq!(text, "中"),
-            other => panic!("通用分支应带回上屏动作，实际: {other:?}"),
-        }
-        let st = c.state.lock().unwrap();
-        assert_eq!(st.active, None);
-        assert!(st.unicode_buffer.is_empty(), "Unicode 缓冲不得残留");
     }
 
     /// 辅助码（从临拼进来）里鼠标点命令候选：overlay 与来源临拼的缓冲一并清掉。
@@ -8431,12 +7844,12 @@ mod expand_stop_tests {
     //! 条数。自造码表、**非通配**——这条判据对所有引擎生效，通配只是更容易撞上。
     use crate::charset_test_support::copy_factory_charsets;
     use crate::coordinator::Coordinator;
-    use std::collections::HashSet;
-    use std::path::{Path, PathBuf};
-    use std::sync::Arc;
     use aurora_bridge::handler::{KeyEventData, MessageHandler};
     use aurora_config::Config;
     use aurora_ipc::protocol::EVENT_KEY_DOWN;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
     const VK_A: u32 = 0x41;
     const VK_NEXT: u32 = 0x22; // PageDown，出厂翻页键组 "pageupdown"

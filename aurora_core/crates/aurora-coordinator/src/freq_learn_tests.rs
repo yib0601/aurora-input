@@ -451,8 +451,8 @@ fn pinyin_record_selection_ignores_source() {
 /// 全拼扁平码，本测试同时锁住词频与它们对齐。
 #[test]
 fn freq_lookup_uses_candidate_code_not_input_buffer() {
-    use std::io::Write;
     use aurora_candidate::{Candidate, CandidateSource};
+    use std::io::Write;
     let base_dir = std::env::temp_dir().join("wind_coord_freq_code_domain");
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);

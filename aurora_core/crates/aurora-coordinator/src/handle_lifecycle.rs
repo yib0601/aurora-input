@@ -6,12 +6,12 @@
 
 use crate::coordinator::{Coordinator, State, punct_char};
 use crate::pipeline::ModeKind;
-use tracing::{debug, info, warn};
 use aurora_bridge::handler::{KeyAction, KeyEventData};
 use aurora_config::BoundAction;
 use aurora_ipc::protocol::{MOD_SHIFT, MOD_SHORTCUT};
 use aurora_keys::keymap;
 use aurora_ui_types::UiCommand;
+use tracing::{debug, info, warn};
 
 /// 方案级按键功能表对某个键的裁决，见 [`Coordinator::bound_key_decision`]。
 pub(crate) enum BoundKeyDecision {
@@ -159,24 +159,6 @@ impl Coordinator {
         state: &mut State,
         data: &KeyEventData,
     ) -> Option<KeyAction> {
-        // 智能符号 press2 **优先于模式激活**：模式内二次按进入键时已上屏中文标点并武装
-        // （见 `arm_smart_symbol_after_commit`），时限内再按同键必须替换成英文形，而不是又进
-        // 一次模式——否则被模式占用的符号键（`;` / `` ` `` / `\`）永远打不出英文形，武装白武装。
-        //
-        // 三重收窄，确保不惊扰既有路径：① 仅空闲态（无缓冲/无已转换前缀/无候选，缓冲非空时的
-        // 模式触发另有 `decideBufferedTrigger` 那条链，不归此处管）；② 仅被某模式占用的键
-        // （普通标点仍按原路径在标点分支判 press2，路径与风险都不扩散）；③ 仅判 press2，不武装。
-        if state.input_buffer.is_empty()
-            && state.committed_text.is_empty()
-            && state.candidates.is_empty()
-            && data.modifiers & MOD_SHORTCUT == 0
-            && self.is_any_mode_trigger(data.key_code)
-            && let Some(ch) = punct_char(data.key_code, data.modifiers & MOD_SHIFT != 0)
-            && let Some(act) = self.try_smart_symbol_press2_only(state, ch, data.prev_char)
-        {
-            return Some(act);
-        }
-
         // 临时英文：Shift+字母（空缓冲 + 无候选 + 已启用）
         //
         // ★ **联想态例外**（`assoc_active()`）：那里缓冲同样是空的，但 `candidates` 里摆着
@@ -1171,12 +1153,6 @@ impl Coordinator {
         state.temp_pinyin_buffer.clear();
         state.temp_pinyin_cursor = 0;
         state.temp_pinyin_prefix.clear();
-        state.url_buffer.clear();
-        state.url_cursor = 0;
-        state.email_buffer.clear();
-        state.email_cursor = 0;
-        state.unicode_buffer.clear();
-        state.unicode_cursor = 0;
         state.rewind = None;
         state.special_buffer.clear();
         state.special_cursor = 0;
@@ -1198,15 +1174,10 @@ impl Coordinator {
         state.english_case_variant = crate::english_candidates::CaseVariant::default();
         state.input_cursor_pos = 0;
         state.candidates.clear();
-        state.grid_top = None;
-        state.grid_tab = aurora_ui_types::GridTab::All;
-        state.grid_full.clear();
         state.preedit.clear();
         // 拼音逐步转换的已转换前缀一并丢弃（焦点/模式切换不保留半成品组合）。
         state.committed_text.clear();
         state.committed_segs.clear();
-        // 焦点/模式切换：解除智能符号待命，避免跨上下文误触发替换。
-        self.disarm_smart_symbol();
         // 快捷加词模式遗留：焦点/模式切换时退出。
         // 布局无需在此恢复——模式标志已清，下一次候选显示会自动算回全局基线（见 layout.rs）。
         // 这正是声明式重算相对「保存/恢复」的价值：这条路径当年就是补丁式加上的第 3、第 4 个

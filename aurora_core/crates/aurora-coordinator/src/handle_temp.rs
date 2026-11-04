@@ -8,9 +8,8 @@ use crate::coordinator::{
     TEMP_PINYIN_MAX_CANDIDATES, numpad_char, punct_char,
 };
 use crate::key_convert::printable_char;
-use crate::pipeline::{ModeKind, Rewind, RewindOrigin};
+use crate::pipeline::{ModeKind, Rewind};
 use crate::preedit_cursor;
-use tracing::debug;
 use aurora_bridge::handler::{KeyAction, KeyEventData};
 use aurora_candidate::{Candidate, CandidateSource};
 use aurora_config::config::RawCandidateMode;
@@ -18,6 +17,7 @@ use aurora_engine::manager::ENGLISH_SCHEMA;
 use aurora_ipc::protocol::{MOD_SHIFT, MOD_SHORTCUT};
 use aurora_keys::keymap;
 use aurora_transform::fullwidth::to_full_width;
+use tracing::debug;
 
 impl Coordinator {
     /// VK → 组合区前缀字符（统一映射，见 `keymap`；缺省回退反引号）。
@@ -280,7 +280,6 @@ impl Coordinator {
         state.rewind = Some(Rewind {
             snapshot,
             host_text: residual,
-            origin: RewindOrigin::Normal, // z 夺取抢的是正常码表输入流
         });
         state.input_buffer.clear();
         state.candidates.clear();
@@ -375,7 +374,6 @@ impl Coordinator {
     /// 用临时拼音目标方案转换缓冲，刷新候选与组合区（前缀 + 已转换汉字 + 剩余拼音）
     pub(crate) fn update_temp_pinyin_candidates(&self, state: &mut State) {
         self.refill_temp_pinyin_candidates(state);
-        self.grid_resume(state);
     }
 
     fn refill_temp_pinyin_candidates(&self, state: &mut State) {
@@ -496,12 +494,6 @@ impl Coordinator {
         // 返回值（本码是否有置顶规则就位）在此丢弃：它只服务于出简让全，那是码表方案的
         // 特性，临拼是纯拼音 overlay，没有让位环节。
         self.apply_shadow_in(temp_pinyin_owner.as_deref(), &mut candidates, &shadow_code);
-        // Emoji 扩展：与主路径同一位置——**钉在所有加工之后**（理由见
-        // `apply_emoji_suggestions`：放进过滤链里它会被静默滤光）。
-        //
-        // 临拼没有自己的 emoji 开关，用的就是全局 `[input.emoji]`。「临时想用一下拼音」
-        // 理应与正式拼音方案表现一致，故这里不加任何额外判据。
-        self.apply_emoji_suggestions(&mut candidates);
         state.candidates = candidates;
         // 简繁 1对多变体展开（约束见 expand_s2t_variants 文档）。
         self.expand_s2t_variants(state);
@@ -561,8 +553,8 @@ impl Coordinator {
         // 词频属于拼音那一份数据，不属于主方案（五笔）。按 active 归属会写进 `wubi86` 桶，
         // 而且开关也跟着取码表那档（出厂 `enabled = false`）⇒ 出厂配置下一个字都不学，
         // 用户在拼音方案里开的调频开关对临拼毫无作用。
-        // 走 `_cand_in` 而非 `record_selection_in`：临拼列表里现在有 emoji 候选，
-        // 那道 `is_emoji_suggestion` 守卫必须一起带上（见 `record_selection_cand_in`）。
+        // 走 `_cand_in` 而非 `record_selection_in`：英文头部候选要按它对应的词库词记
+        // （见 `record_selection_cand_in`）。
         let temp_pinyin_owner = self.overlay_engine_schema(state);
         self.record_selection_cand_in(
             temp_pinyin_owner.as_deref(),
@@ -735,7 +727,6 @@ impl Coordinator {
             && let Some(ch) = punct_char(data.key_code, data.modifiers & MOD_SHIFT != 0)
         {
             let out = self.convert_punct_char(state, ch);
-            self.arm_smart_symbol_after_commit(state, ch, &out);
             self.record_commit(&out, 0, -1, aurora_store::stats::CommitSource::Punctuation);
             self.exit_temp_pinyin(state);
             self.notify_ui_hide();
@@ -893,10 +884,9 @@ impl Coordinator {
                     Self::commit_action(out, true)
                 }
             }
-            // 展开态下 0 选第 10 格（序号顺延时标「0」的那格）；收起态的 0 不在此臂。
+            // 0 不在此臂：收起态的 0 是字面输入，不是选第 10 个。
             keymap::VK_0..=keymap::VK_9
-                if data.modifiers & MOD_SHIFT == 0
-                    && (data.key_code != keymap::VK_0 || Self::grid_active(state)) =>
+                if data.modifiers & MOD_SHIFT == 0 && data.key_code != keymap::VK_0 =>
             {
                 // 数字键选当前页第 N 个
                 let off = if data.key_code == keymap::VK_0 {
@@ -904,7 +894,7 @@ impl Coordinator {
                 } else {
                     (data.key_code - 0x31) as usize
                 };
-                let (start, end) = self.select_range(state);
+                let (start, end) = self.page_range(state);
                 let idx = start + off;
                 if idx < end {
                     let cand = state.candidates[idx].clone();
@@ -932,7 +922,7 @@ impl Coordinator {
                     // 记账码：码表按输入码（码位独立），拼音/英文按候选码。见 `freq_code`。
                     // 临拼缓冲是击键域（双拼下 `siyr`），与候选码 `siyuan` 不同域。
                     // 归属同上，取临拼目标方案而非 active。
-                    // 同上走 `_cand_in`，带 emoji 守卫。
+                    // 同上走 `_cand_in`。
                     let temp_pinyin_owner = self.overlay_engine_schema(state);
                     self.record_selection_cand_in(
                         temp_pinyin_owner.as_deref(),
@@ -1047,7 +1037,7 @@ impl Coordinator {
                 if data.modifiers & MOD_SHIFT == 0
                     && let Some(offset) = self.select_key_offset(data.key_code)
                 {
-                    let (start, end) = self.select_range(state);
+                    let (start, end) = self.page_range(state);
                     let idx = start + offset;
                     if idx < end {
                         let cand = state.candidates[idx].clone();
@@ -1240,7 +1230,12 @@ impl Coordinator {
             }
         };
         let punct = self.convert_punct_char(state, ch);
-        self.record_commit(&punct, 0, -1, aurora_store::stats::CommitSource::Punctuation);
+        self.record_commit(
+            &punct,
+            0,
+            -1,
+            aurora_store::stats::CommitSource::Punctuation,
+        );
         self.exit_temp_pinyin(state);
         self.notify_ui_hide();
         Self::commit_action(format!("{head}{punct}"), true)
@@ -1267,9 +1262,6 @@ impl Coordinator {
         state.english_case_variant = crate::english_candidates::CaseVariant::default();
         state.preedit.clear();
         state.candidates.clear();
-        state.grid_top = None;
-        state.grid_tab = aurora_ui_types::GridTab::All;
-        state.grid_full.clear();
     }
 
     /// 刷新临时英文候选：`原文 → 大小写变形 → 英文词库前缀匹配（保持词库原文）`。
@@ -1285,7 +1277,6 @@ impl Coordinator {
     /// （如缓冲 `Hello` 时词库的 `hello` 被变形候选先占位挡下）。
     pub(crate) fn update_temp_english_candidates(&self, state: &mut State) {
         self.refill_temp_english_candidates(state);
-        self.grid_resume(state);
     }
 
     fn refill_temp_english_candidates(&self, state: &mut State) {
@@ -1773,7 +1764,7 @@ impl Coordinator {
                 let digits_as_input = self.temp_english_char_allowed(ch)
                     || Self::temp_english_buffer_is_literal(state);
                 // 数字：有词库候选（>1，即除原文外还有匹配）时按页选词；否则作输入（英文含数字 v2）
-                let (start, end) = self.select_range(state);
+                let (start, end) = self.page_range(state);
                 let gi = start + (data.key_code - 0x31) as usize;
                 if !digits_as_input && state.candidates.len() > 1 && gi < end {
                     self.commit_temp_english_selected(state, gi)
@@ -1798,46 +1789,6 @@ impl Coordinator {
             }
             _ => {
                 let shift = data.modifiers & MOD_SHIFT != 0;
-                // ── Unicode 模式转交（大写 `U+` 那个入口）──
-                //
-                // 大写 U 起手时 `input_buffer` 是空的（Shift+字母在 `try_activate_mode` 就被
-                // 截进了本模式），`try_prefix_hijack` 那道闸门根本看不见那个 U ⇒ 只靠它的话
-                // `U+` 永远走不通、用户只能打小写 `u+`。这条分支把临英缓冲接上同一张前缀表。
-                //
-                // ★ **必须早于**下方的选词键判定与 `temp_english_char_allowed`：`+` 虽在
-                // `symbol_chars` 出厂列表里，但 `allow_symbols` 出厂是 `false` ⇒ 那两道会把
-                // 这一键判成「上屏高亮候选 + 标点、退出临英」，屏幕上出现的是 `U＋`。
-                //
-                // 判据是整串比较（`缓冲 + 本键 == 某前缀`）而不是「首字符是不是 U」：前缀由
-                // 用户配置，写死字母就与配置脱了节。
-                if self.rt().config.input.unicode.enabled
-                    && let Some(ch) = printable_char(data.key_code, shift)
-                {
-                    let probe = format!("{}{}", state.temp_english_buffer, ch);
-                    if self.is_unicode_prefix(&probe) {
-                        return self.enter_unicode_mode(state, probe, RewindOrigin::TempEnglish);
-                    }
-                }
-                // ── 邮箱模式转交 ──
-                //
-                // 五笔用户名常超过四码，正常输入流里早已顶字上屏，`try_prefix_hijack` 的
-                // `@` 触发只对短用户名可用（GH#162）。临英缓冲本就是「攒一段英文」，
-                // 在这里认 `@` 才能带完整用户名进邮箱模式。
-                //
-                // ★ 与 Unicode 转交同理必须早于选词键 / 白名单判定：否则 `@` 会被判成
-                // 「上屏高亮候选 + 标点、退出临英」（`allow_symbols` 出厂关）。
-                // 判据与主路闸门一致：本键是 `@` 且缓冲非空；缓冲整体作为用户名。
-                if self.rt().config.input.email.enabled
-                    && !state.temp_english_buffer.is_empty()
-                    && printable_char(data.key_code, shift) == Some(crate::handle_email::EMAIL_AT)
-                {
-                    let buffer = format!(
-                        "{}{}",
-                        state.temp_english_buffer,
-                        crate::handle_email::EMAIL_AT
-                    );
-                    return self.enter_email_mode(state, buffer, RewindOrigin::TempEnglish);
-                }
                 // 二三候选键（默认 `;` `'`）→ 选候选。临英此前是**唯一**没接
                 // `select_key_offset` 的模式处理器（主流程 / 临拼 / 特殊 / mix 都接了），
                 // 于是次选键一路落到下方标点臂，被判成「上屏高亮候选 + 标点」——用户按 `;`
@@ -1861,7 +1812,10 @@ impl Coordinator {
                     && !state.temp_english_buffer.is_empty()
                     && self.temp_english_phrase_separator_key(data.key_code)
                 {
-                    Self::temp_english_insert(state, aurora_engine::english_phrase::PHRASE_SEPARATOR);
+                    Self::temp_english_insert(
+                        state,
+                        aurora_engine::english_phrase::PHRASE_SEPARATOR,
+                    );
                     return refresh(self, state);
                 }
                 if !shift
@@ -1869,7 +1823,7 @@ impl Coordinator {
                         .is_none_or(|ch| !self.temp_english_char_allowed(ch))
                     && let Some(offset) = self.select_key_offset(data.key_code)
                 {
-                    let (start, end) = self.select_range(state);
+                    let (start, end) = self.page_range(state);
                     let gi = start + offset;
                     if gi < end {
                         return self.commit_temp_english_selected(state, gi);
@@ -1929,7 +1883,12 @@ impl Coordinator {
                             aurora_store::stats::CommitSource::TempEnglish,
                         );
                     }
-                    self.record_commit(&punct, 0, -1, aurora_store::stats::CommitSource::Punctuation);
+                    self.record_commit(
+                        &punct,
+                        0,
+                        -1,
+                        aurora_store::stats::CommitSource::Punctuation,
+                    );
                     self.exit_temp_english(state);
                     self.notify_ui_hide();
                     Self::commit_action(format!("{}{}", base, punct), true)

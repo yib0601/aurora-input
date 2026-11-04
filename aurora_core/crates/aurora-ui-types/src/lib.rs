@@ -14,8 +14,8 @@
 //! 新增依赖必须通过 `aarch64-linux-android` 的 `cargo check`。
 
 pub mod candidate;
+pub mod caret_overlay;
 pub mod command;
-pub mod diag;
 pub mod event;
 pub mod menu;
 pub mod softkeyboard;
@@ -25,8 +25,8 @@ pub mod toast;
 pub mod toolbar;
 
 pub use candidate::*;
+pub use caret_overlay::*;
 pub use command::*;
-pub use diag::*;
 pub use event::*;
 pub use menu::*;
 pub use softkeyboard::*;

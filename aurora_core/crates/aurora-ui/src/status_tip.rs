@@ -7,13 +7,13 @@ use crate::manager::UiEvent;
 use crate::text::dwrite::TextRenderer;
 use crate::view::{Align, Edges, View, ViewImage, ViewLayer};
 use crate::window::LayeredWindow;
+use aurora_ui_types::{StatusTipAnchor, StatusTipPlacement};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
-use aurora_ui_types::{StatusTipAnchor, StatusTipPlacement};
 
 /// 状态提示气泡的鼠标处理器：左键拖动移动位置，右键请求功能菜单。
-/// 抓取偏移模型（同 `input_diag_hud::DragState`）：按下时记录光标−窗口左上偏移，
+/// 抓取偏移模型：按下时记录光标−窗口左上偏移，
 /// 拖动时用该偏移换算新窗口左上，钳制到工作区后 `SetWindowPos`。
 struct StatusTipMouse {
     hwnd: crate::sys::HWND,

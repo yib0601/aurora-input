@@ -146,7 +146,7 @@ pub trait DictService: Send + Sync {
     fn add_word(&self, text: &str, code: &str) -> anyhow::Result<()>;
 }
 
-/// IME 状态控制：`ime.toggle` / `ime.schema` / `ime.theme_cycle` / `setting.open` / `setting.web`。
+/// IME 状态控制：`ime.toggle` / `ime.schema` / `ime.theme_cycle` / `setting.open`。
 pub trait ImeController: Send + Sync {
     /// 切换 IME 状态（cn-en / fullshape / layout / candwin / s2t / t2s / preedit / toolbar）。
     ///
@@ -166,8 +166,6 @@ pub trait ImeController: Send + Sync {
     /// 宿主刻意不解析、不校验其内容：设置端每加一个新参数都要改一遍这里，
     /// 才是真正难维护的地方。含空白的值请自行用引号包裹。
     fn open_setting(&self, page: &str, args: &str) -> anyhow::Result<()>;
-    /// 以 --web 参数启动设置 Web 版。`args` 语义同 [`Self::open_setting`]。
-    fn open_setting_web(&self, page: &str, args: &str) -> anyhow::Result<()>;
     /// 切换输入方案（持久化）。
     fn set_schema(&self, id: &str) -> anyhow::Result<()>;
     /// 循环切换主题；dir="next"/"" 向后，"prev" 向前，返回新主题 ID。
@@ -183,7 +181,7 @@ pub trait ImeController: Send + Sync {
     /// `jump_steps` = 跳出时光标右移的格数。
     ///
     /// 与自动配对的分工：自动配对由标点按键触发、右段恒为单字符；本方法由词条显式调用，
-    /// 右段可以是任意文本。**受 `input.auto_pair` 总开关约束**——关闭时由宿主退化为纯上屏
+    /// 右段可以是任意文本。自动配对功能删除后，本命令由宿主退化为**纯上屏**
     /// （整串上屏、光标落末尾、不压栈），判定在宿主侧，本层不做。
     fn pair(&self, left: &str, right: &str, jump_steps: u32) -> anyhow::Result<()> {
         let _ = (left, right, jump_steps);

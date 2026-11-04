@@ -34,8 +34,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use tracing::warn;
 use aurora_config::RuntimeState;
+use tracing::warn;
 
 /// 合并窗口：末次请求之后再等这么久才真正落盘。
 ///

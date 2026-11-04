@@ -1374,7 +1374,7 @@ mod tests {
         s.record_assoc_pick("pinyin", "我们", "我们的").unwrap();
         s.pin_shadow("pinyin", "ni", "你", None, 0).unwrap();
         s.add_phrase("dz", "地址", 0, 1).unwrap();
-        s.record_completion(crate::completion::CompletionKind::EmailSuffix, "qq.com")
+        s.record_completion(crate::completion::CompletionKind::QuickHistory, "qq.com")
             .unwrap();
         s.set_quick_format_enabled("date", "date.lunar", false)
             .unwrap();

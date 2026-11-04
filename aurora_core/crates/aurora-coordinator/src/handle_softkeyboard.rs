@@ -44,10 +44,10 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 
-use tracing::{debug, warn};
 use aurora_bridge::handler::{KeyAction, KeyEventData};
 use aurora_ipc::protocol::{MOD_SHIFT, MOD_SHORTCUT};
 use aurora_keys::keymap;
+use tracing::{debug, warn};
 
 use aurora_ui_types::{SoftKeyCap, UiCommand, slot_layer};
 

@@ -110,8 +110,6 @@ pub enum MenuCmd {
     TakeScreenshot,
     /// 截图候选窗口到剪贴板（高级菜单）
     ScreenshotCandidateToClipboard,
-    /// 切换输入诊断 HUD 显隐（高级菜单）
-    ToggleInputDiagnostics,
     /// 切换密码框强制英文（高级菜单，临时测试入口）
     TogglePasswordSuppress,
     /// 状态提示气泡：切换常驻显示（display_mode always/temp）
@@ -122,14 +120,6 @@ pub enum MenuCmd {
     StatusResetPosition,
     /// 状态提示气泡：截图此窗口
     StatusScreenshot,
-    /// 输入诊断 HUD：复制全部内容（所见即所得，含分区隐藏后的结果）
-    InputDiagCopy,
-    /// 输入诊断 HUD：切换分区显示。参数为分区序号，见 [`crate::diag::DiagSections::label`]
-    InputDiagToggleSection(u8),
-    /// 输入诊断 HUD：停止/恢复刷新（冻结当前快照，便于切走观察时不被新焦点刷掉）
-    InputDiagToggleFreeze,
-    /// 输入诊断 HUD：切换窗口置顶（关掉可让 HUD 沉到被观察窗口之下）
-    InputDiagToggleTopmost,
     /// 悬停提示：复制全部（取原始行，未截断、未折行）
     TooltipCopy,
     /// 悬停提示：复制右键点中的那一段（原始行，不含段名）
@@ -157,11 +147,9 @@ pub enum MenuCmd {
     /// 为当前焦点应用设置初始中英标点（compat.toml 的 initial_punct）。
     /// 参数同 [`MenuCmd::InitialMode`]。
     InitialPunct(u8),
-    /// 为当前焦点应用设置符号自动配对开关（compat.toml 的 auto_pair）。
-    /// 参数：0=跟随全局（清除规则）1=启用 2=禁用。
-    ///
-    /// 「禁用」主要给表格类宿主用：Excel / WPS 表格在「输入态」下把方向键解释成
-    /// 「确认单元格并移动」，配对后的光标回退无法实现（TSF 路线已实测失败）。
+    /// 【已废弃，保留只为不重排协议 id】符号自动配对功能已删除：菜单不再产出本项，
+    /// 协调器收到即忽略。变体留在枚举里是因为 `to_id` 的 `9000..=9999` 段已对外发布，
+    /// 删掉会让后续 id 整体位移（与旧版设置端/宿主对不上）。
     AutoPairRule(u8),
     /// 为当前焦点应用设置候选窗定位方式（compat.toml 的 candidate_position_mode）。
     /// 参数：0=跟随全局（清除规则）1=跟随光标 2=固定位置。
@@ -274,11 +262,7 @@ impl MenuKind {
                 MenuCmd::TooltipScreenshot => 119,
                 MenuCmd::StatusTogglePinned => 122,
                 MenuCmd::StatusToggleShowOnFocus => 123,
-                MenuCmd::ToggleInputDiagnostics => 120,
                 MenuCmd::TogglePasswordSuppress => 121,
-                MenuCmd::InputDiagCopy => 124,
-                MenuCmd::InputDiagToggleFreeze => 125,
-                MenuCmd::InputDiagToggleTopmost => 126,
                 MenuCmd::IconToggleSizeMarks => 128,
                 MenuCmd::IconToggleDemoAnim => 129,
                 MenuCmd::ToggleCaretOverlay => 130,
@@ -290,7 +274,6 @@ impl MenuKind {
                 MenuCmd::TooltipCommitLine => 136,
                 MenuCmd::IconBadgeStyle(i) => 10000 + i as i32,
                 MenuCmd::SoftKeyboardPage(i) => 11000 + i as i32,
-                MenuCmd::InputDiagToggleSection(i) => 8000 + i as i32,
                 MenuCmd::FirstShowMode(m) => 5000 + m as i32,
                 MenuCmd::InitialMode(m) => 6000 + m as i32,
                 MenuCmd::InitialPunct(m) => 7000 + m as i32,
@@ -343,11 +326,7 @@ impl MenuKind {
             122 => MenuCmd::StatusTogglePinned,
             123 => MenuCmd::StatusToggleShowOnFocus,
 
-            120 => MenuCmd::ToggleInputDiagnostics,
             121 => MenuCmd::TogglePasswordSuppress,
-            124 => MenuCmd::InputDiagCopy,
-            125 => MenuCmd::InputDiagToggleFreeze,
-            126 => MenuCmd::InputDiagToggleTopmost,
             128 => MenuCmd::IconToggleSizeMarks,
             129 => MenuCmd::IconToggleDemoAnim,
             130 => MenuCmd::ToggleCaretOverlay,
@@ -359,7 +338,6 @@ impl MenuKind {
             136 => MenuCmd::TooltipCommitLine,
             10000..=10099 => MenuCmd::IconBadgeStyle((id - 10000) as u8),
             11000..=11999 => MenuCmd::SoftKeyboardPage((id - 11000) as usize),
-            8000..=8999 => MenuCmd::InputDiagToggleSection((id - 8000) as u8),
             1000..=1999 => MenuCmd::SchemaSelect((id - 1000) as usize),
             2000..=2999 => MenuCmd::ThemeSelect((id - 2000) as usize),
             3000..=3999 => MenuCmd::FilterMode((id - 3000) as usize),

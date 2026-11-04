@@ -206,9 +206,6 @@ mod tests {
             fn open_setting(&self, _: &str, _: &str) -> anyhow::Result<()> {
                 Ok(())
             }
-            fn open_setting_web(&self, _: &str, _: &str) -> anyhow::Result<()> {
-                Ok(())
-            }
             fn set_schema(&self, _: &str) -> anyhow::Result<()> {
                 Ok(())
             }
@@ -251,9 +248,6 @@ mod tests {
                 Ok(())
             }
             fn open_setting(&self, _: &str, _: &str) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn open_setting_web(&self, _: &str, _: &str) -> anyhow::Result<()> {
                 Ok(())
             }
             fn set_schema(&self, _: &str) -> anyhow::Result<()> {
@@ -371,9 +365,6 @@ mod tests {
                 Ok(())
             }
             fn open_setting(&self, _: &str, _: &str) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn open_setting_web(&self, _: &str, _: &str) -> anyhow::Result<()> {
                 Ok(())
             }
             fn set_schema(&self, _: &str) -> anyhow::Result<()> {

@@ -2,8 +2,8 @@
 //!
 //! 与 Go 版本 `aurora_core/internal/dict/trie.go` 对齐。
 
-use std::collections::HashMap;
 use aurora_candidate::Candidate;
+use std::collections::HashMap;
 
 /// Trie 节点
 struct TrieNode {

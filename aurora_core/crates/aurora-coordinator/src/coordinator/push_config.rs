@@ -96,10 +96,6 @@ impl Coordinator {
             return;
         }
 
-        // 推送英文自动配对配置到新连接的客户端（不受 host-render 白名单限制，
-        // 所有 TSF 实例都需要收到此配置才能在英文模式下正确处理标点配对）。
-        self.push_english_pair_config(client_token);
-        self.push_jump_out_keys_config(client_token); // 配对跳出键（英文模式跳出 + 中文转发放行）
         self.push_password_suppress_config(client_token); // 密码框抑制策略（DLL 本地吃键门控）
         self.push_composition_placeholder_config(client_token); // 空文本兜底占位字符（GH#175）
         self.push_multiline_commit_config(client_token); // 多行上屏是否走粘贴：DLL 重连从 commit 起步
@@ -108,11 +104,7 @@ impl Coordinator {
         self.push_cn_passthrough_punct_config(client_token); // 中文模式该透传的标点：DLL 据此**不**吃
         self.push_en_passthrough_punct_config(client_token); // 同上，英文标点态那份（超集）
         self.push_space_custom_cols_config(client_token); // 空格行自定义列：DLL 重连从 0 起步
-        self.push_pair_state_ttl_config(client_token); // 配对状态时效（DLL 侧闸门据此判陈旧）
         self.push_ctrl_space_toggle_config(client_token); // Ctrl+空格 切换开关（GH#172）：DLL 重连从「开」起步
-        // 诊断采集开关：DLL 每次重连都从默认值（关）起步，握手不推则 HUD 开着也收不到
-        // 新连接宿主的快照——而最需要它的 SearchHost 恰恰是最常重连的那类。
-        self.push_diag_snapshot_config(client_token);
         self.push_langbar_tooltip(client_token); // 握手强推：新连接手里没有任何文本
 
         let Some(mgr) = self.host_render() else {
@@ -125,21 +117,10 @@ impl Coordinator {
         self.push_activation_status(client_token);
     }
 
-    /// 推给 `token` 那个 DLL 的符号自动配对开关（per-app 规则，未配则跟随全局）。
-    ///
-    /// ⚠ **按目标客户端直查规则表，绝不走 `active_compat` 焦点槽**：本函数的调用方是推送路径，
-    /// 目标客户端未必是当前焦点进程（新客户端握手、配置变更广播都会推给后台进程）。
-    /// 拿焦点槽的值会把焦点应用的规则套到别人头上——同 `host_render` 的既有纪律。
-    /// 窗口取该 token 自己最近一次获焦的那个（同进程的不同 TSF 实例可能各在不同窗口）。
-    pub(super) fn auto_pair_allowed_for_token(&self, token: u64) -> bool {
-        self.compat_bool_for_token(token, |r| r.auto_pair)
-            .unwrap_or(true)
-    }
-
     /// 按 PID 直查 per-app 规则里的某个 `Option<bool>` 字段；pid / 进程名未知或未配 = `None`。
     ///
-    /// 与 [`Self::auto_pair_allowed_for_token`] 同一纪律：**不走 `active_compat` 焦点槽**，
-    /// 调用方多是推送路径，目标客户端未必是焦点进程。窗口取该 pid 最近一次获焦的那个
+    /// **不走 `active_compat` 焦点槽**：调用方多是推送路径，目标客户端未必是焦点进程。
+    /// 窗口取该 pid 最近一次获焦的那个
     /// （[`Self::focus_window_of_pid`]）；没获焦过 ⇒ 不匹配窗口规则（设计稿「服务端判定」）。
     fn compat_bool_for_pid(
         &self,
@@ -168,11 +149,11 @@ impl Coordinator {
     /// 指定 PID 的进程密码框是否强制英文：per-app 规则优先，未配则跟随全局
     /// `input.password_force_english`（运行时镜像 `password_suppress_enabled`）。
     ///
-    /// ★★ **本函数（与它的按 token 版本）是这项判定的唯一出处**：服务端 `apply_input_diag` 算
+    /// ★★ **本函数（与它的按 token 版本）是这项判定的唯一出处**：服务端 `apply_input_scope` 算
     /// suppress 调本函数、[`Self::push_password_suppress_config`] 推给 DLL 的吃键门控调
     /// [`Self::password_force_english_for_token`]，两者只差「窗口取谁的」，解析与回落同一份。
     /// 两边各算各的，迟早出现「规则只进了一边」⇒ core 抑制而 DLL 照吃 ⇒ 密码框丢键
-    /// （不变量 core.suppress ⊆ C++.suppress，见 `apply_input_diag` 与 C++
+    /// （不变量 core.suppress ⊆ C++.suppress，见 `apply_input_scope` 与 C++
     /// `IsPasswordSuppressActive`）。
     /// 对刚获焦的那个实例，pid 最近获焦的窗口就是该 token 的窗口（见 `focus_window_of_pid`），
     /// 两边算出同一个值。
@@ -193,51 +174,9 @@ impl Coordinator {
             })
     }
 
-    /// 推送英文自动配对配置到指定客户端（或逐个推给所有活跃客户端）。
-    ///
-    /// 这是 per-app 自动配对开关的**第三条**消费通路：纯英文模式的配对完全由 C++ 侧
-    /// `_englishPairEngine` 处理，那些标点键根本到不了协调器，只关另两条的话「切到英文
-    /// 模式又配上了」。故 enabled 必须按**目标进程**现算，不能全局广播同一个值。
-    pub fn push_english_pair_config(&self, client_token: u64) {
-        let rt = self.rt();
-        let make = |token: u64| {
-            let enabled =
-                rt.config.input.auto_pair.english && self.auto_pair_allowed_for_token(token);
-            let value = aurora_ipc::codec::encode_english_pairs_value(enabled, &rt.en_pairs);
-            aurora_ipc::codec::encode_sync_config(
-                aurora_ipc::protocol::CONFIG_KEY_ENGLISH_PAIRS,
-                &value,
-            )
-        };
-        if client_token != 0 {
-            self.push_server
-                .push_to_token(client_token, &make(client_token));
-        } else {
-            self.push_server.push_per_client(make);
-        }
-    }
-
-    /// 下发配对状态时效给 DLL。吃键闸门（`_pairPendingDepth`）在 DLL 侧，它必须能本地判定
-    /// 状态是否陈旧——只有协调器过期而 DLL 照吃跳出键的话，协调器回 PassThrough 已太晚
-    /// （「吃了再吐」丢键）。故 TTL 以 DLL 侧判据为准，此处只推阈值。
-    pub fn push_pair_state_ttl_config(&self, client_token: u64) {
-        let secs = self.rt().config.input.auto_pair.state_ttl_secs;
-        let value = aurora_ipc::codec::encode_pair_state_ttl_value(secs);
-        let msg = aurora_ipc::codec::encode_sync_config(
-            aurora_ipc::protocol::CONFIG_KEY_PAIR_STATE_TTL,
-            &value,
-        );
-        if client_token != 0 {
-            self.push_server.push_to_token(client_token, &msg);
-        } else {
-            self.push_server.push_to_active(&msg);
-        }
-    }
-
     /// 推给 `token` 那个 DLL 的兜底占位字符（GH#175，compat 规则 `composition_placeholder`）。
     ///
-    /// 与 [`Self::auto_pair_allowed_for_token`] 同一纪律：**按目标客户端直查，不走
-    /// `active_compat` 焦点槽**——调用方是推送路径，目标客户端未必是焦点进程。窗口取该 token
+    /// **按目标客户端直查，不走 `active_compat` 焦点槽**——调用方是推送路径，目标客户端未必是焦点进程。窗口取该 token
     /// 最近一次获焦的那个（出厂的 `Chrome_WidgetWin_*` / `MozillaWindowClass` 靠它命中）；
     /// 进程名未知 ⇒ 空格。
     pub(crate) fn composition_placeholder_for_token(
@@ -365,13 +304,13 @@ impl Coordinator {
     }
 
     /// 下发密码框抑制策略开关给 DLL。DLL 据此 + 自身持有的 InputScope 掩码在
-    /// `OnTestKeyDown` 本地判定是否放行；判据两侧必须一致（见 `apply_input_diag` 与
+    /// `OnTestKeyDown` 本地判定是否放行；判据两侧必须一致（见 `apply_input_scope` 与
     /// C++ `IsPasswordSuppressActive`），漂移即「吃了再吐」丢键。
     /// 开关持久化在 `input.password_force_english`（右键菜单「高级」可切），握手时、每次切换与
     /// 配置重载后都要推。
     ///
     /// 取值按**目标进程**现算（compat.toml 的 per-app `password_force_english` 优先），故
-    /// `client_token=0` 时逐客户端推而不是广播同一个值——同 [`Self::push_english_pair_config`]。
+    /// `client_token=0` 时逐客户端推而不是广播同一个值（同 `composition_placeholder_for_token` 的理由）。
     pub fn push_password_suppress_config(&self, client_token: u64) {
         let make = |token: u64| {
             let enabled = self.password_force_english_for_token(token);
@@ -399,7 +338,7 @@ impl Coordinator {
     /// 同源即不会漂移；两侧一旦不一致就是「吃了再吐」丢键（Chrome/Electron 不回退合成 WM_CHAR）。
     /// 集合内没配英半自定义的键会出原样 ASCII（与透传等价），故并入是安全的。
     pub fn push_custom_en_punct_config(&self, client_token: u64) {
-        // BTreeSet 迭代天然有序 → 推送字节可复现（与 jump_out_keys 排序同理）。
+        // BTreeSet 迭代天然有序 → 推送字节可复现。
         let chars: Vec<char> = self.rt().custom_en_punct_chars.iter().copied().collect();
         let value = aurora_ipc::codec::encode_custom_en_punct_value(&chars);
         let msg = aurora_ipc::codec::encode_sync_config(
@@ -513,25 +452,6 @@ impl Coordinator {
         }
     }
 
-    /// 推送配对跳出键（VK 码集合）到 TSF 客户端。TSF 英文模式配对直接据此跳出；
-    /// 中文模式据此在「有待跳出配对」时放行转发（真正裁决仍在协调器）。
-    pub fn push_jump_out_keys_config(&self, client_token: u64) {
-        let rt = self.rt();
-        // HashSet 迭代序不稳定，排序保证推送字节可复现。
-        let mut vks: Vec<u32> = rt.jump_out_keys.iter().copied().collect();
-        vks.sort_unstable();
-        let value = aurora_ipc::codec::encode_jump_out_keys_value(rt.jump_out_on_right_symbol, &vks);
-        let msg = aurora_ipc::codec::encode_sync_config(
-            aurora_ipc::protocol::CONFIG_KEY_JUMP_OUT_KEYS,
-            &value,
-        );
-        if client_token != 0 {
-            self.push_server.push_to_token(client_token, &msg);
-        } else {
-            self.push_server.push_to_active(&msg);
-        }
-    }
-
     /// macOS：把命令直通车按键合成帧（CmdKeyTap/Seq/Hold/Release/Type）推给活跃 `.app`。
     /// 服务进程（LaunchAgent）无辅助功能授权无法 post CGEvent，改由 `.app` 侧 KeySynthesizer
     /// 合成（`.app` 有授权）。只投活跃前台客户端，与 commit 同队列保证与 type() 上屏文本的顺序。
@@ -634,8 +554,7 @@ impl Coordinator {
     /// 下发语言栏悬停提示。
     ///
     /// `client_token != 0`：握手场景，**定向且强推**（绕过去重）。新连接的 DLL 手里没有
-    /// 任何文本，若被全局去重挡掉就会一直显示本地回落值——`push_connect_fix` 与
-    /// `diag_snapshot` 都栽过这个形状。
+    /// 任何文本，若被全局去重挡掉就会一直显示本地回落值——`push_connect_fix` 栽过这个形状。
     ///
     /// `client_token == 0`：状态变化场景，**广播且去重**。广播是安全的：tooltip 不含
     /// 任何 per-pid 的量（这正是 activation status 不能广播的原因——那里的

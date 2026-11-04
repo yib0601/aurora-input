@@ -2,8 +2,8 @@
 //! 用户方案/方案覆盖层/主题目录、可选 state，
 //! 组合 bundle/merge/store 导出原语打成 kind=backup 的自描述 zip。
 use crate::bundle::{BundleKind, BundleWriter, Manifest};
-use std::path::{Path, PathBuf};
 use aurora_store::store::Store;
+use std::path::{Path, PathBuf};
 
 pub struct BackupOptions {
     pub include_stats: bool,
@@ -665,9 +665,9 @@ mod tests {
         Store::open(dir.join(format!("{tag}.redb"))).unwrap()
     }
 
-    /// 补全学习数据（邮箱后缀 + 网址历史）必须随整机备份走一个来回。
+    /// 补全学习数据（现存只有快捷输入历史）必须随整机备份走一个来回。
     ///
-    /// 这两类是**键不带方案的全局段**，不在 `list_data_schemas()` 的逐 schema 循环里
+    /// 这类是**键不带方案的全局段**，不在 `list_data_schemas()` 的逐 schema 循环里
     /// ——漏登记 `create_backup` 的话备份包里压根没有它们，而备份与还原都不会报错，
     /// 用户换机后才发现学的东西全没了。`common_chars` 当年就是这么漏在
     /// `RESTORE_SECTIONS` 里的。
@@ -676,11 +676,11 @@ mod tests {
         use aurora_store::completion::CompletionKind;
         let t = tempfile::tempdir().unwrap();
         let src = open_store(t.path(), "src");
-        src.record_completion(CompletionKind::EmailSuffix, "mycorp.cn")
+        src.record_completion(CompletionKind::QuickHistory, "mycorp.cn")
             .unwrap();
-        src.record_completion(CompletionKind::EmailSuffix, "mycorp.cn")
+        src.record_completion(CompletionKind::QuickHistory, "mycorp.cn")
             .unwrap();
-        src.record_completion(CompletionKind::UrlHistory, "www.example.com")
+        src.record_completion(CompletionKind::QuickHistory, "www.example.com")
             .unwrap();
 
         let pkg = t.path().join("b.zip");
@@ -713,19 +713,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            dst.get_completion(CompletionKind::EmailSuffix, "mycorp.cn")
+            dst.get_completion(CompletionKind::QuickHistory, "mycorp.cn")
                 .unwrap()
-                .expect("邮箱后缀应被还原")
+                .expect("学过的文本应被还原")
                 .count,
             2,
             "次数要一并还原，否则还原后排序全乱"
         );
         assert_eq!(
-            dst.list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            dst.list_completions(CompletionKind::QuickHistory, "", 0, 0)
                 .unwrap()
                 .1,
-            1,
-            "网址历史也该被还原"
+            2,
+            "另一条文本也该被还原"
         );
     }
 
@@ -738,7 +738,7 @@ mod tests {
         use aurora_store::completion::CompletionKind;
         let t = tempfile::tempdir().unwrap();
         let src = open_store(t.path(), "s2");
-        src.record_completion(CompletionKind::UrlHistory, "www.a.com")
+        src.record_completion(CompletionKind::QuickHistory, "www.a.com")
             .unwrap();
         let pkg = t.path().join("b2.zip");
         create_backup(
@@ -771,7 +771,7 @@ mod tests {
             r.restored
         );
         assert_eq!(
-            dst.list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            dst.list_completions(CompletionKind::QuickHistory, "", 0, 0)
                 .unwrap()
                 .1,
             1
@@ -905,7 +905,7 @@ mod tests {
         fs::write(schemas.join("my/d.yaml"), "d").unwrap();
         let overrides = t.path().join("schema_overrides");
         fs::create_dir_all(&overrides).unwrap();
-        fs::write(overrides.join("my.toml"), "auto_pair = false\n").unwrap();
+        fs::write(overrides.join("my.toml"), "caret_use_top = false\n").unwrap();
         let themes = t.path().join("themes");
         fs::create_dir_all(themes.join("dark")).unwrap();
         fs::write(themes.join("dark/theme.toml"), "[meta]\nname=\"dark\"\n").unwrap();
@@ -987,7 +987,7 @@ mod tests {
         std::fs::write(&compat, "[[apps]]\nprocess = \"Weixin.exe\"\n").unwrap();
         let overrides = t.path().join("schema_overrides");
         std::fs::create_dir_all(&overrides).unwrap();
-        std::fs::write(overrides.join("my.toml"), "auto_pair = false\n").unwrap();
+        std::fs::write(overrides.join("my.toml"), "caret_use_top = false\n").unwrap();
         let out = t.path().join("b.zip");
         let src = BackupSources {
             user_config_file: Some(&cfg),
@@ -1035,7 +1035,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read(overrides2.join("my.toml")).unwrap(),
-            b"auto_pair = false\n"
+            b"caret_use_top = false\n"
         );
         assert_eq!(s2.get_user_words("wb", "a").unwrap()[0].weight, 100);
         assert_eq!(s2.get_temp_word("wb", "ab", "临").unwrap(), Some(1));

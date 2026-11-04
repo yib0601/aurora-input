@@ -25,9 +25,9 @@
 //! 差异**只有**转储里翻页箭头图多出 `scale: 1.0`，像素摘要与其余各行逐字节不变。
 
 use super::*;
+use aurora_ui_types::{SpanStyle, StyledText, TooltipDoc, TooltipLine, TooltipSection};
 use std::path::PathBuf;
 use std::sync::Arc;
-use aurora_ui_types::{SpanStyle, StyledText, TooltipDoc, TooltipLine, TooltipSection};
 
 /// 出厂主题：`data/themes` 下的全部主题（含两个抽象 base：它们同样可加载，且是其余主题的
 /// 公共祖先）。按目录枚举而非硬编码，新加的出厂主题缺 golden 文件时对拍直接报出来。
@@ -437,29 +437,10 @@ fn fuzzy_candidates() -> Vec<CandidateItem> {
     ]
 }
 
-/// 横排 / 竖排 / 旋转 / 直立四种排布 + 展开网格（2 列 × 2 行，选中 0、悬停 1）。
+/// 横排 / 竖排 / 旋转 / 直立四种排布（选中 0、悬停 1）。
 fn render_fuzzy() -> String {
     let theme = aurora_theme::load_resolved(&themes_dir(), "default", false).unwrap();
-    let mut out = render_windows(&theme, &LAYOUTS[..4], fuzzy_candidates);
-    let (tx, _rx) = std::sync::mpsc::channel();
-    let mut w = CandidateWindow::new(CandidateWindowConfig::default(), tx).unwrap();
-    w.scale = 1.0;
-    w.set_theme(theme.clone());
-    w.set_orientation(false, false, false);
-    w.set_grid(Some(aurora_ui_types::CandidateGrid {
-        cols: 2,
-        rows: 2,
-        highlight_row: 0,
-        index_start: 0,
-        index_count: 2,
-        tabs: 0,
-        active_tab: 0,
-    }));
-    w.update("ping", 4, "", fuzzy_candidates(), 0, 1, 1, 1);
-    let mut root = w.build_tree(false);
-    root.layout(0.0, 0.0, &w.text_renderer);
-    out.push_str("== 候选窗 网格 ==\n");
-    out.push_str(&root.debug_dump());
+    let out = render_windows(&theme, &LAYOUTS[..4], fuzzy_candidates);
     let dir = themes_dir().to_string_lossy().into_owned();
     out.replace(&dir, "<themes>")
 }
@@ -623,65 +604,9 @@ fn golden_pinyin_hint_highlighted() {
         .selected
         .get_or_insert_with(Default::default)
         .bg_color = Some([37, 99, 235, 255]);
-    let cmt_sel = aurora_theme::body_color(&dark.comment, sel, aurora_theme::fallback::COMMENT_TEXT);
+    let cmt_sel =
+        aurora_theme::body_color(&dark.comment, sel, aurora_theme::fallback::COMMENT_TEXT);
     assert_eq!(hint(&dark), cmt_sel, "深色选中底上应回落选中态注释色");
-}
-
-/// 展开网格：格宽按含提示的实宽算，同一行的格子互不重叠、各行同列对齐。
-#[test]
-fn golden_pinyin_hint_grid() {
-    let got = render_fuzzy();
-    let sec = section(&got, "网格");
-    assert!(
-        sec.contains("text=Some(\"苹(ping)果\")"),
-        "网格：提示应完整显示"
-    );
-    assert_plain_hint_run(sec, "网格");
-
-    let theme = aurora_theme::load_resolved(&themes_dir(), "default", false).unwrap();
-    let (tx, _rx) = std::sync::mpsc::channel();
-    let mut w = CandidateWindow::new(CandidateWindowConfig::default(), tx).unwrap();
-    w.scale = 1.0;
-    w.set_theme(theme);
-    w.set_orientation(false, false, false);
-    w.set_grid(Some(aurora_ui_types::CandidateGrid {
-        cols: 2,
-        rows: 2,
-        highlight_row: 0,
-        index_start: 0,
-        index_count: 2,
-        tabs: 0,
-        active_tab: 0,
-    }));
-    // 第 1 列上下两格：一格带长提示、一格不带 ⇒ 列宽按带提示的那格撑开。
-    let cands = vec![
-        hint_cand("平安", StyledText::new()),
-        hint_cand("苹果", hint_styled("苹", "ping", "果")),
-        hint_cand("拼音", StyledText::new()),
-        hint_cand("品", StyledText::new()),
-    ];
-    w.update("ping", 4, "", cands, 0, -1, 1, 1);
-    let mut root = w.build_tree(false);
-    root.layout(0.0, 0.0, &w.text_renderer);
-    let mut hits = Vec::new();
-    root.collect_hits(&mut hits);
-    let rect = |t: i32| hits.iter().find(|(g, _)| *g == t).unwrap().1;
-    for row in [0, 2] {
-        let (a, b) = (rect(row), rect(row + 1));
-        assert!(
-            a.x + a.w <= b.x + 0.01,
-            "第 {row} 行两格重叠：{a:?} / {b:?}"
-        );
-    }
-    assert!(
-        (rect(1).x - rect(3).x).abs() < 0.01 && (rect(1).w - rect(3).w).abs() < 0.01,
-        "第 2 列上下格应对齐同宽：{:?} / {:?}",
-        rect(1),
-        rect(3)
-    );
-    // 带提示那格里正文叶子完整显示且落在格内。
-    let dump = root.debug_dump();
-    assert!(dump.contains("text=Some(\"苹(ping)果\")"), "网格：提示被截");
 }
 
 /// 窄窗：结果要么完整保留提示、要么整段去掉提示，绝不出现半截 `(pi…`；且存在一档宽度

@@ -63,11 +63,6 @@ impl Coordinator {
         // 该归零的地方。生产代码里 `current_page` 的写点全在本文件，别处的都是测试。
         state.paged = false;
         state.selected_index = 0;
-        // 展开态随候选一起作废：新装填的是另一批候选，网格从单行重新开始（不记忆展开状态）。
-        state.grid_top = None;
-        state.grid_tab = aurora_ui_types::GridTab::All;
-        state.grid_full.clear();
-        state.grid_tab_anchor = None;
         self.clear_hover();
     }
 
@@ -96,8 +91,6 @@ impl Coordinator {
         if changed {
             self.clear_hover();
         }
-        // 页码被夹低了，网格可见区也要跟着收回来，否则高亮行落在可见区外。
-        self.grid_follow(state);
     }
 
     /// 翻到第 `page` 页并记下「这批候选被翻过页」。
@@ -270,22 +263,15 @@ impl Coordinator {
         // overlay 在按键分派处就 return 了），但不变式破一个口子就不再是不变式。
         let page_before = state.current_page;
         let paged_before = state.paged;
-        // 网格滚动位置同理：重建会经 `reset_candidate_view` 收起网格，而用户此刻正在展开态里
-        // 往下翻，收起就等于把他踢回单行。
-        let grid_before = state.grid_top;
         // 列号同理：重建会把高亮归零，放宽若没放出东西就原样返回，屏幕上的高亮与空格的上屏
         // 目标从此对不上。
         let selected_before = state.selected_index;
-        // 分类筛选同理：临拼那支的重建会经视图复位把分类清掉，主路那支则把完整列表写回
-        // `candidates`。两种都在下面重套一次。
-        let tab_before = state.grid_tab;
         if in_temp {
             // ⚠️ `update_temp_pinyin_candidates` 会把 current_page/selected_index 归零，
             // 重建后须还原，否则用户翻到的位置丢失。
             self.update_temp_pinyin_candidates(state);
             state.current_page = page_before;
             state.paged = paged_before;
-            state.grid_top = grid_before;
             state.selected_index = selected_before;
         } else if in_reverse {
             // 反查的候选另有构建函数（主路的读 `input_buffer`，在本模式恒空）。它本身不动
@@ -294,7 +280,6 @@ impl Coordinator {
             self.build_reverse_candidates(state, limit);
             state.current_page = page_before;
             state.paged = paged_before;
-            state.grid_top = grid_before;
             state.selected_index = selected_before;
         } else {
             let limit = state.candidate_limit;
@@ -302,10 +287,7 @@ impl Coordinator {
         }
         // 判据取「列表里有没有真的出现被滤候选」，而非「总数是否变多」——候选受 limit 截断时
         // 总数可能不变，那样会误判成「没放出东西」而撤销。
-        // ⚠️ 要在**完整**列表上判（重套分类筛选之前）：放出来的字不一定落在当前分类里。
         let released = state.candidates.iter().any(|c| c.is_scope_filtered);
-        state.grid_tab = tab_before;
-        self.grid_reapply_filter(state);
         if !released {
             // 该码位本就没有被滤的字 → 原样撤销，别留一个什么也没带来、却会影响后续按键的放宽态
             state.scope_relaxed = false;

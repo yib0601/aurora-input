@@ -11,10 +11,10 @@
 
 use crate::coordinator::{Coordinator, State};
 use crate::key_convert::{punct_char, punct_source_vk};
-use tracing::warn;
 use aurora_candidate::{Candidate, CandidateSource};
 use aurora_dict::WILDCARD_SLOT;
 use aurora_keys::keymap;
+use tracing::warn;
 
 /// 通配组码的首批候选上限（spec §11）。不走 `initial_candidate_limit` 的码长分级
 /// （码表 1/2/≥3 码 → 100/300/1000）：那套是给前缀补全配的，通配首位即退化成全表扫描；
@@ -415,9 +415,9 @@ impl Coordinator {
 mod tests {
     use super::WildcardDecision::{Enter, Yield};
     use crate::coordinator::Coordinator;
+    use aurora_config::Config;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use aurora_config::Config;
 
     fn data_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

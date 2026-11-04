@@ -10,14 +10,14 @@
 //! [`concurrent_reads_survive_a_cache_drop`] 的说明，那个窗口窄到不可检出。
 //! 缓存到底有没有被释放，由 `tests/redb_cache_high_water.rs` 的 evict/hold 两组回答。
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use aurora_store::Store;
 use aurora_store::completion::CompletionKind;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// 负载用旧补全历史表（`legacy_*` 写读器直接走 redb）：P2–P4a 起运行期数据都不在 redb，页缓存
 /// 机制要拿仍能读写的 redb 表来测；P4b 随 redb 一起删。
-const K: CompletionKind = CompletionKind::UrlHistory;
+const K: CompletionKind = CompletionKind::QuickHistory;
 
 fn store(tag: &str) -> (Arc<Store>, std::path::PathBuf) {
     let p = std::env::temp_dir().join(format!("wind_dpc_{}_{tag}.redb", std::process::id()));

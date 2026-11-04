@@ -1866,7 +1866,9 @@ mod tests {
         text.push(
             "nǐ",
             &SpanStyle {
-                color: Some(std::sync::Arc::new(aurora_theme::InlineColor::parse("error"))),
+                color: Some(std::sync::Arc::new(aurora_theme::InlineColor::parse(
+                    "error",
+                ))),
                 ..Default::default()
             },
         );

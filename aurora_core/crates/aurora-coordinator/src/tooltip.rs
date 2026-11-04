@@ -25,12 +25,12 @@
 //! 候选循环里只渲染。设计见 `docs/design/candidate-tooltip-sections.md`。
 
 use crate::comment::{Template, VarValue};
-use tracing::warn;
-use unicode_segmentation::UnicodeSegmentation;
 use aurora_config::config::{
     TRUNCATION_MARK, TooltipConfig, TooltipSection as SectionConfig, is_wide_char,
 };
 use aurora_ui_types::{StyledText, TooltipDoc, TooltipLine, TooltipSection};
+use tracing::warn;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// 逐字段遍历的「汉字」口径：≥ U+3400（扩展 A 起）。与段列表引入前的气泡一致。
 fn is_han(c: char) -> bool {

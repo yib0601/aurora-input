@@ -26,12 +26,12 @@
 
 use crate::coordinator::{Coordinator, State};
 use crate::pipeline::ModeKind;
-use std::sync::Arc;
-use tracing::{debug, info};
 use aurora_bridge::handler::{KeyAction, KeyEventData};
 use aurora_candidate::Candidate;
 use aurora_ipc::protocol::{MOD_ALT, MOD_CTRL, MOD_SHIFT};
 use aurora_keys::keymap;
+use std::sync::Arc;
+use tracing::{debug, info};
 
 /// 辅助码 overlay 的协调器侧状态三件套（筛选会话 + 显示基线 + 显示前缀）。
 ///
@@ -202,10 +202,6 @@ impl Coordinator {
         // 三件套整体建立：筛选会话（快照原始候选，后续筛选都从它重筛）+ 显示基线
         // （进入前的拼音显示，退出还原）+ 显示前缀（基线 + 分隔符，进入拼一次）。
         // 此后三者同生共死，退出/上屏/复位一律整体销毁，见 `AuxCodeOverlay`。
-        //
-        // 展开态正按分类筛选时先退回完整列表：快照要的是**原始**候选，拿子集当快照的话，
-        // 下面的刷新经视图复位清掉暂存的完整列表，退出辅助码后就只剩那一类了。
-        self.grid_restore_full(state);
         let session = aurora_aux_code::AuxCodeSession::new(std::mem::take(&mut state.candidates));
         let preedit_base = std::mem::take(&mut state.preedit);
         let preedit_prefix = format!("{}    ", preedit_base);
@@ -289,8 +285,6 @@ impl Coordinator {
         state.active = overlay.origin;
         state.candidates = overlay.session.restore_original();
         state.preedit = overlay.preedit_base;
-        // 进辅助码前展开着的，退回来也展开着（与分步上屏同一条「本次组合保持」）。
-        self.grid_resume(state);
         debug!("aux_code: exited (origin={:?})", overlay.origin);
     }
 
@@ -557,7 +551,8 @@ impl Coordinator {
         let preedit_base = std::mem::take(&mut state.preedit);
         overlay.preedit_base = preedit_base.clone();
         overlay.preedit_prefix = format!("{}    ", preedit_base);
-        overlay.session = aurora_aux_code::AuxCodeSession::new(std::mem::take(&mut state.candidates));
+        overlay.session =
+            aurora_aux_code::AuxCodeSession::new(std::mem::take(&mut state.candidates));
         self.refresh_aux_code_candidates(state);
     }
 
@@ -583,12 +578,12 @@ mod tests {
     //! 单独覆盖，别让「fixture 开着」把默认值回归掩盖掉。
     use super::*;
     use crate::coordinator::Coordinator;
-    use std::sync::Arc;
     use aurora_bridge::handler::KeyEventData;
     use aurora_candidate::{Candidate, CandidateSource};
     use aurora_config::Config;
     use aurora_ipc::protocol::{MOD_ALT, MOD_CTRL};
     use aurora_store::Store;
+    use std::sync::Arc;
 
     /// 造一个含 pinyin 方案的 data_dir：`[engine.aux_code]` 指到测试小码表，backtick 绑辅助码。
     /// 方案段显式 `enabled = true`（出厂全局是 false，见模块头注释）。
@@ -1208,8 +1203,8 @@ mod tests {
 
     /// ★ **临拼以外**的 overlay 模式里，触发键不得把辅助码套进来。
     ///
-    /// `handle_candidate_nav` 被五个 overlay 共用，全都会把键送回 `apply_session_action`。
-    /// 少了 `enter_aux_code` 的守卫，Tab 在特殊模式/临英/URL/mix 里都会夺走那个模式的
+    /// `handle_candidate_nav` 被各 overlay 共用，全都会把键送回 `apply_session_action`。
+    /// 少了 `enter_aux_code` 的守卫，Tab 在特殊模式/临英/mix 里都会夺走那个模式的
     /// 候选、改写 preedit。
     ///
     /// ⚠️ 2026-08-30 起 `TempPinyin` **不在**本集合里——它产出的正是拼音候选，与辅助码
@@ -1223,7 +1218,6 @@ mod tests {
         for mode in [
             ModeKind::TempEnglish,
             ModeKind::AuxCode,
-            ModeKind::Url,
             ModeKind::Special(0),
             ModeKind::Mix(0),
         ] {

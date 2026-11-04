@@ -6,9 +6,9 @@
 //! 来源各占一层，层数 = 方案来源数 + 被它们隔开的文件段数。设计见
 //! `docs/design/aux-code-schema-source.md` §4、§5。
 
-use std::sync::Arc;
 use aurora_aux_code::{AuxCodeLookup, AuxCodeTable};
 use aurora_engine::{AuxSource, EngineManager, TextCodeView};
+use std::sync::Arc;
 
 pub(crate) struct AuxCodeRuntime {
     /// 由哪组来源建成——缓存键。来源变了（改了 override、换了方案）就重建。

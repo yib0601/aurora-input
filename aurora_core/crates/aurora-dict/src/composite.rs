@@ -3,9 +3,9 @@
 //! 与 Go 版本 `aurora_core/internal/dict/composite.go` 对齐。
 
 use crate::layer::DictLayer;
+use aurora_candidate::Candidate;
 use std::collections::HashMap;
 use std::sync::RwLock;
-use aurora_candidate::Candidate;
 
 /// 多层复合词典
 #[derive(Default)]

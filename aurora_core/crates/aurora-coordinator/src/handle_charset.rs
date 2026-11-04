@@ -19,8 +19,8 @@
 
 use std::collections::BTreeMap;
 
-use tracing::{debug, warn};
 use aurora_config::charset_def::{self, CharsetDoc, Commonality};
+use tracing::{debug, warn};
 
 /// 设置页列表里的一行 = 一个字符类。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -447,9 +447,9 @@ mod tests {
 
     use super::*;
     use crate::Coordinator;
+    use aurora_config::Config;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use aurora_config::Config;
 
     /// 仓库根下的 `data/`，出厂字符类就在它的 `charsets/` 里。
     fn data_dir() -> PathBuf {

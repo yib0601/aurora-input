@@ -12,9 +12,9 @@
 //! 故把顺序固化在本类型的 [`UiSender::send`] 里。调用方写不出「只投递不唤醒」，新增的
 //! 发送点也自动获得唤醒——**这是编译器保证的，不是靠记得**。
 
+use aurora_ui_types::UiCommand;
 use std::sync::Arc;
 use std::sync::mpsc;
-use aurora_ui_types::UiCommand;
 
 /// UI 命令投递失败：接收端已关闭（UI 线程未起来 / 已退出 / headless 的哑通道）。
 ///

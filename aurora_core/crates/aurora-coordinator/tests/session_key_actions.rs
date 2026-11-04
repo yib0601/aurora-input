@@ -7,11 +7,11 @@
 //! **静默跳过且计数照绿**。判据是耗时：假绿 0.0x s，真跑约 1s+。缺数据先跑
 //! `scripts/dev.ps1 gd`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, EVENT_KEY_UP, MOD_CAPSLOCK, MOD_SHIFT};
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -304,12 +304,10 @@ fn capslock_binding_enters_key_up_forward_set() {
 
 const VK_ESCAPE: u32 = 0x1B;
 const VK_BACKTICK: u32 = 0xC0;
-const VK_PERIOD: u32 = 0xBE;
 
 fn press(coord: &Coordinator, ch: char) -> aurora_bridge::handler::KeyAction {
     let vk = match ch {
         'a'..='z' => 0x41 + (ch as u32 - 'a' as u32),
-        '.' => VK_PERIOD,
         _ => panic!("press() 未覆盖的字符: {ch}"),
     };
     coord.handle_key_event(&key(vk, 0, EVENT_KEY_DOWN))
@@ -350,8 +348,9 @@ fn clear_is_an_alias_of_cancel() {
 
 /// ★★★ 判据放宽的守门：**有会话但无候选**时 `cancel` 仍须生效。
 ///
-/// 一期的守卫是「无候选就返回 None」，那一格里 Tab 根本不会被接管。网址模式是这一格的
-/// 天然样本——它原样累积文本、从不产候选，而用户此刻显然处在一个输入会话里。
+/// 一期的守卫是「无候选就返回 None」，那一格里 Tab 根本不会被接管。刚进临时拼音
+/// （缓冲还空着）是这一格的天然样本——`active` 已置位（显然处在输入会话里），
+/// 而空拼音串查不出任何候选。
 ///
 /// 这条测试若失败，说明 `requires_candidates` 的分派被改回了「一刀切守候选」。
 #[test]
@@ -359,29 +358,25 @@ fn cancel_works_in_session_without_candidates() {
     if !has_schemas() {
         return;
     }
-    // ⚠️ `input.url.enabled` **出厂默认关闭**，测试须显式拨开——否则 `www.` 只是普通编码，
-    // 前置条件不成立。这类「判据依赖一个默认关闭的开关」正是集成测试假绿的常见来源。
     let mut cfg = cfg_with(&[("tab", "cancel")]);
-    cfg.input.url.enabled = true;
+    cfg.input.temp_pinyin.enabled = true;
     let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    for c in "www.".chars() {
-        press(&coord, c);
-    }
+    coord.handle_key_event(&key(VK_BACKTICK, 0, EVENT_KEY_DOWN));
     assert_eq!(
         coord.debug_active_mode(),
-        Some("url"),
-        "前置条件：`www.` 应夺取进网址模式"
+        Some("temp_pinyin"),
+        "前置条件：应进临时拼音"
     );
     assert!(
         coord.debug_page_texts().is_empty(),
-        "前置条件：网址模式不产候选——这正是本测试要覆盖的那一格"
+        "前置条件：刚进临拼缓冲为空 ⇒ 无候选——这正是本测试要覆盖的那一格"
     );
 
     coord.handle_key_event(&key(VK_TAB, 0, EVENT_KEY_DOWN));
     assert_eq!(
         coord.debug_active_mode(),
         None,
-        "无候选时 cancel 仍须退出网址模式"
+        "无候选时 cancel 仍须退出临时拼音"
     );
 }
 
@@ -448,21 +443,6 @@ fn escape_still_exits_each_mode_after_convergence() {
     press(&coord, 'n');
     coord.handle_key_event(&key(VK_ESCAPE, 0, EVENT_KEY_DOWN));
     assert_eq!(coord.debug_active_mode(), None, "Esc 应退出临拼");
-
-    // 网址模式（总开关出厂默认关闭，须显式拨开）
-    let mut cfg = cfg_with(&[]);
-    cfg.input.url.enabled = true;
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    for c in "www.".chars() {
-        press(&coord, c);
-    }
-    assert_eq!(
-        coord.debug_active_mode(),
-        Some("url"),
-        "前置条件：应进网址模式"
-    );
-    coord.handle_key_event(&key(VK_ESCAPE, 0, EVENT_KEY_DOWN));
-    assert_eq!(coord.debug_active_mode(), None, "Esc 应退出网址模式");
 
     // 主输入路径
     let coord = Coordinator::new_headless(cfg_with(&[]), Some(&data_dir()));

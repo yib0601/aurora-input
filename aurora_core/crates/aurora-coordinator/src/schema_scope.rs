@@ -140,7 +140,10 @@ impl Coordinator {
     /// ⚠️ **绝不能改用 `overlay_engine_schema`**：它在 `show_candidates = false` 时返回
     /// `None`（它回答的是「要不要出候选」，不是「数据算谁的」）。拿它当归属，用户一关候选
     /// 显示，短语作用域就静默换回主方案。这条坑 2026-08-21 已经踩过一次。
-    pub(crate) fn phrase_spec_of(&self, state: &State) -> std::sync::Arc<aurora_config::PhrasesSpec> {
+    pub(crate) fn phrase_spec_of(
+        &self,
+        state: &State,
+    ) -> std::sync::Arc<aurora_config::PhrasesSpec> {
         let id = self
             .effective_data_schema(state)
             .unwrap_or_else(|| self.engine_mgr.active_schema_id());

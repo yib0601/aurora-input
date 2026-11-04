@@ -20,8 +20,8 @@
 
 use std::collections::HashMap;
 
-use tracing::warn;
 use aurora_theme::Rgba;
+use tracing::warn;
 
 use crate::Coordinator;
 use crate::theme_style::ThemeStyle;
@@ -83,7 +83,8 @@ impl Coordinator {
     pub fn set_theme_style_name(&self, style: &str) {
         let style = ThemeStyle::from_config(style);
         *self.theme_style.lock().unwrap_or_else(|e| e.into_inner()) = style;
-        let _ = aurora_config::Config::set_user_string(&["ui", "theme", "style"], style.as_config());
+        let _ =
+            aurora_config::Config::set_user_string(&["ui", "theme", "style"], style.as_config());
         self.show_tip(style.label());
     }
 

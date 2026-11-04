@@ -8,16 +8,16 @@
 //! 判据同 `idle_cache_reclaim.rs`：落在 `page_cache_drops()` 与钩子调用次数，不看 RSS。
 //! 时间参数取毫秒级；长档一律给到一小时，保证观察到的回收只可能来自被测的那一档。
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 use aurora_store::Store;
 use aurora_store::completion::CompletionKind;
 use aurora_store::store::SCAN_RECLAIM_MIN_ROWS;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 /// 负载用旧补全历史表（`legacy_*` 写读器直接走 redb）：P2–P4a 起运行期数据都不在 redb，页缓存
 /// 机制要拿仍能读写的 redb 表来测；P4b 随 redb 一起删。
-const K: CompletionKind = CompletionKind::UrlHistory;
+const K: CompletionKind = CompletionKind::QuickHistory;
 
 const TICK: Duration = Duration::from_millis(20);
 const SCAN_IDLE: Duration = Duration::from_millis(100); // = 5 拍

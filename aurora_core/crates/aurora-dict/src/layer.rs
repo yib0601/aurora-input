@@ -2,8 +2,8 @@
 //!
 //! 与 Go 版本 `aurora_core/internal/dict/layer.go` 对齐。
 
-use std::cmp::Ordering;
 use aurora_candidate::{Candidate, better};
+use std::cmp::Ordering;
 
 /// 词典层类型（数值越小优先级越高）。
 /// 注：Shadow（置顶/删除）**不是查询层**，而是 ShadowProvider，在引擎排序后应用

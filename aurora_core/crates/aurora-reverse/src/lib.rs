@@ -498,7 +498,7 @@ fn parse_comment_dict(path: &std::path::Path) -> std::io::Result<Vec<(String, St
 /// 又叠了两条约定，这里都要认，用户从那边拿来的表才能直接放：
 /// - **值的首项重复键本身**（`好\t好 good well`）：rime simplifier 用转换结果替换原候选，要保住
 ///   原词就得把它写成首项。作注释时它是噪音（显示成「好 good well」），丢掉。不带这一项的表
-///   原样保留。同 `aurora_dict::emojidict::parse_upstream`。
+///   原样保留。同 `aurora_dict::commentdict` 的裸表解析口径。
 /// - **`---` 开头的行是注释**：OpenCC 文本词典没有注释语法，rime-frost 借「键不可重复」写成
 ///   `----------格式为：…\t----------…`。
 fn opencc_comment<'a>(text: &str, value: &'a str) -> Option<&'a str> {

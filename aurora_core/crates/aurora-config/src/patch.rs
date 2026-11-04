@@ -55,10 +55,6 @@ pub const ALLOWED_UNREGISTERED_KEYS: &[&str] = &[
     "input.temp_english.comment_template_horizontal",
     "input.temp_pinyin.comment_template_vertical",
     "input.temp_pinyin.comment_template_horizontal",
-    "input.url.comment_template_vertical",
-    "input.url.comment_template_horizontal",
-    "input.email.comment_template_vertical",
-    "input.email.comment_template_horizontal",
 ];
 
 /// 预览条目：片段里的一个配置键及其应用效果。
@@ -877,9 +873,9 @@ mod tests {
     /// 点分键与嵌套表两种写法产出完全相同的条目集（TOML 解析层已归一）。
     #[test]
     fn dotted_and_nested_forms_are_equivalent() {
-        let dotted = preview_text("ui.candidate.per_page = 9\ninput.auto_pair.chinese = false\n");
+        let dotted = preview_text("ui.candidate.per_page = 9\ninput.capslock.chinese = false\n");
         let nested =
-            preview_text("[ui.candidate]\nper_page = 9\n[input.auto_pair]\nchinese = false\n");
+            preview_text("[ui.candidate]\nper_page = 9\n[input.capslock]\nchinese = false\n");
         let mut a: Vec<(String, toml::Value)> =
             dotted.into_iter().map(|e| (e.key, e.next)).collect();
         let mut b: Vec<(String, toml::Value)> =

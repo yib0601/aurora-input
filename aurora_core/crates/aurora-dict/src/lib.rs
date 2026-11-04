@@ -28,7 +28,6 @@ pub mod codetable;
 pub mod commentdict;
 pub mod composite;
 pub mod datformat;
-pub mod emojidict;
 pub mod freq_rank;
 pub mod gramdb;
 pub mod hotcache;

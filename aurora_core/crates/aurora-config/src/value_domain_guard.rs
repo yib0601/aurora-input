@@ -3,7 +3,7 @@
 //! # 这条测试防的是什么
 //!
 //! `toml::Value::try_into::<T>()` 是整份一次性反序列化。面向用户的字符串枚举
-//! （`text_orientation` / `punct.mode` / `smart_method` …）一旦写了值域外的字符串，
+//! （`text_orientation` / `punct.mode` / `initial_mode` …）一旦写了值域外的字符串，
 //! serde 报 `unknown variant`，整个 `T` 就 `Err`——而调用方通常把 `Err` 处理成
 //! 「这份文件/这个方案/这一层不存在」，只留一行 `warn!`。用户看到的是
 //! **完全没反应，但也不工作**，这是本仓最贵的失败形态。
@@ -16,7 +16,7 @@
 //!
 //! 前两次修复都是「给这个字段挂 `deserialize_with`」，靠人记得。结果就在 `app_compat.rs`
 //! 同一个结构体里，`initial_mode` / `initial_punct` / `first_show_mode` 三个挂了，
-//! 紧挨着的 `smart_method` **漏了**——同一个文件、同一段教训，隔几行就漏一个。
+//! 紧挨着的 `initial_punct` **漏了**——同一个文件、同一段教训，隔几行就漏一个。
 //!
 //! 逐个字段的用例只覆盖已知的坑；本测试遍历 `T::default()` 序列化出的**每一个**字符串
 //! 叶子，新增字段自动进入覆盖范围。忘了容错的字段会让这里红，不需要任何人记得。
@@ -45,7 +45,7 @@ const POISON: &str = "__wind_invalid_value__";
 
 /// 收集所有**字符串叶子**的点分路径。
 ///
-/// 数组要下钻（`apps[0].smart_method` 这类枚举只住在数组元素里，`Vec::default()` 是空的、
+/// 数组要下钻（`apps[0].initial_mode` 这类枚举只住在数组元素里，`Vec::default()` 是空的、
 /// 扫不到），路径里用 `[i]` 表示下标；改写时按同一套路径回填。
 fn string_leaf_paths(v: &toml::Value, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
     match v {
@@ -191,7 +191,7 @@ fn schema_seed() -> toml::Value {
 /// 1. `apps` 默认是**空数组**，直接 `default()` 一个规则字段都扫不到。
 /// 2. 规则字段几乎都带 `skip_serializing_if`（`Option::is_none` / `is_false` / `is_zero_i32` /
 ///    `String::is_empty`），取默认值时序列化后**那个键根本不出现**——而 tri-state 覆盖字段
-///    恰恰全是这个形状，正是最容易漏容错的一类（`smart_method` 就是这么漏的）。
+///    恰恰全是这个形状，正是最容易漏容错的一类（`initial_mode` 就是这么漏的）。
 ///
 /// 故这里把每个字段都填成「会被写出来」的值。**新增字段时必须在这里补一笔**——忘了补会被
 /// [`app_compat_seed_covers_every_field`] 拦下，不靠人记得。
@@ -200,7 +200,6 @@ fn app_compat_seed() -> toml::Value {
         AppCompatRule, CandidatePositionMode, FirstShowMode, InitialMode, StatusAnchor,
         StatusFallback, StatusPositionMode,
     };
-    use crate::config::SmartMethod;
     let rule = AppCompatRule {
         process: "seed.exe".to_string(),
         comment: "seed".to_string(),
@@ -217,8 +216,6 @@ fn app_compat_seed() -> toml::Value {
         first_show_mode: Some(FirstShowMode::default()),
         initial_mode: Some(InitialMode::Chinese),
         initial_punct: Some(InitialMode::Chinese),
-        smart_method: Some(SmartMethod::default()),
-        auto_pair: Some(true),
         password_force_english: Some(true),
         schema: Some("pinyin".to_string()),
         composition_start_pair_guard: Some(true),
@@ -310,18 +307,18 @@ fn app_compat_seed_covers_every_field() {
 ///
 /// 字段表取自种子序列化出的键，注入值按该键的值类型选——新增字段只要进了种子（上一条测试
 /// 强制），就自动进入覆盖范围。`load_file` 没有段级降级，漏一个字段 = 用户手写一个类型错，
-/// 所有应用的所有规则一起静默失效（auto_pair、smart_method、initial_mode 都这么漏过）。
+/// 所有应用的所有规则一起静默失效（initial_mode、password_force_english 都这么漏过）。
 ///
 /// `process` 是主键，语义不同：类型错 ⇒ **本条规则作废**（不套给任何进程），见 `de_process`。
 #[test]
 fn compat_rule_any_field_wrong_type_does_not_sink_the_file() {
     use crate::app_compat::AppCompat;
 
-    const OTHER: &str = "[[apps]]\nprocess = \"other.exe\"\nauto_pair = false\n";
+    const OTHER: &str = "[[apps]]\nprocess = \"other.exe\"\ncaret_use_top = true\n";
     let other_still_works = |compat: &AppCompat, ctx: &str| {
         assert_eq!(
-            compat.get_rule("other.exe").and_then(|r| r.auto_pair),
-            Some(false),
+            compat.get_rule("other.exe").map(|r| r.caret_use_top),
+            Some(true),
             "{ctx}: 同文件其它规则必须照常生效"
         );
     };
@@ -337,7 +334,7 @@ fn compat_rule_any_field_wrong_type_does_not_sink_the_file() {
         for bad in bads {
             let ctx = format!("{field} = {bad}");
             let text = if field == "process" {
-                format!("[[apps]]\nprocess = {bad}\nauto_pair = true\n\n{OTHER}")
+                format!("[[apps]]\nprocess = {bad}\ncaret_use_top = true\n\n{OTHER}")
             } else {
                 format!("[[apps]]\nprocess = \"typo.exe\"\n{field} = {bad}\n\n{OTHER}")
             };

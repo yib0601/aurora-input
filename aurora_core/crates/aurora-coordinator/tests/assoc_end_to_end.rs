@@ -11,11 +11,11 @@
 //! 词典缺失时自动跳过 —— ⚠️ `build_dev/data` 不存在时**整族静默跳过而计数照绿**，
 //! 判据是耗时。见 project_build_dev_data_missing。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_ALT, MOD_CTRL, MOD_SHIFT};
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -53,7 +53,6 @@ fn coord_tweak(
     cfg.schema.available = vec![schema.to_string()];
     cfg.schema.active = schema.to_string();
     cfg.input.default.chinese_mode = true;
-    cfg.input.symbol.smart_mode = false;
     cfg.input.association.kind = kind.to_string();
     cfg.input.association.mode = "one_shot".to_string();
     tweak(&mut cfg);
@@ -78,7 +77,6 @@ fn coord_mode(kind: &str, schema: &str, mode: &str) -> std::sync::Arc<Coordinato
     cfg.schema.available = vec![schema.to_string()];
     cfg.schema.active = schema.to_string();
     cfg.input.default.chinese_mode = true;
-    cfg.input.symbol.smart_mode = false;
     cfg.input.association.kind = kind.to_string();
     cfg.input.association.mode = mode.to_string();
     let c = Coordinator::new_headless(cfg, Some(&dir));
@@ -687,7 +685,6 @@ fn space_commits_false_outputs_space_not_candidate() {
     cfg.schema.available = vec!["wubi86_pinyin".to_string()];
     cfg.schema.active = "wubi86_pinyin".to_string();
     cfg.input.default.chinese_mode = true;
-    cfg.input.symbol.smart_mode = false;
     cfg.input.association.kind = "word".to_string();
     cfg.input.association.space_commits = false;
     let c = Coordinator::new_headless(cfg, Some(&data_dir()));

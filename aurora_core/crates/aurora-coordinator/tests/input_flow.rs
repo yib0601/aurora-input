@@ -6,12 +6,12 @@
 //!
 //! 词典缺失时自动跳过（无数据 CI 环境）。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, EVENT_KEY_UP};
 use aurora_webdata::WebDataRpc;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     // 三级：crates/aurora-coordinator → crates → aurora_input → 仓库根（build_dev 在仓库根）。
@@ -174,52 +174,6 @@ fn test_wubi_number_select() {
     match commit {
         KeyAction::InsertText { text, .. } => assert!(!text.is_empty()),
         other => panic!("数字键应上屏，实际: {:?}", other),
-    }
-}
-
-#[test]
-fn test_url_mode_enter_and_commit() {
-    if !has_schemas() {
-        return;
-    }
-    // #11 网址输入：打满前缀 "www." 夺取进入网址模式，续打累积，空格上屏原文。
-    let mut cfg = config_with("wubi86");
-    cfg.input.url.enabled = true;
-    cfg.input.url.prefixes = vec!["www.".into()];
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    // w w w . → 进入网址模式（最后一键补满前缀）
-    press_letter(&coord, 'w');
-    press_letter(&coord, 'w');
-    press_letter(&coord, 'w');
-    let enter = coord.handle_key_event(&key_event(0xBE, EVENT_KEY_DOWN)); // VK_OEM_PERIOD '.'
-    match &enter {
-        KeyAction::UpdateComposition { text, .. } => {
-            assert_eq!(text, "www.", "进入网址模式组合区应为 www.，实际: {}", text);
-        }
-        other => panic!(
-            "打满 www. 应进入网址模式(UpdateComposition)，实际: {:?}",
-            other
-        ),
-    }
-
-    // 续打 g o → 缓冲累积（网址字符不上屏）
-    press_letter(&coord, 'g');
-    let acc = press_letter(&coord, 'o');
-    match &acc {
-        KeyAction::UpdateComposition { text, .. } => {
-            assert_eq!(text, "www.go", "网址续打应累积，实际: {}", text);
-        }
-        other => panic!("网址续打应 UpdateComposition，实际: {:?}", other),
-    }
-
-    // 空格上屏原文
-    let commit = coord.handle_key_event(&key_event(0x20, EVENT_KEY_DOWN));
-    match commit {
-        KeyAction::InsertText { text, .. } => {
-            assert_eq!(text, "www.go", "网址空格应上屏原文，实际: {}", text);
-        }
-        other => panic!("网址空格应上屏 InsertText，实际: {:?}", other),
     }
 }
 
@@ -3684,7 +3638,7 @@ fn quick_input_digit_select_keys_are_not_in_the_takes_scope() {
     }
 }
 
-/// Ctrl 守卫的**模式处理器全覆盖**：五个独占模式（mix / 临拼 / 临英 / 特殊 / URL）都必须
+/// Ctrl 守卫的**模式处理器全覆盖**：各独占模式（mix / 临拼 / 临英 / 特殊）都必须
 /// 把 Ctrl 组合当成宿主快捷键，而不是普通输入。
 ///
 /// 盘查依据是「枚举 `match state.active` 的全部分支，逐个问它接了吗」——只 grep `MOD_CTRL`
@@ -3693,8 +3647,8 @@ fn quick_input_digit_select_keys_are_not_in_the_takes_scope() {
 /// 已接线的调用点无法告诉你漏了谁。
 ///
 /// ⚠️ 本测试只覆盖 mix / 临拼 / 临英三个能在 headless 里稳定构造的模式；特殊模式需要
-/// 配置码表方案、URL 模式需要 `input.url.prefixes` 命中，二者的守卫接线与这三个同构
-/// （同一个 `overlay_ctrl_alt_guard`），但**未被本测试覆盖**。
+/// 配置码表方案，它的守卫接线与这三个同构（同一个 `overlay_ctrl_alt_guard`），
+/// 但**未被本测试覆盖**。
 #[test]
 fn overlay_modes_treat_ctrl_combo_as_host_shortcut() {
     if !has_schemas() {
@@ -6096,8 +6050,8 @@ fn test_stats_recorded_through_deferred_policed() {
     if !has_schemas() {
         return;
     }
-    use std::sync::Arc;
     use aurora_bridge::deferred::DeferredHandler;
+    use std::sync::Arc;
 
     let store_path = std::env::temp_dir().join("wind_stats_deferred_test.redb");
     let _ = std::fs::remove_file(&store_path);
@@ -7702,350 +7656,13 @@ fn top_code_plain_phrase_direct_commit_defers() {
     }
 }
 
-/// 配对跳出键：中文配对开 + 配置 Tab 为跳出键。
-/// 输入左括号插入配对后，按 Tab 应等效输入右符号跳出（MoveCursorRight）；
-/// 栈空后再按 Tab 应透传给宿主（不吞正常按键）。
-#[test]
-fn auto_pair_jump_out_key_moves_cursor_right() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true; // 中文配对开（默认 chinese_punct=true → 用 cn_pairs）
-    cfg.input.auto_pair.jump_out_keys = vec!["tab".into()];
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    // 左括号（Shift+9 → '（'）：插入配对，光标置于中间
-    let ins = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    match ins {
-        KeyAction::InsertTextWithCursor {
-            text,
-            cursor_offset,
-        } => {
-            assert_eq!(text, "（）", "应插入中文配对");
-            assert_eq!(cursor_offset, 1, "光标应落在配对中间");
-        }
-        other => panic!("左括号应插入配对，实际: {:?}", other),
-    }
-
-    // 按 Tab：配对栈非空 → 跳出（光标右移）
-    let jump = coord.handle_key_event(&key_event(0x09, EVENT_KEY_DOWN));
-    assert!(
-        matches!(jump, KeyAction::MoveCursorRight { .. }),
-        "Tab 应跳出配对（MoveCursorRight），实际: {:?}",
-        jump
-    );
-
-    // 再按 Tab：栈已空 → 不拦截，透传给宿主
-    let passthrough = coord.handle_key_event(&key_event(0x09, EVENT_KEY_DOWN));
-    assert!(
-        matches!(passthrough, KeyAction::PassThrough),
-        "栈空时 Tab 应透传，实际: {:?}",
-        passthrough
-    );
-}
-
-/// 中英文切换**不清**配对栈：切走再切回后 Tab 仍能跳出。
-/// 切模式既不移动光标也不消除已插入的右符号，「光标紧贴右符号」的前提仍成立。
-/// （对照组见 `auto_pair_focus_lost_clears_stack`：失焦才该清。）
-#[test]
-fn auto_pair_stack_survives_mode_switch() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true;
-    cfg.input.auto_pair.jump_out_keys = vec!["tab".into()];
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    // 前置：左括号插入配对，栈里确有一层（不断言就无从区分「保住了」与「压根没进栈」）。
-    let ins = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        matches!(ins, KeyAction::InsertTextWithCursor { .. }),
-        "前置：左括号应插入配对，实际: {ins:?}"
-    );
-
-    // 左 Shift 释放切英文 → 再切回中文。两次都断言模式确实翻转，否则本测试会退化成
-    // 「压根没切过模式」的假绿。
-    coord.handle_key_event(&key_event(0xA0, EVENT_KEY_UP));
-    assert!(!coord.is_chinese_mode(), "前置：应已切到英文");
-    coord.handle_key_event(&key_event(0xA0, EVENT_KEY_UP));
-    assert!(coord.is_chinese_mode(), "前置：应已切回中文");
-
-    // 核心断言：配对栈跨模式切换存活 → Tab 仍跳出。
-    let jump = coord.handle_key_event(&key_event(0x09, EVENT_KEY_DOWN));
-    assert!(
-        matches!(jump, KeyAction::MoveCursorRight { .. }),
-        "中英切换不应清配对栈，切回后 Tab 应仍能跳出，实际: {jump:?}"
-    );
-}
-
-/// 跨模式跳出（本次改造的核心目标）：中文里打的配对，切到英文后 Tab 应能跳出。
-///
-/// 旧实现下这条必失败——协调器的跳出判定写在中文 composition 路径里，而英文模式在更早处
-/// 就 `PassThrough` 了，那段判定是死代码。
-#[test]
-fn auto_pair_jump_out_works_in_english_mode() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true;
-    cfg.input.auto_pair.jump_out_keys = vec!["tab".into()];
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    let ins = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        matches!(ins, KeyAction::InsertTextWithCursor { .. }),
-        "前置：中文模式下左括号应插入配对，实际: {ins:?}"
-    );
-    coord.handle_key_event(&key_event(0xA0, EVENT_KEY_UP));
-    assert!(!coord.is_chinese_mode(), "前置：应已切到英文");
-
-    let jump = coord.handle_key_event(&key_event(0x09, EVENT_KEY_DOWN));
-    assert!(
-        matches!(jump, KeyAction::MoveCursorRight { .. }),
-        "英文模式应能跳出中文模式建立的配对，实际: {jump:?}"
-    );
-}
-
-/// 英文半角普通配对键由协调器接手（此前由 DLL 的 `_englishPairEngine` 本地插入）。
-/// 这是「四条建立路径全部入同一个栈」的关键一步。
-#[test]
-fn english_halfwidth_pair_handled_by_coordinator() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.default.chinese_mode = false; // 英文模式
-    cfg.input.auto_pair.english = true;
-    cfg.input.auto_pair.jump_out_keys = vec!["tab".into()];
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    assert!(!coord.is_chinese_mode(), "前置：应处于英文模式");
-
-    // Shift+9 → `(`：协调器出字并补右括号
-    let ins = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    match ins {
-        KeyAction::InsertTextWithCursor {
-            ref text,
-            cursor_offset,
-        } => {
-            assert_eq!(text, "()", "英文半角应插入 ASCII 配对");
-            assert_eq!(cursor_offset, 1, "光标应落在配对中间");
-        }
-        other => panic!("英文半角左括号应由协调器插入配对，实际: {other:?}"),
-    }
-
-    let jump = coord.handle_key_event(&key_event(0x09, EVENT_KEY_DOWN));
-    assert!(
-        matches!(jump, KeyAction::MoveCursorRight { .. }),
-        "英文模式应能跳出自己建立的配对，实际: {jump:?}"
-    );
-}
-
-/// 吃键面未扩大（硬性约束的回归保护）：配对开关关闭时，协调器不得接手配对键。
-/// 接手即意味着 DLL 也吃了它，而 DLL 的判据是 `IsEnabled() && 在配对表内`——
-/// 两侧一旦不同源就是「吃了再吐」丢键。
-#[test]
-fn english_pair_not_handled_when_disabled() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.default.chinese_mode = false;
-    cfg.input.auto_pair.english = false; // 配对关
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    let act = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        matches!(act, KeyAction::PassThrough),
-        "配对关闭时英文括号必须透传（吃键面不得扩大），实际: {act:?}"
-    );
-}
-
-/// 失焦后配对状态的存废。**跨焦点保留已放弃**（2026-07-29 真机后决定）：
-/// 配对状态在 core 全局单栈与每个宿主进程各自一份的 DLL 计数两处，作用域模型对不齐，
-/// 加上焦点离开期间用户做了什么输入法无法感知，保留本质上是猜测——实测大部分情况失效。
-/// 故凡是会清输入缓冲的 reason，一律连配对状态一起清；`CtxLost` 是 DocMgr 噪声层，
-/// 它本来就不清任何输入态，配对状态也跟着不清。
-fn pair_state_after_focus_lost(reason: aurora_bridge::handler::FocusLostReason) -> KeyAction {
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true;
-    cfg.input.auto_pair.jump_out_keys = vec!["tab".into()];
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    let ins = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        matches!(ins, KeyAction::InsertTextWithCursor { .. }),
-        "前置：左括号应插入配对，实际: {ins:?}"
-    );
-    coord.handle_focus_lost(0, reason);
-    coord.handle_key_event(&key_event(0x09, EVENT_KEY_DOWN))
-}
-
-#[test]
-fn auto_pair_cleared_on_real_focus_loss() {
-    if !has_schemas() {
-        return;
-    }
-    use aurora_bridge::handler::FocusLostReason;
-    for reason in [
-        FocusLostReason::Thread,
-        FocusLostReason::DocChanged,
-        FocusLostReason::NoEditCtx,
-    ] {
-        let act = pair_state_after_focus_lost(reason);
-        assert!(
-            matches!(act, KeyAction::PassThrough),
-            "{reason:?} 属真实失焦，配对状态须清空、Tab 应透传，实际: {act:?}"
-        );
-    }
-}
-
-/// `CtxLost` 是 DocMgr 噪声层（Excel 实测同一 DocMgr 6ms 内掉了又回），它**不清任何输入态**，
-/// 配对状态也跟着不清——在这里清就是把 Excel 那类抖动变成「配对忽然跳不出去」。
-#[test]
-fn auto_pair_survives_ctx_lost_noise() {
-    if !has_schemas() {
-        return;
-    }
-    let act = pair_state_after_focus_lost(aurora_bridge::handler::FocusLostReason::CtxLost);
-    assert!(
-        matches!(act, KeyAction::MoveCursorRight { .. }),
-        "CtxLost 是噪声层，不该清配对状态，实际: {act:?}"
-    );
-}
-
-/// 配对跳出键未配置时：Tab 不被吞（回归保护——默认空集不启用）。
-#[test]
-fn auto_pair_no_jump_out_key_passes_tab_through() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true;
-    // jump_out_keys 默认只含 right_symbol → Tab 不在其中，不该被吞
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    // 插入配对
-    let ins = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        matches!(ins, KeyAction::InsertTextWithCursor { .. }),
-        "左括号应插入配对，实际: {:?}",
-        ins
-    );
-
-    // 未配置跳出键：Tab 即使栈非空也不跳出，透传
-    let tab = coord.handle_key_event(&key_event(0x09, EVENT_KEY_DOWN));
-    assert!(
-        matches!(tab, KeyAction::PassThrough),
-        "未配置跳出键时 Tab 应透传，实际: {:?}",
-        tab
-    );
-}
-
-/// `right_symbol` 在跳出列表内：打右括号 → 光标越过已配对的右符号（不重复插入）。
-#[test]
-fn jump_out_right_symbol_enabled_moves_cursor() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true;
-    cfg.input.auto_pair.jump_out_keys = vec!["right_symbol".into()];
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    // Shift+9 → `（`：插入配对
-    let ins = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        matches!(ins, KeyAction::InsertTextWithCursor { .. }),
-        "左括号应插入配对，实际: {ins:?}"
-    );
-    // Shift+0 → `）`：栈顶正是它 → 跳出
-    let jump = coord.handle_key_event(&key_event_mods(0x30, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        matches!(jump, KeyAction::MoveCursorRight { .. }),
-        "启用 right_symbol 时右括号应跳出，实际: {jump:?}"
-    );
-}
-
-/// `right_symbol` 不在跳出列表内：打右括号 → **正常上屏该字符，不跳出**。
-/// 回归保护：列表里没有就是没有，不做隐式补偿（用户拍板的语义）。
-#[test]
-fn jump_out_right_symbol_disabled_commits_char() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true;
-    cfg.input.auto_pair.jump_out_keys = vec!["tab".into()]; // 只留 Tab，不含 right_symbol
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    let ins = coord.handle_key_event(&key_event_mods(0x39, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        matches!(ins, KeyAction::InsertTextWithCursor { .. }),
-        "左括号应插入配对，实际: {ins:?}"
-    );
-    let act = coord.handle_key_event(&key_event_mods(0x30, EVENT_KEY_DOWN, 0x0001));
-    assert!(
-        !matches!(act, KeyAction::MoveCursorRight { .. }),
-        "未启用 right_symbol 时右括号不该跳出，实际: {act:?}"
-    );
-    assert!(
-        format!("{act:?}").contains('）'),
-        "应正常上屏右括号，实际: {act:?}"
-    );
-    // Tab 仍可跳出（栈未被右符号消费）
-    let tab = coord.handle_key_event(&key_event(0x09, EVENT_KEY_DOWN));
-    assert!(
-        matches!(tab, KeyAction::MoveCursorRight { .. }),
-        "Tab 应仍能跳出，实际: {tab:?}"
-    );
-}
-
-/// 引号配对回归：**连按引号键每次都开新的一对**，绝不交替。
-///
-/// 历史 bug：引号是唯一的对称配对键，`PunctuationConverter` 用交替开关决定出左还是出右
-/// （第 1 次 `“`、第 2 次 `”`），而自动配对**一次按键就把左右都吐出去了**、开关却只前进
-/// 一格 → 第 2 次按键给出 `”` → 不是左符号（不插对）、却是右符号（跳出或裸提交单个 `”`）
-/// → 「出对 / 出单」严格交替循环。修法是配对生效时把交替态钉死在「左」，
-/// 左右判定单一收口到配对栈，跳出交给 `jump_out_keys`。
-#[test]
-fn auto_pair_quote_always_opens_new_pair() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true;
-    cfg.input.auto_pair.chinese_pairs.push("“”".into());
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    // Shift+VK_OEM_7(0xDE) = `"` → 中文双引号
-    for round in 1..=3 {
-        let act = coord.handle_key_event(&key_event_mods(0xDE, EVENT_KEY_DOWN, 0x0001));
-        match act {
-            KeyAction::InsertTextWithCursor {
-                text,
-                cursor_offset,
-            } => {
-                assert_eq!(text, "“”", "第 {round} 次按引号应插入完整一对");
-                assert_eq!(cursor_offset, 1, "第 {round} 次光标应落在配对中间");
-            }
-            other => {
-                panic!("第 {round} 次按引号应插入配对（不得跳出/裸出单引号），实际: {other:?}")
-            }
-        }
-    }
-}
-
-/// 引号不在配对表内时，保持原生「第一次左、第二次右」交替（不被上面的钉左误伤）。
+/// 引号保持原生「第一次左、第二次右」交替。
 #[test]
 fn quote_alternates_when_not_in_pair_table() {
     if !has_schemas() {
         return;
     }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true; // 配对开，但配对表**不含**引号
+    let cfg = config_with("wubi86");
     let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
 
     let first = coord.handle_key_event(&key_event_mods(0xDE, EVENT_KEY_DOWN, 0x0001));
@@ -8132,57 +7749,13 @@ fn english_mode_uncovered_punct_still_passes_through() {
     );
 }
 
-/// 自定义映射 × 引号配对：`"1`/`"2` 两行 = **左形/右形**，配对时一次按键两行都用上。
-///
-/// 语义定名（用户拍板）：界面上的「第一次 / 第二次」实质是左形 / 右形，「第几次」只是没有
-/// 自动配对时按次序推导角色的说法。此前配对判定用硬编码的内置 `“”`，而上屏走自定义映射：
-/// 把引号自定义成 `「」` 后判定不命中 → 不钉左 → 交替态照旧前进 → 第 2 次按键出 `」`（右符号）
-/// → 「出对 / 出单」交替循环复发；反过来若判定命中却钉左，`"2` 那行就永远取不到。
-#[test]
-fn custom_quote_mapping_pairs_by_left_right_rows() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = true; // 默认中文配对表已含「」
-    cfg.input.punct.custom_enabled = true;
-    cfg.input
-        .punct
-        .custom_mappings
-        .insert("\"1".into(), vec!["「".into()]);
-    cfg.input
-        .punct
-        .custom_mappings
-        .insert("\"2".into(), vec!["」".into()]);
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-
-    // 连按两次：每次都插入由「左形 + 右形」组成的完整一对，第二次不退化成裸右符号。
-    for round in 1..=2 {
-        let act = coord.handle_key_event(&key_event_mods(0xDE, EVENT_KEY_DOWN, 0x0001));
-        match act {
-            KeyAction::InsertTextWithCursor {
-                text,
-                cursor_offset,
-            } => {
-                assert_eq!(
-                    text, "「」",
-                    "第 {round} 次按引号应插入自定义左右形组成的一对"
-                );
-                assert_eq!(cursor_offset, 1, "第 {round} 次光标应落在配对中间");
-            }
-            other => panic!("第 {round} 次按引号应插入自定义配对，实际: {other:?}"),
-        }
-    }
-}
-
-/// 自定义映射 + 引号**不**参与配对时，两行仍按「第一次左 / 第二次右」交替取用。
+/// 自定义映射下两行按「第一次左 / 第二次右」交替取用。
 #[test]
 fn custom_quote_mapping_alternates_without_pairing() {
     if !has_schemas() {
         return;
     }
     let mut cfg = config_with("wubi86");
-    cfg.input.auto_pair.chinese = false; // 配对关 → 回到按次序取行
     cfg.input.punct.custom_enabled = true;
     cfg.input
         .punct
@@ -8779,36 +8352,6 @@ fn test_temp_english_cursor_edit() {
     assert_eq!(action_caret(&act), Some(2), "Delete 后光标不动");
 }
 
-/// 网址模式：夺取进入时缓冲已含前缀（"www."），光标须落其后；支持光标位编辑。
-#[test]
-fn test_url_mode_cursor_edit() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.input.url.enabled = true;
-    cfg.input.url.prefixes = vec!["www.".into()];
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    for c in ['w', 'w', 'w'] {
-        press_letter(&coord, c);
-    }
-    let enter = coord.handle_key_event(&key_event(0xBE, EVENT_KEY_DOWN)); // '.' 补满前缀
-    assert_eq!(action_text(&enter).as_deref(), Some("www."));
-    let act = type_str(&coord, "ab");
-    assert_eq!(
-        action_text(&act).as_deref(),
-        Some("www.ab"),
-        "续打应追加在前缀之后"
-    );
-    assert_eq!(action_caret(&act), Some(6));
-
-    // www.a|b → 退格删 'a'
-    assert_eq!(action_caret(&tap(&coord, VK_LEFT)), Some(5));
-    let act = tap(&coord, VK_BACK);
-    assert_eq!(action_text(&act).as_deref(), Some("www.b"));
-    assert_eq!(action_caret(&act), Some(4));
-}
-
 /// 临时拼音：与主输入同构——caret 需跨过引擎插入的音节分隔符，且模式引导符（`）作为只读
 /// 前缀计入 caret，光标进不去。
 #[test]
@@ -8963,29 +8506,6 @@ fn test_english_fullwidth_ctrl_alt_not_intercepted() {
 }
 
 #[test]
-fn test_english_fullwidth_autopair_uses_fullwidth_pairs() {
-    if !has_schemas() {
-        return;
-    }
-    // 配对表须由 english_pairs 逐字符过同一条流水线派生：打 `(` 出 `（` 就配 `）`。
-    // 关键回归：不可复用 cn_pairs——`to_full_width('[')` = `［`(U+FF3B) 而 cn_pairs 是
-    // `【`(U+3010)，混用会「打 [ 出 【 却配 ］」。故此处专测 `[`。
-    let mut cfg = config_english_fullwidth();
-    cfg.input.auto_pair.english = true;
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    match coord.handle_key_event(&key_event(0xDB, EVENT_KEY_DOWN)) {
-        KeyAction::InsertTextWithCursor {
-            text,
-            cursor_offset,
-        } => {
-            assert_eq!(text, "［］", "全角 `[` 应配全角 `］`，而非中文的 【】");
-            assert_eq!(cursor_offset, 1, "光标应落在配对之间");
-        }
-        other => panic!("英文全角 `[` 应插入全角配对，实际: {:?}", other),
-    }
-}
-
-#[test]
 fn test_chinese_fullwidth_digits_1_to_9() {
     if !has_schemas() {
         return;
@@ -9095,8 +8615,8 @@ fn test_chinese_fullwidth_numpad_direct_no_caps() {
 // 用它写造词测试会得到「永远不造词」的假象。
 // ──────────────────────────────────────────────────────────────────────────
 
-use std::sync::Arc;
 use aurora_store::Store;
+use std::sync::Arc;
 
 /// 建一个开/关自动造词的 wubi86 无头协调器 + 独立 store。
 fn auto_phrase_coord(tag: &str, enabled: bool) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
@@ -10703,9 +10223,8 @@ fn top_code_overlong_phrase_in_mixed_schema() {
 // 「空码」= 打了码但一个候选都没有（多为码表打错字根）。既有行为是把废码连同标点一起
 // 送上屏；`clear` 让废码作废、标点照常出。
 //
-// 标点有**两个彼此独立的上屏出口**，各写一对测试：普通标点，以及智能符号
-// `hold_composition` 的 `CommitAndHoldComposition`。只接一个的后果是「开了智能符号的
-// 宿主上开关不生效」——这种间歇性不一致没有对照测试根本发现不了。
+// 标点上屏只有一个出口（智能符号的 `CommitAndHoldComposition` 随该功能一起删除），
+// 但 clear / commit / clear_no_input 三态各自都要有对照测试。
 //
 // ⚠️ 每个测试都必须先断言「候选确实为空」：`bbqq` 若哪天进了词库，测试会退化成在验
 // 「有候选时按标点顶屏首选」，那条路与本开关无关，断言却照样能过。
@@ -10773,165 +10292,6 @@ fn test_punct_on_empty_commit_still_outputs_raw_code() {
             assert_eq!(text, "bbqq。", "commit（默认）应把废码连同句号一起上屏");
         }
         other => panic!("空码按句号应上屏原码+标点，实际: {:?}", other),
-    }
-}
-
-/// clear：智能符号 `hold_composition` 出口同样丢弃废码，符号仍进 held。
-#[test]
-fn test_punct_on_empty_clear_discards_in_hold_composition() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_punct_on_empty(true);
-    cfg.input.symbol.smart_mode = true;
-    cfg.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    type_empty_code(&coord);
-    match coord.handle_key_event(&key_event(0xBE, EVENT_KEY_DOWN)) {
-        KeyAction::CommitAndHoldComposition {
-            commit_text,
-            hold_text,
-            ..
-        } => {
-            assert_eq!(commit_text, "", "clear 应丢弃废码，commit_text 为空");
-            assert_eq!(hold_text, "。", "符号本身仍照常进 held");
-        }
-        other => panic!(
-            "智能符号 hold 下空码按句号应走 CommitAndHold，实际: {:?}",
-            other
-        ),
-    }
-}
-
-/// 对照组：智能符号 hold 出口在默认 commit 下仍顶废码上屏。
-#[test]
-fn test_punct_on_empty_commit_outputs_raw_code_in_hold_composition() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_punct_on_empty(false);
-    cfg.input.symbol.smart_mode = true;
-    cfg.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    type_empty_code(&coord);
-    match coord.handle_key_event(&key_event(0xBE, EVENT_KEY_DOWN)) {
-        KeyAction::CommitAndHoldComposition {
-            commit_text,
-            hold_text,
-            ..
-        } => {
-            assert_eq!(commit_text, "bbqq", "commit（默认）应把废码顶上屏");
-            assert_eq!(hold_text, "。", "符号本身进 held");
-        }
-        other => panic!(
-            "智能符号 hold 下空码按句号应走 CommitAndHold，实际: {:?}",
-            other
-        ),
-    }
-}
-
-/// 行为层守门：**一个相关开关都不设**，只靠出厂默认，空码按标点就应丢弃废码。
-///
-/// 上面那一族测试全都显式写了 `punct_on_empty_behavior`，所以把出厂默认改回 `commit`
-/// 它们一条都不会红——本仓实测过「只翻一个默认值，全量两千多条无一失败」。这条补的正是
-/// 那个缺口：它不写该键，读到什么就是真实用户装完就用的行为。
-///
-/// ⚠️ `punct_commit` 仍要显式对齐 L2（结构体零值 false、出厂 toml true）。不对齐的话标点
-/// 在 `has_input` 守卫处就被吞掉，断言会以「没上屏废码」的形态通过——测的却是一个标点功能
-/// 整个关闭的系统，是彻底的假绿。
-#[test]
-fn punct_on_empty_default_discards_without_any_config() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_with("wubi86");
-    cfg.schema.codetable.punct_commit = true; // 对齐 L2，非本测试的被测项
-    assert_eq!(
-        cfg.input.punct_on_empty_behavior, "clear",
-        "出厂默认应为 clear；这行读的就是 L1，改它等于改产品决策"
-    );
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    type_empty_code(&coord);
-    match coord.handle_key_event(&key_event(0xBE, EVENT_KEY_DOWN)) {
-        KeyAction::InsertText { text, .. } => {
-            assert_eq!(text, "。", "装完就用的默认行为：废码丢弃，只上屏句号");
-        }
-        other => panic!("空码按句号应上屏标点，实际: {:?}", other),
-    }
-}
-
-/// 反向对照：同一条路径下，回车与空格的出厂默认**仍然上屏原码**。
-///
-/// 这组不一致是产品决策，不是漏改。没有这条对照，将来有人「顺手把三个统一成 clear」时，
-/// 上面那条测试照样绿——它只看标点。
-#[test]
-fn enter_and_space_on_empty_still_commit_by_default() {
-    if !has_schemas() {
-        return;
-    }
-    for (vk, name) in [(0x0D_u32, "回车"), (0x20, "空格")] {
-        let coord = Coordinator::new_headless(config_with("wubi86"), Some(&data_dir()));
-        type_empty_code(&coord);
-        match coord.handle_key_event(&key_event(vk, EVENT_KEY_DOWN)) {
-            KeyAction::InsertText { text, .. } => {
-                assert!(
-                    text.starts_with("bbqq"),
-                    "{name}的出厂默认仍应上屏原码（保住「我就要这串原码」的出口），实际: {text:?}"
-                );
-            }
-            other => panic!("{name}空码应上屏原码，实际: {other:?}"),
-        }
-    }
-}
-
-// ───── clear_no_input：废码丢弃，标点本身也不上屏 ─────
-//
-// ★ 这一族配置的行为其实是**两根轴**：「废码上不上屏」与「按键字符本身出不出」。
-// `clear` 是「丢废码、出标点」，`clear_no_input` 是「丢废码、也不出标点」——后者与回车/
-// 空格的 `clear` 才是同一格（那两个键的 clear 本就返回 `ClearComposition`，键本身不产出）。
-//
-// ⚠️ 每条都必须断言**具体的 KeyAction 变体**，不能只看「文本为空」：`InsertText("")` 与
-// `ClearComposition` 在「屏幕上没多出字」这个层面无法区分，而前者是错的——它会把一次空
-// 提交推给宿主，组合态的收尾时机随宿主而异。
-
-/// clear_no_input：普通标点出口——废码丢弃，句号也不上屏，整个按键当没按过。
-#[test]
-fn test_punct_on_empty_clear_no_input_swallows_punct() {
-    if !has_schemas() {
-        return;
-    }
-    let coord = Coordinator::new_headless(
-        config_punct_on_empty_value("clear_no_input"),
-        Some(&data_dir()),
-    );
-    type_empty_code(&coord);
-    match coord.handle_key_event(&key_event(0xBE, EVENT_KEY_DOWN)) {
-        KeyAction::ClearComposition => {}
-        other => panic!("clear_no_input 应收组合且不产出任何字符，实际: {:?}", other),
-    }
-}
-
-/// clear_no_input：智能符号 hold 出口——**不得**走 CommitAndHoldComposition。
-///
-/// ★ 这条是本族最容易漏的一条。上一版的 `clear` 只把 `commit_text` 置空却仍走 hold 分支，
-/// 照搬到 `clear_no_input` 就会挂一个屏幕上并不存在的 hold 态：下一次按同键的 press2 会去
-/// 删一个从未上屏的符号，表现为「开了智能符号后，丢废码会顺手吃掉前面一个字」。
-#[test]
-fn test_punct_on_empty_clear_no_input_skips_hold_composition() {
-    if !has_schemas() {
-        return;
-    }
-    let mut cfg = config_punct_on_empty_value("clear_no_input");
-    cfg.input.symbol.smart_mode = true;
-    cfg.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-    let coord = Coordinator::new_headless(cfg, Some(&data_dir()));
-    type_empty_code(&coord);
-    match coord.handle_key_event(&key_event(0xBE, EVENT_KEY_DOWN)) {
-        KeyAction::ClearComposition => {}
-        other => panic!(
-            "标点不上屏就没有可 hold 的对象，不该走 CommitAndHold，实际: {:?}",
-            other
-        ),
     }
 }
 
@@ -11230,228 +10590,6 @@ fn test_s2t_and_t2s_are_mutually_exclusive() {
         .position(|t| t == "汉字")
         .expect("拼音 hanzi 应出「汉字」候选");
     assert_eq!(display2[p2], "漢字", "s2t 后开，应转繁体");
-}
-
-// ─────────────────── Unicode 码点输入（前缀夺取式） ───────────────────
-//
-// ⚠️ 这一族**必须从 VK 出发**，不能只测 `unicode_decode`：本功能的每一条路都要先经过
-// 按键分派（夺取闸门 / 临英转交 / 回退闸门），而那三处正是最容易接错的地方。
-// 曾有一整族「反向枚举 411 音节」的测试全绿而用户一个字打不出，根因就是入口不同层。
-//
-// `+` 是 **Shift + VK_OEM_PLUS(0xBB)**，不是 ASCII 0x2B。符号键一律用 VK 常量：
-// 按字符传 VK 会敲到一个不存在的键上，而测试照样「通过」（没人接管那个键码）。
-// 十六进制里的 `0-9`/`a-f` 可以继续用 `press_letter`——大写字母与数字的 VK 恰好等于
-// 它们的 ASCII 码，这是符号键**没有**的巧合，别据此推广。
-
-/// `+` 键：Shift + VK_OEM_PLUS。
-const VK_OEM_PLUS: u32 = 0xBB;
-
-fn press_plus(coord: &Coordinator) -> KeyAction {
-    coord.handle_key_event(&key_event_mods(
-        VK_OEM_PLUS,
-        EVENT_KEY_DOWN,
-        aurora_ipc::protocol::MOD_SHIFT,
-    ))
-}
-
-// Shift+字母复用本文件上方既有的 `press_shift_letter`（4067 行），不另写一份。
-
-fn unicode_config(schema: &str) -> aurora_config::config::Config {
-    let mut cfg = config_with(schema);
-    cfg.input.unicode.enabled = true;
-    cfg
-}
-
-#[test]
-fn unicode_lowercase_entry_and_commit() {
-    if !has_schemas() {
-        return;
-    }
-    // u + 4 e 0 0 → 空格上屏「一」。走的是码表缓冲那条入口。
-    let coord = Coordinator::new_headless(unicode_config("wubi86"), Some(&data_dir()));
-
-    press_letter(&coord, 'u'); // 此刻还是普通五笔编码
-    let enter = press_plus(&coord);
-    match &enter {
-        KeyAction::UpdateComposition { text, .. } => {
-            assert_eq!(
-                text, "u+",
-                "补满前缀应夺取进入，组合区含前缀，实际: {}",
-                text
-            )
-        }
-        other => panic!("u+ 应夺取进入 Unicode 模式，实际: {:?}", other),
-    }
-    assert_eq!(coord.debug_active_mode(), Some("unicode"));
-
-    for c in "4e00".chars() {
-        press_letter(&coord, c);
-    }
-    assert_eq!(
-        coord.debug_page_texts().first().map(String::as_str),
-        Some("一"),
-        "u+4e00 应出候选「一」"
-    );
-
-    match coord.handle_key_event(&key_event(0x20, EVENT_KEY_DOWN)) {
-        KeyAction::InsertText { text, .. } => assert_eq!(text, "一", "空格应上屏解析出的字符"),
-        other => panic!("空格应上屏，实际: {:?}", other),
-    }
-    assert_eq!(coord.debug_active_mode(), None, "上屏后应退出模式");
-}
-
-/// 大写 `U+` 那条入口：Shift+U 会先进临时英文，靠 `handle_temp.rs` 的转交分支接上。
-///
-/// 这条**不能**由夺取闸门覆盖——那时 `input_buffer` 是空的，闸门看不见那个 U。
-#[test]
-fn unicode_uppercase_entry_via_temp_english() {
-    if !has_schemas() {
-        return;
-    }
-    let coord = Coordinator::new_headless(unicode_config("wubi86"), Some(&data_dir()));
-
-    press_shift_letter(&coord, 'U');
-    assert_eq!(
-        coord.debug_active_mode(),
-        Some("temp_english"),
-        "Shift+字母先进临英，这是转交分支存在的理由"
-    );
-    let enter = press_plus(&coord);
-    match &enter {
-        KeyAction::UpdateComposition { text, .. } => assert_eq!(text, "U+"),
-        other => panic!("临英缓冲 U 上按 + 应转交 Unicode 模式，实际: {:?}", other),
-    }
-    assert_eq!(coord.debug_active_mode(), Some("unicode"));
-
-    for c in "41".chars() {
-        press_letter(&coord, c);
-    }
-    match coord.handle_key_event(&key_event(0x20, EVENT_KEY_DOWN)) {
-        KeyAction::InsertText { text, .. } => assert_eq!(text, "A", "U+41 应上屏 A"),
-        other => panic!("空格应上屏，实际: {:?}", other),
-    }
-}
-
-/// 在夺取边界按退格 → 回退到**码表**输入流（`RewindOrigin::Normal`）。
-///
-/// ⚠️ 边界判据是「模式缓冲 == `Rewind::host_text`」，而进入时缓冲**恰好就是**那条前缀
-/// ⇒ 刚进模式就已经在边界上，**第一次**退格即回退。别照「先删一个字符再退」的直觉写，
-/// 那样第二次退格作用的已经是恢复后的码表缓冲了（症状：拿到 `ClearComposition`）。
-#[test]
-fn unicode_rewind_returns_to_codetable() {
-    if !has_schemas() {
-        return;
-    }
-    let coord = Coordinator::new_headless(unicode_config("wubi86"), Some(&data_dir()));
-    press_letter(&coord, 'u');
-    press_plus(&coord);
-    assert_eq!(coord.debug_active_mode(), Some("unicode"));
-
-    let back = coord.handle_key_event(&key_event(0x08, EVENT_KEY_DOWN));
-    assert_eq!(
-        coord.debug_active_mode(),
-        None,
-        "在夺取边界按退格应撤销夺取（active_hijack_buffer 与 rewind_hijack 都要认得 Unicode）"
-    );
-    match &back {
-        KeyAction::UpdateComposition { text, .. } => assert!(
-            text.starts_with('u'),
-            "快照应回放到码表输入流，组合区实际: {}",
-            text
-        ),
-        other => panic!("回退应重建组合区，实际: {:?}", other),
-    }
-}
-
-/// 同上，但来源是临英 → 必须回到**临英**，而不是把大写 U 塞进码表缓冲。
-///
-/// 这正是 `RewindOrigin` 存在的理由：两个入口共用一个模式，回退目标却不同。
-#[test]
-fn unicode_rewind_returns_to_temp_english() {
-    if !has_schemas() {
-        return;
-    }
-    let coord = Coordinator::new_headless(unicode_config("wubi86"), Some(&data_dir()));
-    press_shift_letter(&coord, 'U');
-    press_plus(&coord);
-    assert_eq!(coord.debug_active_mode(), Some("unicode"));
-
-    let back = coord.handle_key_event(&key_event(0x08, EVENT_KEY_DOWN)); // 进入即在边界
-    assert_eq!(
-        coord.debug_active_mode(),
-        Some("temp_english"),
-        "来源是临英就该退回临英；退成码表输入的话，码表会拿一个它不认的大写 U 去查词"
-    );
-    match &back {
-        KeyAction::UpdateComposition { text, .. } => {
-            assert_eq!(text, "U", "临英缓冲应恢复成夺取前的 U")
-        }
-        other => panic!("回退应重建临英组合区，实际: {:?}", other),
-    }
-}
-
-/// 无效码点：不出候选，空格上屏缓冲原文（而不是吞掉、也不是上屏一行提示文字）。
-#[test]
-fn unicode_invalid_code_point_commits_raw_text() {
-    if !has_schemas() {
-        return;
-    }
-    let coord = Coordinator::new_headless(unicode_config("wubi86"), Some(&data_dir()));
-    press_letter(&coord, 'u');
-    press_plus(&coord);
-    for c in "zz".chars() {
-        press_letter(&coord, c);
-    }
-    assert!(
-        coord.debug_page_texts().is_empty(),
-        "非十六进制串不该出候选——提示行会被空格上屏成正文"
-    );
-    match coord.handle_key_event(&key_event(0x20, EVENT_KEY_DOWN)) {
-        KeyAction::InsertText { text, .. } => {
-            assert_eq!(
-                text, "u+zz",
-                "无候选时空格上屏原文，用户至少看得见自己打了什么"
-            )
-        }
-        other => panic!("空格应上屏原文，实际: {:?}", other),
-    }
-}
-
-/// 关着的时候 `u+` 必须仍是普通编码 —— 出厂态零回归。
-#[test]
-fn unicode_disabled_leaves_input_untouched() {
-    if !has_schemas() {
-        return;
-    }
-    let coord = Coordinator::new_headless(config_with("wubi86"), Some(&data_dir())); // 未开启
-    press_letter(&coord, 'u');
-    press_plus(&coord);
-    assert_eq!(
-        coord.debug_active_mode(),
-        None,
-        "总开关关着时不该进任何模式（try_prefix_hijack 应在读完开关后立即返回）"
-    );
-}
-
-/// 十六进制里的数字键必须进缓冲，不能被当成序号选词。
-///
-/// `commit_by_offset` 对本模式返回 `None` 就是为了这条：候选恒只有一条，而 `0-9` 全是
-/// 码位。放行选词的话 `u+1...` 里的每个数字都会被吃掉。
-#[test]
-fn unicode_digits_are_code_not_selection() {
-    if !has_schemas() {
-        return;
-    }
-    let coord = Coordinator::new_headless(unicode_config("wubi86"), Some(&data_dir()));
-    press_letter(&coord, 'u');
-    press_plus(&coord);
-    let acc = press_letter(&coord, '1');
-    match &acc {
-        KeyAction::UpdateComposition { text, .. } => {
-            assert_eq!(text, "u+1", "数字应进缓冲，实际: {}", text)
-        }
-        other => panic!("数字键不该触发选词，实际: {:?}", other),
-    }
 }
 
 /// z 夺取进 `target`（`temp_pinyin` / `mix:quick_mix`）后打成 `lalal`，选一个双字词（吃掉

@@ -8,13 +8,13 @@
 //! 九宫格图 / 阴影模糊 / z 分层 / 渐变背景均已支持。
 
 use crate::text::dwrite::{ColorRun, TextRenderer, TextStyle};
+use aurora_theme::schema::Dim;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use tiny_skia::{
     Color, FillRule, FilterQuality, GradientStop, LinearGradient, Mask, Paint, PathBuilder,
     Pattern, PixmapMut, PixmapPaint, Point, RadialGradient, SpreadMode, Transform,
 };
-use aurora_theme::schema::Dim;
 
 /// 阴影蒙版缓存键：(盒宽, 盒高, 圆角, 模糊, 亚像素相位 x, 亚像素相位 y)。
 ///

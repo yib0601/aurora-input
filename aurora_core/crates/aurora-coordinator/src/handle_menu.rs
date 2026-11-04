@@ -182,15 +182,6 @@ impl Drop for ProbeGate {
 }
 
 impl Coordinator {
-    /// 候选窗空白处被双击（`UiEvent::CandidateDoubleClick`）：开关打开时截候选窗到剪贴板。
-    ///
-    /// 与右键菜单「截图到剪贴板」走同一条 UI 命令，Toast 与失败文案也就同一套。
-    pub(crate) fn on_candidate_double_click(&self) {
-        if self.rt().config.ui.candidate.double_click_screenshot {
-            let _ = self.ui_tx.send(UiCommand::ScreenshotCandidateToClipboard);
-        }
-    }
-
     /// 菜单项激活：UI 已自管导航/子菜单，这里仅按动作派发。
     pub(crate) fn menu_action(&self, kind: MenuKind) {
         let (page_local, text) = {
@@ -225,6 +216,10 @@ impl Coordinator {
                 self.notify_toolbar();
                 self.notify_ui_hide();
             }
+            // 符号自动配对功能已删除，菜单不再产出此项；`aurora-ui-types` 里的
+            // `MenuCmd::AutoPairRule` 变体（协议 id 9000..=9999）仍在，收到即忽略——
+            // 删它要动 aurora-ui-types / aurora-ui 两个 crate，不属本任务范围。
+            MenuCmd::AutoPairRule(_) => {}
             MenuCmd::SchemaSelect(i) => self.select_schema(i),
             MenuCmd::TogglePunct => {
                 self.handle_menu_command("toggle_punct");
@@ -291,10 +286,8 @@ impl Coordinator {
                     .and_then(|p| p.parent().map(|d| d.to_path_buf())),
             ),
             MenuCmd::OpenLogDir => self.open_dir(Config::log_dir()),
-            MenuCmd::ToggleInputDiagnostics => self.toggle_input_diag_hud(),
             MenuCmd::TogglePasswordSuppress => self.toggle_password_suppress(),
             MenuCmd::FirstShowMode(m) => self.set_first_show_mode(m),
-            MenuCmd::AutoPairRule(m) => self.set_auto_pair_rule(m),
             MenuCmd::CompatRuleEnabled(m) => self.set_compat_rule_enabled(m == 1),
             MenuCmd::CandidatePositionRule(m) => self.set_candidate_position_rule(m),
             MenuCmd::IgnoreHostImeCloseRule(m) => self.set_ignore_host_ime_close_rule(m),
@@ -320,12 +313,6 @@ impl Coordinator {
             | MenuCmd::TooltipCommitSection
             | MenuCmd::TooltipCopyLine
             | MenuCmd::TooltipCommitLine => self.tooltip_menu_action(cmd),
-            MenuCmd::InputDiagCopy => {
-                let _ = self.ui_tx.send(UiCommand::CopyInputDiagText);
-            }
-            MenuCmd::InputDiagToggleSection(i) => self.toggle_input_diag_section(i),
-            MenuCmd::InputDiagToggleFreeze => self.toggle_input_diag_freeze(),
-            MenuCmd::InputDiagToggleTopmost => self.toggle_input_diag_topmost(),
             MenuCmd::TooltipScreenshot => {
                 if let Some(dir) = screenshots_dir() {
                     let _ = self.ui_tx.send(UiCommand::ScreenshotTooltip {
@@ -738,115 +725,6 @@ impl Coordinator {
         });
     }
 
-    /// 输入诊断 HUD 上右键请求的菜单：复制 / 显示分类 / 停止刷新 / 置顶 / 关闭。
-    ///
-    /// 勾选态直接读运行时状态，故菜单永远反映当前真值——这类"开关型"菜单最忌讳
-    /// 勾选态与实际行为不同步，那会让用户反复点同一项。
-    pub(crate) fn show_input_diag_menu(&self, x: i32, y: i32) {
-        use std::sync::atomic::Ordering::Relaxed;
-        use aurora_ui_types::{DiagSections, MenuItemSpec as M};
-        let cmd = |c: MenuCmd| MenuKind::Command(c);
-        let sections = *self
-            .input_diag_sections
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let section_items: Vec<M> = DiagSections::ALL
-            .iter()
-            .map(|&i| {
-                M::leaf(
-                    DiagSections::label(i),
-                    cmd(MenuCmd::InputDiagToggleSection(i)),
-                    true,
-                    sections.get(i),
-                )
-            })
-            .collect();
-        let items = vec![
-            M::leaf("复制全部内容", cmd(MenuCmd::InputDiagCopy), true, false),
-            M::separator(),
-            M::submenu("显示分类", section_items),
-            M::separator(),
-            M::leaf(
-                "停止刷新",
-                cmd(MenuCmd::InputDiagToggleFreeze),
-                true,
-                self.input_diag_frozen.load(Relaxed),
-            ),
-            M::leaf(
-                "窗口置顶",
-                cmd(MenuCmd::InputDiagToggleTopmost),
-                true,
-                self.input_diag_topmost.load(Relaxed),
-            ),
-            M::separator(),
-            M::leaf(
-                "关闭诊断 HUD",
-                cmd(MenuCmd::ToggleInputDiagnostics),
-                true,
-                false,
-            ),
-        ];
-        self.mark_menu_open(0, String::new());
-        let _ = self.ui_tx.send(UiCommand::ShowCandidateMenu {
-            items,
-            anchor: MenuAnchor::at_point(x, y),
-        });
-    }
-
-    /// 切换分区显示。
-    ///
-    /// ⚠ **必须强制推一次**：冻结中 `push_input_diag_hud_if_visible` 会早退，此时切分类
-    /// 屏幕上毫无变化，用户只能判断为"菜单坏了"。分区是显示配置而非数据，与冻结正交。
-    pub(crate) fn toggle_input_diag_section(&self, idx: u8) {
-        {
-            let mut s = self
-                .input_diag_sections
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            s.toggle(idx);
-        }
-        self.push_input_diag_hud(true);
-    }
-
-    /// 停止/恢复刷新。恢复时立即推一次当前快照，否则要等下一次焦点事件才回到实时值。
-    pub(crate) fn toggle_input_diag_freeze(&self) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let now = !self.input_diag_frozen.load(Relaxed);
-        self.input_diag_frozen.store(now, Relaxed);
-        // 冻结时也推一次：HUD 要立刻显示"⏸ 已停止刷新"这行标注，否则用户无从确认开关生效。
-        self.push_input_diag_hud(true);
-    }
-
-    /// 切换窗口置顶。同样强制推——置顶状态由 UI 在渲染时应用。
-    pub(crate) fn toggle_input_diag_topmost(&self) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let now = !self.input_diag_topmost.load(Relaxed);
-        self.input_diag_topmost.store(now, Relaxed);
-        self.push_input_diag_hud(true);
-    }
-
-    /// 切换输入诊断 HUD 显隐（高级菜单）：开启时立即推送当前快照，关闭时下发隐藏。
-    pub(crate) fn toggle_input_diag_hud(&self) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let now = !self.input_diag_hud_visible.load(Relaxed);
-        self.input_diag_hud_visible.store(now, Relaxed);
-        // 采集开关随 HUD 显隐下发（广播）。关闭时也必须推——否则 DLL 会在 HUD 早已关掉
-        // 之后继续每次焦点切换都采集窗口链，白付开销且无人消费。
-        self.push_diag_snapshot_config(0);
-        if now {
-            // ⚠ 打开时复位置顶与冻结——这两个开关都能把自己的逃生口关上：
-            //   · 非置顶 → HUD 沉到宿主窗口之下 → 右键菜单点不到 → 没法再打开置顶；
-            //   · 冻结中关掉再打开 → 内容停在旧快照，看起来就是「HUD 坏了不刷新」。
-            // 「重新打开」是用户表达「重来一次」的动作，复位到默认最不意外。
-            // 分区显示不复位：它是纯显示偏好，且全关时 HUD 会给出可右键的提示行，不封死。
-            self.input_diag_topmost.store(true, Relaxed);
-            self.input_diag_frozen.store(false, Relaxed);
-            self.push_input_diag_hud_if_visible();
-        } else {
-            let _ = self.ui_tx.send(UiCommand::HideInputDiag);
-        }
-    }
-
     /// 高级菜单「密码框强制英文」：翻转 `input.password_force_english` 并落盘（t197 / A2-37）。
     ///
     /// 此前只改内存，重启服务即复原——对「宿主把普通输入框误报成密码框」的用户，每次开机
@@ -884,13 +762,13 @@ impl Coordinator {
         use std::sync::atomic::Ordering::Relaxed;
         let (pid, mask) = {
             let d = self
-                .last_input_diag
+                .last_input_scope
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             (d.pid, d.mask)
         };
         let want =
-            crate::input_diag::is_password_scope(mask) && self.password_force_english_for_pid(pid);
+            crate::input_scope::is_password_scope(mask) && self.password_force_english_for_pid(pid);
         if !want {
             self.password_suppress.store(false, Relaxed);
         }
@@ -922,7 +800,7 @@ impl Coordinator {
     /// 编号——两处手写、改一处漏一处，正是本仓 `menu_id_tests` 那条注释警告的同一类缺陷。
     /// ⇒ 收成一张表后，「写反」这件事在结构上不可能发生。
     ///
-    /// 编号按菜单显示顺序排，与 `InitialMode` / `AutoPairRule` 的「0=跟随全局」约定一致。
+    /// 编号按菜单显示顺序排，与 `InitialMode` 的「0=跟随全局」约定一致。
     pub(crate) const FIRST_SHOW_MENU: [(
         u8,
         Option<aurora_config::app_compat::FirstShowMode>,
@@ -969,7 +847,6 @@ impl Coordinator {
         self.sync_host_render_whitelist();
         self.relax_password_suppress_for_focus();
         self.push_password_suppress_config(0);
-        self.push_english_pair_config(0);
         self.push_composition_placeholder_config(0);
         self.push_multiline_commit_config(0);
         self.push_compat_title_match_config(0);
@@ -1026,7 +903,8 @@ impl Coordinator {
             return;
         };
         let target = self.menu_writeback_target(&name, &["first_show_mode"]);
-        if let Err(e) = aurora_config::app_compat::set_user_first_show_mode(&user_dir, target, mode) {
+        if let Err(e) = aurora_config::app_compat::set_user_first_show_mode(&user_dir, target, mode)
+        {
             tracing::error!("set_first_show_mode: 写用户 compat.toml 失败: {e}");
             return;
         }
@@ -1062,7 +940,8 @@ impl Coordinator {
             tracing::warn!("set_compat_rule_enabled: 无用户配置目录，无法持久化");
             return;
         };
-        if let Err(e) = aurora_config::app_compat::set_user_rule_disabled(&user_dir, &name, !enabled)
+        if let Err(e) =
+            aurora_config::app_compat::set_user_rule_disabled(&user_dir, &name, !enabled)
         {
             tracing::error!("set_compat_rule_enabled: 写用户 compat.toml 失败: {e}");
             return;
@@ -1071,53 +950,6 @@ impl Coordinator {
         tracing::info!(
             "兼容规则 for process={name}: {}",
             if enabled { "启用" } else { "禁用" }
-        );
-        self.show_status();
-    }
-
-    /// 为当前焦点应用设置符号自动配对开关，并写入用户层 compat.toml。
-    /// `mode_id`：0=跟随全局（清除规则）1=启用 2=禁用。
-    ///
-    /// 三步与 [`Self::set_first_show_mode`] 完全同构，缺一不可，理由见那里的注释。
-    /// 英文配对配置的重推（纯英文模式的配对由 C++ 侧 `_englishPairEngine` 独立处理，它只认
-    /// 推过去的那份值）不在这里单做，收在 [`Self::reload_app_compat`]：任何一次整表重载都
-    /// 可能改变它（用户手写的 `auto_pair` 随别的菜单项一起生效）。
-    pub(crate) fn set_auto_pair_rule(&self, mode_id: u8) {
-        let enabled = match mode_id {
-            1 => Some(true),
-            2 => Some(false),
-            _ => None,
-        };
-        let name = self.active_process_name();
-        if name.is_empty() {
-            tracing::warn!("set_auto_pair_rule: 当前焦点进程未知，忽略本次设置");
-            return;
-        }
-        let Some(user_dir) = self.compat_dirs.1.clone() else {
-            tracing::warn!("set_auto_pair_rule: 无用户配置目录，无法持久化");
-            return;
-        };
-        let target = self.menu_writeback_target(&name, &["auto_pair"]);
-        if let Err(e) = aurora_config::app_compat::set_user_auto_pair(&user_dir, target, enabled) {
-            tracing::error!("set_auto_pair_rule: 写用户 compat.toml 失败: {e}");
-            return;
-        }
-        // 2）重载整表（系统层 + 用户层），与启动时同一口径。
-        self.reload_app_compat();
-        // 3）当前应用立即生效（同 pid 时 `update_active_compat` 提前 return，不会自己刷）：
-        //    按新表重新解析，理由同 `set_first_show_mode`。
-        let resolved = self.with_active_compat_rule(|r| r.and_then(|r| r.auto_pair));
-        self.active_compat
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .auto_pair = resolved;
-        tracing::info!(
-            "符号自动配对 for process={name}: {}",
-            match enabled {
-                Some(true) => "启用",
-                Some(false) => "禁用",
-                None => "跟随全局",
-            }
         );
         self.show_status();
     }
@@ -1317,7 +1149,8 @@ impl Coordinator {
         };
         // 1）写用户层 compat.toml。
         let target = self.menu_writeback_target(&name, &["schema"]);
-        if let Err(e) = aurora_config::app_compat::set_user_schema(&user_dir, target, value.clone()) {
+        if let Err(e) = aurora_config::app_compat::set_user_schema(&user_dir, target, value.clone())
+        {
             tracing::error!("set_app_schema_rule: 写用户 compat.toml 失败: {e}");
             return;
         }
@@ -1687,24 +1520,10 @@ impl Coordinator {
                     .load(std::sync::atomic::Ordering::Relaxed),
             ),
             M::separator(),
-            // ── 诊断组 ──
-            // 「把内部状态显示出来」的工具，彼此同类：HUD 出文字、定位浮窗出几何。
-            //
-            // 输入诊断 HUD 在 macOS 上整套未实现（`ShowInputDiag` 落在 forwarder 的兜底臂），
-            // 点了没有任何反应。留一个死菜单项比没有更糟，故按平台摘掉。
-            // 要在 macOS 做它得把整个浮层 UI 建在 `.app` 侧，见 aurora_macos/AGENTS.md 差距表。
-            #[cfg(not(ext_presenter))]
-            M::leaf(
-                "输入诊断 HUD",
-                cmd(MenuCmd::ToggleInputDiagnostics),
-                true,
-                self.input_diag_hud_visible
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
         ];
 
-        // 候选窗定位浮窗：与 HUD 同组（都是诊断显示），但**只在 Dev 变体出现**——
-        // 它画的是还在排查中的内部几何，正式用户看到只会困惑。
+        // 候选窗定位浮窗（诊断显示），**只在 Dev 变体出现**——它画的是还在排查中的
+        // 内部几何，正式用户看到只会困惑。
         #[cfg(all(feature = "desktop-ui", windows))]
         if aurora_config::variant::is_dev() {
             advanced_children.push(M::leaf(
@@ -1759,7 +1578,7 @@ impl Coordinator {
             // 却不生效，还会显示成没选。所以先置灰，让用户先启用这条规则再逐项设置。
             let has_proc = enabled;
             let enabled = enabled && rule_switch != aurora_config::app_compat::RuleSwitch::Disabled;
-            // 勾选显示的是**焦点窗口**生效中的值（与 auto_pair 读 active_compat 同口径）；菜单写回
+            // 勾选显示的是**焦点窗口**生效中的值；菜单写回
             // 仍只写纯进程键（带窗口条件的规则 P4 之前只能手写），见 app_compat 的写回接口。
             let proc_win = self.active_focus_window();
             let (cur_cand_pos, cur_ignore_close, cur_pfe, cur_schema, cur_status, cur_status_fb) =
@@ -1776,11 +1595,6 @@ impl Coordinator {
             let cur_first_show = self.rule_first_show_mode(&proc, &proc_win);
             let cur_mode = self.rule_initial_mode(&proc, &proc_win);
             let cur_punct = self.rule_initial_punct(&proc, &proc_win);
-            let cur_auto_pair = self
-                .active_compat
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .auto_pair;
             let header = if has_proc {
                 proc.clone()
             } else {
@@ -1938,32 +1752,6 @@ impl Coordinator {
                             )
                         })
                         .collect(),
-                ),
-                // 「跟随全局」同样必须是独立一档（理由见上面 `tri`）。禁用一档主要给表格类
-                // 宿主：Excel / WPS 表格「输入态」下方向键 = 确认单元格并移动，配对后的
-                // 光标回退在那里无法实现，关掉配对是唯一可行的兼容策略。
-                M::submenu(
-                    "符号自动配对",
-                    vec![
-                        M::leaf(
-                            "跟随全局",
-                            cmd(MenuCmd::AutoPairRule(0)),
-                            enabled,
-                            cur_auto_pair.is_none(),
-                        ),
-                        M::leaf(
-                            "启用",
-                            cmd(MenuCmd::AutoPairRule(1)),
-                            enabled,
-                            cur_auto_pair == Some(true),
-                        ),
-                        M::leaf(
-                            "禁用",
-                            cmd(MenuCmd::AutoPairRule(2)),
-                            enabled,
-                            cur_auto_pair == Some(false),
-                        ),
-                    ],
                 ),
                 // 「固定位置」给 caret 坐标本就报不准的宿主。位置**不在这里选**——切到固定
                 // 档只是打开它，落点由用户拖一次候选窗定下（存进该应用自己的规则）。
@@ -2358,10 +2146,6 @@ impl Coordinator {
 
     /// 构建右键候选菜单项并下发给 UI 显示。菜单项本身由 [`Self::candidate_menu_items`] 构造。
     pub(crate) fn show_candidate_menu(&self, page_local: usize, x: i32, y: i32) {
-        // 右键落在分类标签上：不是候选，没有候选菜单。
-        if self.grid_tab_of_event(page_local).is_some() {
-            return;
-        }
         // 悬停落到被右键的这一格：菜单开着时鼠标消息到不了候选窗，悬停停在上一次右键的那格，
         // 在另一格上再右键（关旧菜单开新菜单）时，旧格的悬停底色就留在原处，看上去像高亮没跟过来。
         let ui_idx = page_local as i32;
@@ -2369,11 +2153,6 @@ impl Coordinator {
             .hover_index
             .swap(ui_idx, std::sync::atomic::Ordering::Relaxed)
             != ui_idx;
-        // 展开态下右键的是网格里的某一格：先把高亮切过去（菜单操作的就是高亮那一格），
-        // 再按页内下标走下面的原有逻辑。悬停变了而高亮没变时，下面单独补一帧。
-        let Some(page_local) = self.resolve_event_index(page_local, !hover_moved) else {
-            return;
-        };
         if hover_moved {
             let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if !st.candidates.is_empty() {
@@ -2413,13 +2192,13 @@ impl Coordinator {
     /// - 置顶/前移：首项禁用；后移：末项禁用；拼音普通候选禁全部调位（无稳定位置语义）。
     /// - 删除：短语→「禁用短语」（软删可恢复）；用户词/临时词→真删；系统词→「隐藏候选」（shadow）。
     /// - 特殊模式（快符等）：词条操作**照常提供**，编码取其独立缓冲、归属取其引用方案。
-    /// - 无词库落点者（临拼/临英/混输/网址，以及特殊模式的空码浏览态）：仅提供复制。
+    /// - 无词库落点者（临拼/临英/混输，以及特殊模式的空码浏览态）：仅提供复制。
     pub fn candidate_menu_items(&self, idx: usize) -> Option<Vec<aurora_ui_types::MenuItemSpec>> {
         use aurora_ui_types::MenuItemSpec as M;
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let cand = state.candidates.get(idx)?.clone();
         let word = cand.text.clone();
-        let pos = self.reorder_positions(&state, idx);
+        let pos = Self::reorder_positions(&state, idx);
         let scope = self.candidate_op_scope(&state);
         // 快捷输入的格式候选：判据独立于 candidate_op_scope（后者问「有没有词库落点」，
         // 混输没有，返回 None 是对的）。与写端 `candidate_or_quick_format_op` 同源。
@@ -2486,7 +2265,7 @@ impl Coordinator {
         });
 
         // 有词库落点才给词条操作。无落点的两类状态——没有独立词库归属的 overlay（临拼/临英/
-        // 混输/网址，编码各持独立缓冲且无处落键）与空码浏览态（特殊模式 show_all_on_enter，
+        // 混输，编码各持独立缓冲且无处落键）与空码浏览态（特殊模式 show_all_on_enter，
         // 读端 apply_shadow_in 对空码直接 return，写了也永不生效）——仅保留复制。
         // 判据与写端 `candidate_op` 同源，见 `candidate_op_scope`。
         let mut items = if let Some(scope) = scope {
@@ -2501,17 +2280,10 @@ impl Coordinator {
             // 都是**完全静默**的错配——用户点得动却毫无反应，或明明能用却是灰的。
             let is_pinyin = matches!(scope.engine_type, Some(aurora_engine::EngineType::Pinyin));
             let group_member = candidate_is_group_member(&cand);
-            // emoji 扩展候选：五项词条操作**全部灰显**（不是隐藏——用户要看得出「这条不能调」，
-            // 而不是以为菜单坏了）。它不是词库条目，shadow 规则按 (schema, code, text) 落键，
-            // 而它的 code 恒空、text 是按宿主候选查表来的，写进去既不会被读端命中，还会在
-            // 宿主词换了 emoji 后变成孤儿规则。可调整性的规划见 design/emoji-suggestion.md §9，
-            // 落地时**两端一起放开**（这里与写端 `candidate_op` 的同名守卫）。
-            let emoji = cand.is_emoji_suggestion;
             let pinyin_locked = is_pinyin && !cand.is_command;
-            let can_pin = !group_member && !emoji;
-            let movable = !pinyin_locked && !group_member && !emoji;
+            let can_pin = !group_member;
+            let movable = !pinyin_locked && !group_member;
             let (delete_label, delete_enabled) = candidate_delete_menu(&cand);
-            let has_rule = has_rule && !emoji;
 
             vec![
                 // 位置按完整列表计（分类筛选中 `idx` 只是子集下标），与写端同源。
@@ -3135,12 +2907,10 @@ impl Coordinator {
             if self.take_toolbar_push_if_changed(ToolbarPush::Hidden) {
                 let _ = self.ui_tx.send(UiCommand::HideToolbar);
             }
-            // ⚠ 去重**只挡 UI 推送这一条**：下面两个各有自己的去重与触发条件
-            // （HUD 看的是诊断开关、图标看的是 label/角标），跟着一起跳过就会出现
-            // 「工具栏没变但图标该变了却没变」。
-            self.push_input_diag_hud_if_visible(); // 见函数末尾同一行的说明
+            // ⚠ 去重**只挡 UI 推送这一条**：图标有自己的去重与触发条件（label/角标），
+            // 跟着一起跳过就会出现「工具栏没变但图标该变了却没变」。
             // 语言栏图标同样收口于此，且**两个出口都要**——「不可输入」恰恰走的是本分支，
-            // 只在下面那个出口补的话，图标永远等不到变「英」。同 HUD 刷新的理由。
+            // 只在下面那个出口补的话，图标永远等不到变「英」。
             self.publish_langbar_icon_now();
             return;
         }
@@ -3190,14 +2960,7 @@ impl Coordinator {
         if self.take_toolbar_push_if_changed(ToolbarPush::Shown(Box::new(tb.clone()))) {
             let _ = self.ui_tx.send(UiCommand::UpdateToolbar(tb));
         }
-        // HUD 刷新收口于此（两个出口各一次）。诊断 HUD 展示的 ime_active /
-        // has_edit_context 正是上面那道合取的输入，而**凡是改动它们的路径都必须调
-        // notify_toolbar 才能生效**，所以这里是唯一不会漏的落点。
-        // 反例（2026-07-26 实测）：起初只在 apply_input_diag 里推，于是 focus_gained
-        // 之外的路径（CtxLost 等）改了状态却不刷新，HUD 一直显示上一次的快照。
-        // 在此调用是安全的：state 锁已 drop，且 HUD 关闭时该函数首行即返回，零开销。
-        self.push_input_diag_hud_if_visible();
-        // 语言栏图标收口（与上面那个出口成对）。内部对相同位图跳过重渲与刷新推送，
+        // 语言栏图标收口（与上面那个出口成对，两个出口各一次）。内部对相同位图跳过重渲与刷新推送，
         // 故多调无副作用；漏调则是「状态变了图标不跟」。
         self.publish_langbar_icon_now();
     }
@@ -3220,9 +2983,6 @@ pub(crate) fn candidate_is_group_member(cand: &aurora_candidate::Candidate) -> b
 pub(crate) fn candidate_delete_menu(cand: &aurora_candidate::Candidate) -> (&'static str, bool) {
     if candidate_is_group_member(cand) {
         ("删除词条", false)
-    } else if cand.is_emoji_suggestion {
-        // emoji 扩展候选没有词库落点，删无可删；灰显而非隐藏，理由见菜单装配处。
-        ("隐藏候选", false)
     } else if cand.is_phrase {
         // 静态短语前缀命中（is_prefix 且无完整码）定位不到 store 记录 → 暂禁。
         ("禁用短语", !cand.is_prefix || !cand.group_code.is_empty())
@@ -3527,20 +3287,6 @@ fn toolbar_gate_open(conjunction: bool, hide_in_english: bool, chinese_mode: boo
 mod tests {
     use super::{anchor_probe_point, avoid_unset_sentinel};
 
-    /// emoji 扩展候选的「删除」项恒灰显：它没有词库落点，写端 `candidate_op` 同样拒绝。
-    /// 两端必须同时成立——只灰一端就是「点得动却没反应」或「明明不能用却亮着」。
-    #[test]
-    fn emoji_candidate_delete_menu_is_disabled() {
-        let cand = aurora_candidate::Candidate {
-            text: "😄".into(),
-            is_emoji_suggestion: true,
-            ..Default::default()
-        };
-        let (label, enabled) = super::candidate_delete_menu(&cand);
-        assert_eq!(label, "隐藏候选");
-        assert!(!enabled, "emoji 扩展候选不可删除 / 隐藏");
-    }
-
     /// ★★★ 锚点落盘查屏必须退 1px，否则贴右/下边缘时存到**邻屏**的 key 下。
     ///
     /// 用户实测症状：「工具栏不跟焦点窗口的显示器」。因果链是——
@@ -3574,8 +3320,8 @@ mod tests {
     #[test]
     fn first_show_menu_table_is_self_consistent() {
         use crate::coordinator::Coordinator;
-        use std::collections::BTreeSet;
         use aurora_config::app_compat::FirstShowMode as F;
+        use std::collections::BTreeSet;
 
         let table = Coordinator::FIRST_SHOW_MENU;
         let ids: BTreeSet<u8> = table.iter().map(|(id, _, _)| *id).collect();
@@ -3592,34 +3338,6 @@ mod tests {
 
         // 标签非空：`M::leaf` 接受空串，空标签在菜单里是一条看不见但可点的项。
         assert!(table.iter().all(|(_, _, label)| !label.is_empty()));
-    }
-
-    /// 输入诊断 HUD 整套在 macOS 未实现（`ShowInputDiag` 落在 forwarder 的兜底臂），
-    /// 菜单里不该留一个点了没反应的项。
-    ///
-    /// 这条同时是 `#[cfg]` **确实作用到了 `vec![]` 元素上**的证据——属性写在数组元素前
-    /// 是合法的，但写错位置（比如挂到 `M::leaf` 的某个实参上）照样能编过，只是不生效。
-    #[test]
-    fn input_diag_hud_menu_item_is_platform_gated() {
-        use crate::coordinator::Coordinator;
-        use aurora_config::Config;
-
-        let c = Coordinator::new_headless(Config::default(), None);
-        fn contains(items: &[aurora_ui_types::MenuItemSpec], label: &str) -> bool {
-            items
-                .iter()
-                .any(|i| i.label == label || contains(&i.children, label))
-        }
-        assert_eq!(
-            contains(&c.build_main_menu_items(), "输入诊断 HUD"),
-            !cfg!(ext_presenter),
-            "HUD 菜单项的平台门控与当前平台不符"
-        );
-        // 同一子菜单里的邻项必须还在——防止 cfg 把整块 vec 或相邻项一起吞掉。
-        assert!(
-            contains(&c.build_main_menu_items(), "密码框强制英文"),
-            "邻项被误伤"
-        );
     }
 
     /// 工具栏分格右键：**每一格要么有定制、要么明确回落主菜单**，且回落这条路不可断。
@@ -4010,9 +3728,9 @@ mod fullscreen_veto_tests {
     //! 缓存翻转的两个方向都会重算可见性，以及闸门与显示判据同源。
 
     use crate::coordinator::Coordinator;
-    use std::sync::atomic::Ordering;
     use aurora_config::Config;
     use aurora_ui_types::UiCommand;
+    use std::sync::atomic::Ordering;
 
     /// 三项合取全置真（= 用户停在某宿主的可编辑控件里且开着工具栏）的协调器 + UI 通道。
     fn coord() -> (
@@ -4381,41 +4099,6 @@ impl Coordinator {
 }
 
 #[cfg(test)]
-mod candidate_double_click_tests {
-    //! 双击候选窗截图（`ui.candidate.double_click_screenshot`，论坛 t109）。
-    //!
-    //! 走 `inject_ui_event` 而不直调处理函数：UI 事件分发那一臂漏接同样是「双击没反应」，
-    //! 直调测不到。
-
-    use crate::coordinator::Coordinator;
-    use aurora_config::Config;
-    use aurora_ui_types::{UiCommand, UiEvent};
-
-    fn screenshot_sent(on: bool) -> bool {
-        let mut cfg = Config::default();
-        cfg.ui.candidate.double_click_screenshot = on;
-        let (c, rx) = Coordinator::new_headless_with_ui(cfg, None);
-        while rx.try_recv().is_ok() {}
-        c.inject_ui_event(UiEvent::CandidateDoubleClick);
-        rx.try_iter()
-            .any(|cmd| matches!(cmd, UiCommand::ScreenshotCandidateToClipboard))
-    }
-
-    #[test]
-    fn double_click_copies_candidate_screenshot_when_enabled() {
-        assert!(
-            screenshot_sent(true),
-            "开关打开时双击应请求候选窗截图到剪贴板"
-        );
-    }
-
-    #[test]
-    fn double_click_is_ignored_when_disabled() {
-        assert!(!screenshot_sent(false), "出厂关闭时双击不应截图");
-    }
-}
-
-#[cfg(test)]
 mod english_veto_tests {
     //! 「英文状态隐藏工具栏」（`ui.toolbar.hide_in_english`，论坛 t167）。
 
@@ -4563,7 +4246,6 @@ mod compat_reload_tests {
             ("schema", "方案"),
             ("status_position_mode", "状态提示位置"),
             ("status_fallback_position", "坐标不可用时"),
-            ("auto_pair", "符号自动配对"),
             ("ignore_host_ime_close", "宿主关闭输入法"),
             ("password_force_english", "密码框强制英文"),
         ] {
@@ -4658,9 +4340,9 @@ mod compat_reload_tests {
 mod linux_menu_tests {
     use super::*;
     use crate::coordinator::Coordinator;
-    use std::sync::mpsc::Receiver;
     use aurora_bridge::handler::MessageHandler;
     use aurora_ui_types::MenuItemSpec;
+    use std::sync::mpsc::Receiver;
 
     fn coord() -> (std::sync::Arc<Coordinator>, Receiver<UiCommand>) {
         Coordinator::new_headless_with_ui(Config::default(), None)
@@ -4694,11 +4376,7 @@ mod linux_menu_tests {
     fn main_menu_drops_items_without_a_linux_landing() {
         let (c, _rx) = coord();
         let all = labels(&c.build_main_menu_items());
-        assert!(
-            !all.iter().any(|l| l == "输入诊断 HUD"),
-            "Linux 主菜单不该有「输入诊断 HUD」"
-        );
-        // 邻项还在：cfg 没把整块吞掉。
+        // 邻项还在（输入诊断 HUD 已随功能整块删除，故这里只守仍存在的项）。
         for kept in [
             "输入方案",
             "全角",
@@ -5065,9 +4743,9 @@ mod linux_menu_tests {
 mod linux_panel_tests {
     use super::*;
     use crate::coordinator::Coordinator;
-    use std::sync::mpsc::Receiver;
     use aurora_bridge::handler::{KeyEventData, MessageHandler};
     use aurora_ipc::protocol::ext_kind;
+    use std::sync::mpsc::Receiver;
 
     /// 已声明面板能力的 addon（当前版本的 addon 每次 `host.display` 都带 `panels`）。
     fn coord() -> (std::sync::Arc<Coordinator>, Receiver<UiCommand>) {

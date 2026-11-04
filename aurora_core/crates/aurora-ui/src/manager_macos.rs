@@ -333,8 +333,10 @@ impl Forwarder {
 
     fn ensure_shm(&mut self) -> Option<&mut PosixSharedMemory> {
         if self.shm.is_none() {
-            match PosixSharedMemory::create(&aurora_bridge::endpoint::shm_name(&self.suffix), SHM_MAX)
-            {
+            match PosixSharedMemory::create(
+                &aurora_bridge::endpoint::shm_name(&self.suffix),
+                SHM_MAX,
+            ) {
                 Ok(s) => self.shm = Some(s),
                 Err(e) => {
                     tracing::warn!("create SHM failed: {}", e);
@@ -391,7 +393,6 @@ impl Forwarder {
                 hover,
                 page,
                 total_pages,
-                grid,
                 caret_x,
                 caret_y,
                 caret_height,
@@ -416,7 +417,6 @@ impl Forwarder {
                 } else {
                     preedit
                 };
-                self.win.set_grid(grid);
                 self.win.update(
                     &preedit,
                     preedit_caret,
@@ -1159,7 +1159,6 @@ mod tests {
             hover: -1,
             page: 1,
             total_pages: 1,
-            grid: None,
             caret_x: 100,
             caret_y: 200,
             caret_height: 20,
@@ -1206,7 +1205,6 @@ mod tests {
             hover: -1,
             page: 1,
             total_pages: 1,
-            grid: None,
             caret_x: 100,
             caret_y: 200,
             caret_height: 20,
@@ -1297,7 +1295,6 @@ mod tests {
             hover: -1,
             page: 1,
             total_pages: 1,
-            grid: None,
             caret_x: 100,
             caret_y: 200,
             caret_height: 20,
@@ -1387,7 +1384,8 @@ mod tests {
         let cap = Arc::new(Mutex::new(Vec::new()));
         let (mut f, _ev) = mk(cap.clone(), "_t_shot1");
         show_two(&mut f);
-        let dir = std::env::temp_dir().join(format!("aurorainput_test_shots_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("aurorainput_test_shots_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         f.handle(UiCommand::TakeScreenshot {
             dir: dir.display().to_string(),
@@ -1425,7 +1423,6 @@ mod tests {
             hover: -1,
             page: 1,
             total_pages: 1,
-            grid: None,
             caret_x: 10,
             caret_y: 20,
             caret_height: 20,
@@ -1483,10 +1480,10 @@ mod tests {
         use super::*;
         use crate::toolbar::ToolbarState;
         use crate::toolbar_gate::SHOW_DEBOUNCE;
-        use std::time::Duration;
         use aurora_ipc::protocol::overlay::{OVERLAY_KIND_SOFTKEYBOARD, OVERLAY_KIND_TOOLBAR};
         use aurora_ipc::protocol::panel_pointer::*;
         use aurora_ui_types::{SOFT_TAG_CLOSE, SoftKeyCap, ToolbarAction};
+        use std::time::Duration;
 
         /// 计时类断言的余量：只用来盖过线程调度抖动，不参与语义。
         const SLACK: Duration = Duration::from_millis(60);
@@ -2193,7 +2190,6 @@ mod tests {
                 hover,
                 page: 1,
                 total_pages: 1,
-                grid: None,
                 caret_x: 100,
                 caret_y: 200,
                 caret_height: 20,
@@ -2311,8 +2307,8 @@ mod tests {
         fn overlay_screenshot_saves_png_or_reports_not_visible() {
             let cap = Arc::new(Mutex::new(Vec::new()));
             let (mut f, _ev) = mk(cap.clone(), "_lo8");
-            let dir =
-                std::env::temp_dir().join(format!("aurorainput_test_ovshot_{}", std::process::id()));
+            let dir = std::env::temp_dir()
+                .join(format!("aurorainput_test_ovshot_{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             f.handle(UiCommand::ScreenshotStatusTip { dir: dir.clone() });
             let toast = || overlays(&cap, OVERLAY_KIND_TOAST).len();

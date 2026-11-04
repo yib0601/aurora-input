@@ -15,13 +15,13 @@
 
 mod user_dicts;
 
-use serde_json::{Value, json};
 use aurora_coordinator::dict_transfer_api::{self, resolve_engine_type};
 use aurora_coordinator::handle_common_chars::CommonCharEdit;
 use aurora_coordinator::handle_quick_format::QuickFormatEdit;
 use aurora_coordinator::user_words_api;
 use aurora_coordinator::web_host::WebDataHost;
 use aurora_store::completion::CompletionKind;
+use serde_json::{Value, json};
 
 fn str_param<'a>(p: &'a Value, key: &str) -> anyhow::Result<&'a str> {
     p.get(key)
@@ -412,7 +412,6 @@ fn web_data_dispatch<H: WebDataRpc + ?Sized>(
 
         // ── dict.*（用户词库）────────────────────
         "comment.sources" => h.web_comment_sources(),
-        "emoji.modules" => h.web_emoji_modules(),
         "dict.listPaged" => h.web_dict_list_paged(params),
         "dict.search" => h.web_dict_search(params),
         "dict.add" => h.web_dict_add(params),
@@ -495,17 +494,9 @@ fn web_data_dispatch<H: WebDataRpc + ?Sized>(
         "freq.delete" => h.web_freq_delete(params),
         "freq.clear" => h.web_freq_clear(params),
 
-        // ── mailSuffix.* / urlHistory.*（补全学习数据）──
-        // 两组共用一份实现，只差 `CompletionKind`：存储层本就是一张表两个分区，
-        // RPC 再各写一遍等于把「同形态」这件事在第三处重新论证一遍。
-        // 命名空间分开是给设置端用的——「清空网址历史」不该顺带抹掉邮箱学习。
-        "mailSuffix.listPaged" => h.web_completion_list_paged(CompletionKind::EmailSuffix, params),
-        "mailSuffix.delete" => h.web_completion_delete(CompletionKind::EmailSuffix, params),
-        "mailSuffix.clear" => h.web_completion_clear(CompletionKind::EmailSuffix),
-        "urlHistory.listPaged" => h.web_completion_list_paged(CompletionKind::UrlHistory, params),
-        "urlHistory.delete" => h.web_completion_delete(CompletionKind::UrlHistory, params),
-        "urlHistory.clear" => h.web_completion_clear(CompletionKind::UrlHistory),
-        // 快捷输入历史（成员 `quick_input.history`），同一张表的第三个分区。
+        // ── quickHistory.*（补全学习数据：快捷输入历史）──
+        // 曾另有 `mailSuffix.*` / `urlHistory.*` 两组（邮箱后缀学习、网址输入历史），随
+        // 那两个输入模式一并删除；补全表本身留着，因为快捷输入历史还在用。
         "quickHistory.listPaged" => {
             h.web_completion_list_paged(CompletionKind::QuickHistory, params)
         }
@@ -874,40 +865,22 @@ pub trait WebDataRpc: WebDataHost {
             // OpenCC 文本词典（`词<Tab>值…`，rime 生态常见 `.txt`）：没有 YAML 头就没有 columns
             // 可判，按约定恒为「词 → 注释」两列，故 `hasComment` 直接给 true（解析见
             // `aurora_reverse::parse_comment_dict` 的裸表分支）。
-            aurora_config::Config::list_schema_resource_dir(data_dir.as_deref(), "comments", ".txt")
-                .into_iter()
-                .map(|(rel, abs)| {
-                    json!({
-                        "path": rel,
-                        "label": dict_yaml_name(&abs),
-                        "hasComment": true,
-                    })
-                }),
+            aurora_config::Config::list_schema_resource_dir(
+                data_dir.as_deref(),
+                "comments",
+                ".txt",
+            )
+            .into_iter()
+            .map(|(rel, abs)| {
+                json!({
+                    "path": rel,
+                    "label": dict_yaml_name(&abs),
+                    "hasComment": true,
+                })
+            }),
         )
         .collect();
         Ok(json!({ "auto": auto, "files": files }))
-    }
-
-    /// emoji 附加模块清单（内置 + 用户放进 `emoji/` 的 OpenCC 表），供设置页对话框列出。
-    ///
-    /// 只给清单与出厂值，不给开关状态：状态在 `input.emoji.modules`，设置端随整份配置已拿到，
-    /// 按 `配置值 ?? defaultOn` 自己算——两处各算一遍的话，未保存的勾选会被这里的旧值盖掉。
-    fn web_emoji_modules(&self) -> anyhow::Result<Value> {
-        let items: Vec<Value> =
-            aurora_config::Config::emoji_modules(aurora_config::Config::data_dir().as_deref())
-                .into_iter()
-                .map(|m| {
-                    json!({
-                        "id": m.id,
-                        "label": m.label,
-                        "description": m.description,
-                        "file": m.file,
-                        "user": m.user,
-                        "defaultOn": m.default_on,
-                    })
-                })
-                .collect();
-        Ok(json!({ "modules": items, "userDir": aurora_config::EMOJI_USER_DIR }))
     }
 
     /// 三条分流（流式 / 排序 / 搜索两组）的本体在 [`user_words_api::list_paged`]（与移动端共用），
@@ -1844,7 +1817,8 @@ pub trait WebDataRpc: WebDataHost {
                 .unwrap_or(""),
         );
         let user = Self::user_schemas_dir()?;
-        let r = aurora_transfer::scheme::import_package(std::path::Path::new(path), &user, strategy)?;
+        let r =
+            aurora_transfer::scheme::import_package(std::path::Path::new(path), &user, strategy)?;
         // 覆盖已加载方案时失效缓存(新方案为安全 no-op);列表可见性由 installed_schemas 实时扫盘天然生效。
         for id in &r.schema_ids {
             self.engine_mgr().invalidate_schema(id);
@@ -2371,9 +2345,9 @@ pub trait WebDataRpc: WebDataHost {
         Ok(json!(store.clear_freq(&schema)?))
     }
 
-    /// 补全学习数据的分页列表（邮箱后缀 / 网址历史共用）。
+    /// 补全学习数据的分页列表（目前只有快捷输入历史一类）。
     ///
-    /// 不分方案：这两类都是全局属性（见 `aurora_store::completion` 模块文档），故参数里
+    /// 不分方案：这是全局属性（见 `aurora_store::completion` 模块文档），故参数里
     /// **没有** `schemaId`——设置端那侧对应 `CategorySpec::scoped_by_schema = false`。
     fn web_completion_list_paged(
         &self,
@@ -2393,9 +2367,9 @@ pub trait WebDataRpc: WebDataHost {
             .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
         let sort = parse_sort(params, &["text", "count", "lastUsed"]);
 
-        // 搜索是**包含**而非前缀：用户记得的多半是网址中段（搜 `example` 要能找出
-        // `www.example.com`），而 store 侧只提供前缀扫描。故有搜索词或要自定义排序时
-        // 全量拉取后在内存里过滤/排序——这两类数据有 `history_max` 封顶，规模可控。
+        // 搜索是**包含**而非前缀：用户记得的多半是文本中段，而 store 侧只提供前缀扫描。
+        // 故有搜索词或要自定义排序时全量拉取后在内存里过滤/排序——这类数据有
+        // `history_max` 封顶，规模可控。
         let (page, total) = if query.is_empty() && sort.is_none() {
             store.list_completions(kind, "", offset, limit)?
         } else {
@@ -3077,8 +3051,10 @@ pub trait WebDataRpc: WebDataHost {
         let store = self
             .user_store()
             .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
-        let rep = store
-            .import_phrases_appending(&selected, aurora_store::phrases::DEFAULT_USER_PHRASE_WEIGHT)?;
+        let rep = store.import_phrases_appending(
+            &selected,
+            aurora_store::phrases::DEFAULT_USER_PHRASE_WEIGHT,
+        )?;
         self.rebuild_phrases();
         Ok(json!({
             "added": rep.added,
@@ -3101,8 +3077,8 @@ pub trait WebDataRpc: WebDataHost {
         Vec<aurora_store::phrase_text::EntryCheck>,
         Vec<aurora_store::phrases::PhraseImportStatus>,
     )> {
-        let doc =
-            aurora_store::phrase_text::parse_phrase_text(content).map_err(|e| anyhow::anyhow!(e))?;
+        let doc = aurora_store::phrase_text::parse_phrase_text(content)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let store = self
             .user_store()
             .ok_or_else(|| anyhow::anyhow!("无持久化存储"))?;
@@ -3582,7 +3558,8 @@ pub trait WebDataRpc: WebDataHost {
             None => return Ok(json!([])),
         };
         // 区间内连续日期补零值，输出完整 DailyStatItem（便于前端绘图）。
-        let days = aurora_store::stats_report::daily_range(store, self.stat_collector(), &from, &to)?;
+        let days =
+            aurora_store::stats_report::daily_range(store, self.stat_collector(), &from, &to)?;
         Ok(json!(
             days.iter()
                 .map(|(d, r)| Self::daily_item_json(d, r))
@@ -4730,10 +4707,10 @@ mod tests {
     //! 数据域 RPC 契约测试：真实 Coordinator + 临时 redb store，断言 web_data_rpc 输出形状
     //! 与 WindInputSetting 的 mock.ts / models.ts 一致。
     use super::*;
-    use std::sync::Arc;
     use aurora_config::Config;
     use aurora_coordinator::Coordinator;
     use aurora_store::Store;
+    use std::sync::Arc;
 
     // 拼音准入契约的处置表测试随 `dispose_contract_rows` 搬到了
     // `aurora_coordinator::dict_transfer_api`（contract_disposition_table_covers_both_fill_choices）。
@@ -8322,7 +8299,10 @@ moved = [{ id = 'date.lunar', position = 0 }]
             .expect("保存后应进 overlay 注册表");
         let e = c.engine_mgr().overlay_modes()[idx as usize].clone();
         assert!(e.spec.show_all_on_enter);
-        assert_eq!(e.spec.candidate_layout, aurora_config::LayoutIntent::Vertical);
+        assert_eq!(
+            e.spec.candidate_layout,
+            aurora_config::LayoutIntent::Vertical
+        );
         assert_eq!(e.name, "往返", "override 未提及的字段仍来自方案文件");
 
         let _ = std::fs::remove_file(&store_path);
@@ -10120,10 +10100,10 @@ mod phrase_shadowing_tests {
     //! 于是**任何删掉该行的操作都会连带删掉那条系统短语**。每条这样的路径都必须补回缺失的
     //! 系统条目，漏一条就是「系统短语莫名少了一条」——正是本特性早期版本的原始 bug。
     use super::*;
-    use std::sync::Arc;
     use aurora_config::config::Config;
     use aurora_coordinator::Coordinator;
     use aurora_store::Store;
+    use std::sync::Arc;
 
     const SYS_CODE: &str = "date";
     const SYS_TEXT: &str = "$Y年$M月$D日";
@@ -10454,10 +10434,10 @@ mod memory_stats_tests {
     //! `system.memoryStats`（只读诊断）的回包形态。设置端「高级 → 性能 → 内存占用」卡片与
     //! 「复制诊断信息」按它取数：字段恒在（缺数给 `null` / 空数组），客户端可无条件渲染。
     use super::*;
-    use std::sync::Arc;
     use aurora_config::Config;
     use aurora_coordinator::Coordinator;
     use aurora_store::Store;
+    use std::sync::Arc;
 
     /// 一个自造码表方案 `zm1` 的数据目录 + store（不依赖 build_dev，不会静默跳过）。
     /// `tag` 让并行的用例各用各的夹具目录——redb 是独占锁，两条用例同时开同一个 `s.redb`
@@ -10604,10 +10584,10 @@ mod memory_stats_tests {
 mod system_stats_tests {
     //! `dict.systemStats` 的回包形态：码表方案出各库分行 / 码长 / 重码，混输按成员并排。
     use super::*;
-    use std::sync::Arc;
     use aurora_config::Config;
     use aurora_coordinator::Coordinator;
     use aurora_store::Store;
+    use std::sync::Arc;
 
     /// 码表 `zm1`（主库 + 停用扩展）+ 混输 `mx`（主码表 zm1，无拼音成员）。
     fn coord(tag: &str) -> Arc<Coordinator> {

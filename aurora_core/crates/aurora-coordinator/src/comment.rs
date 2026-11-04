@@ -949,18 +949,6 @@ pub(crate) fn template_for<'a>(
             &cfg.input.temp_english.comment_template_vertical,
             &cfg.input.temp_english.comment_template_horizontal,
         ),
-        Some(ModeKind::Url) => pick(
-            &cfg.input.url.comment_template_vertical,
-            &cfg.input.url.comment_template_horizontal,
-        ),
-        Some(ModeKind::Email) => pick(
-            &cfg.input.email.comment_template_vertical,
-            &cfg.input.email.comment_template_horizontal,
-        ),
-        Some(ModeKind::Unicode) => pick(
-            &cfg.input.unicode.comment_template_vertical,
-            &cfg.input.unicode.comment_template_horizontal,
-        ),
         // 辅助码沿用主路径注释模板（辅助码只是筛选，注释来源仍是拼音主流程）。
         Some(ModeKind::AuxCode) => None,
         None => None,
@@ -1007,7 +995,6 @@ pub(crate) fn resolve_template<'a>(
 /// [`Coordinator::eval_var`]（注释段；气泡整段 / 段名 / 逐字段的最后一层回落）。
 pub(crate) const EVAL_VAR_NAMES: &[&str] = &[
     "code_hint",
-    "emoji",
     "code_rev",
     "code",
     "code_rev_all",
@@ -1443,39 +1430,6 @@ impl crate::coordinator::Coordinator {
     ///
     /// `arg` = `${name:arg}` 的冒号后部分（未 trim）。只有声明支持参数的变量会读它，
     /// 其余变量收到参数时**静默忽略**而非报未知——参数写错不该让整个变量退化成错误回显。
-    /// `${emoji}` 变量的取值：该词的 emoji（空格分隔，至多 `max_per_word` 个）。
-    ///
-    /// 只在 `show_as = "comment"` 档返回非空 —— 理由见调用点的注释（四档互斥，避免同一个
-    /// emoji 既进候选又进注释）。功能关、表没加载、没命中一律 `None`；调用点把它换成空串，
-    /// 模板据此整段消失。
-    fn emoji_comment_of(&self, text: &str) -> Option<String> {
-        let (max_per_word, min_chars) = {
-            let rt = self.rt();
-            let e = &rt.config.input.emoji;
-            if !e.enabled || e.show_as != "comment" || e.max_per_word == 0 {
-                return None;
-            }
-            (e.max_per_word, e.min_word_chars)
-        };
-        if text.chars().count() < min_chars {
-            return None;
-        }
-        let guard = self.emoji_dict.read().unwrap_or_else(|e| e.into_inner());
-        let list = guard.as_ref()?.lookup(text)?;
-        // 与追加档同一套去重（剥 U+FE0F，保留先到者），否则注释里同一符号出两次。
-        let mut seen = std::collections::HashSet::new();
-        let picked: Vec<&str> = list
-            .split_whitespace()
-            .filter(|e| seen.insert(crate::handle_candidate::emoji_dedup_key(e)))
-            .take(max_per_word)
-            .collect();
-        if picked.is_empty() {
-            None
-        } else {
-            Some(picked.join(" "))
-        }
-    }
-
     pub(crate) fn eval_var(
         &self,
         name: &str,
@@ -1489,18 +1443,6 @@ impl crate::coordinator::Coordinator {
         let single = c.text.chars().count() == 1;
         Some(VarValue::from(match name {
             "code_hint" => c.comment.clone(),
-            // `${emoji}` —— 该词对应的 emoji（`[input.emoji]`，空格分隔，取前 max_per_word 个）。
-            //
-            // ★ 门控是 `enabled && show_as == "comment"`，不是只看 `enabled`：`show_as` 是
-            // 「emoji 以什么形态出现」的**单一决策点**，四档互斥。只看 enabled 的话，用户
-            // 配了 `after` 又在模板里写了 `${emoji}`，同一个 emoji 会既进候选列表又出现在
-            // 注释里，而两处都「按配置办事」，没人觉得自己错了。
-            //
-            // 本变量为空时按模板的可选段规则整段消失，故绝大多数候选不会留下空括号。
-            // ★ 取不到给空串而不是 `?`：`None` 在渲染层是「未知变量名」，会原样回显
-            // `${emoji}`——功能没开 / 不是 comment 档 / 没命中都属于「已知变量、这次为空」，
-            // 应让所在可选段整段消失（同下面 `code_rev` 那条）。
-            "emoji" => self.emoji_comment_of(&c.text).unwrap_or_default(),
             // ★ `unwrap_or_default()` 而不是 `?`：`None` 在渲染层的含义是**未知变量名**
             // （`render_nodes` 会原样输出 `${code_rev}` 并计作已填充，好让拼错的变量名
             // 显示出来）。反查索引没就绪属于「已知变量，这一次算不出」，给空串才对 ——
@@ -1663,7 +1605,6 @@ mod mode_template_tests {
             None,
             Some(ModeKind::TempEnglish),
             Some(ModeKind::TempPinyin),
-            Some(ModeKind::Url),
         ] {
             assert_eq!(template_for(&c, None, active, true), None, "{active:?} 竖");
             assert_eq!(template_for(&c, None, active, false), None, "{active:?} 横");
@@ -4237,8 +4178,8 @@ mod comment_reverse_regular_tests {
     //! 候选注释的编码反查只用常规索引（已启用词库）；「含未启用扩展词库」只给反查模式。
     //! 自造夹具，不依赖 build_dev/data：主库 `a 工`、未启用扩展 `_xz` 里 `uuia 门头沟区`。
     use crate::coordinator::Coordinator;
-    use std::path::PathBuf;
     use aurora_config::Config;
+    use std::path::PathBuf;
 
     struct Cleanup {
         id: String,

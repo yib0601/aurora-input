@@ -1416,7 +1416,7 @@ process = \"Dota.exe\"
 host_render = true
 ";
 
-    const USER_A: &str = "[[apps]]\nprocess = \"Weixin.exe\"\nauto_pair = true\n";
+    const USER_A: &str = "[[apps]]\nprocess = \"Weixin.exe\"\nignore_host_ime_close = true\n";
 
     // ───────────── 视图 ─────────────
 
@@ -1433,7 +1433,7 @@ disabled = true
 
 [[apps]]
 process = \"Mine.exe\"
-auto_pair = true
+ignore_host_ime_close = true
 ";
         let l = layers(SYS, usr);
         assert_eq!(state_of(&l, "Feishu.exe"), RuleState::System);
@@ -1444,12 +1444,15 @@ auto_pair = true
 
     #[test]
     fn overridden_lists_only_the_meaningful_diff_including_unset() {
-        let usr = "[[apps]]\nprocess = \"Weixin.exe\"\nauto_pair = true\ncaret_use_top = true\nunset = [\"stale_probe_guard\"]\n";
+        let usr = "[[apps]]\nprocess = \"Weixin.exe\"\nignore_host_ime_close = true\ncaret_use_top = true\nunset = [\"stale_probe_guard\"]\n";
         let l = layers(SYS, usr);
         let v = l.view_of(Section::Apps, "Weixin.exe").unwrap();
         assert_eq!(
             v.overridden,
-            vec!["auto_pair".to_string(), "stale_probe_guard".to_string()],
+            vec![
+                "ignore_host_ime_close".to_string(),
+                "stale_probe_guard".to_string()
+            ],
             "caret_use_top 与系统一致是冗余，不算差异；unset 的字段算差异"
         );
         assert!(v.system.is_some());
@@ -1464,12 +1467,15 @@ auto_pair = true
     fn user_only_rule_reports_all_its_fields_as_overridden() {
         let l = layers(
             SYS,
-            "[[apps]]\nprocess = \"Mine.exe\"\nauto_pair = true\ncaret_use_top = true\n",
+            "[[apps]]\nprocess = \"Mine.exe\"\nignore_host_ime_close = true\ncaret_use_top = true\n",
         );
         let v = l.view_of(Section::Apps, "Mine.exe").unwrap();
         assert_eq!(
             v.overridden,
-            vec!["auto_pair".to_string(), "caret_use_top".to_string()]
+            vec![
+                "caret_use_top".to_string(),
+                "ignore_host_ime_close".to_string()
+            ]
         );
         assert!(v.system.is_none());
     }
@@ -1495,14 +1501,18 @@ auto_pair = true
         l.upsert(
             Section::Apps,
             "Weixin.exe",
-            &patch(json!({"auto_pair": true})),
+            &patch(json!({"ignore_host_ime_close": true})),
         )
         .unwrap();
         l.set_disabled(Section::Apps, "Weixin.exe", true).unwrap();
         let v = l.view_of(Section::Apps, "Weixin.exe").unwrap();
         assert_eq!(v.state, RuleState::Disabled);
         let user = v.user.expect("禁用状态下要能看到用户层原始条目");
-        assert_eq!(user["auto_pair"], json!(true), "禁用前的改写要可见");
+        assert_eq!(
+            user["ignore_host_ime_close"],
+            json!(true),
+            "禁用前的改写要可见"
+        );
         assert_eq!(user["disabled"], json!(true));
     }
 
@@ -1541,14 +1551,14 @@ auto_pair = true
         l.upsert(
             Section::Apps,
             "Weixin.exe",
-            &patch(json!({"auto_pair": true})),
+            &patch(json!({"ignore_host_ime_close": true})),
         )
         .unwrap();
         assert_eq!(state_of(&l, "Weixin.exe"), RuleState::Modified);
         l.upsert(
             Section::Apps,
             "Weixin.exe",
-            &patch(json!({"auto_pair": null})),
+            &patch(json!({"ignore_host_ime_close": null})),
         )
         .unwrap();
         assert!(
@@ -1599,7 +1609,7 @@ auto_pair = true
         l.upsert(
             Section::Apps,
             "Weixin.exe",
-            &patch(json!({"auto_pair": null})),
+            &patch(json!({"ignore_host_ime_close": null})),
         )
         .unwrap();
         assert!(
@@ -1648,7 +1658,7 @@ auto_pair = true
     fn patch_rejects_typos_wrong_types_and_empty_enum() {
         let bad = [
             json!({"caret_use_tpo": false}),
-            json!({"auto_pair": 0}),
+            json!({"ignore_host_ime_close": 0}),
             json!({"caret_use_top": "yes"}),
             json!({"first_show_mode": ""}),
             json!({"first_show_mode": 0}),
@@ -1671,7 +1681,7 @@ auto_pair = true
             json!({"disabled": true}),
             json!({"comment": "x"}),
             json!({"process": "O.exe"}),
-            json!({"unset": ["auto_pair"]}),
+            json!({"unset": ["ignore_host_ime_close"]}),
         ] {
             let mut l = layers(SYS, "");
             assert!(
@@ -1690,7 +1700,7 @@ auto_pair = true
         l.upsert(
             Section::Apps,
             "Mine.exe",
-            &patch(json!({"auto_pair": true, "caret_use_top": false})),
+            &patch(json!({"ignore_host_ime_close": true, "caret_use_top": false})),
         )
         .expect("bool false 是合法值");
         let row = user_row(&l, Section::Apps, "Mine.exe").unwrap();
@@ -1699,7 +1709,7 @@ auto_pair = true
             json!(false),
             "用户新增规则的显式 false 保留: {row:?}"
         );
-        assert_eq!(row["auto_pair"], json!(true));
+        assert_eq!(row["ignore_host_ime_close"], json!(true));
     }
 
     #[test]
@@ -1714,7 +1724,7 @@ auto_pair = true
         l.upsert(
             Section::Apps,
             "  weixin.EXE ",
-            &patch(json!({"auto_pair": true})),
+            &patch(json!({"ignore_host_ime_close": true})),
         )
         .unwrap();
         assert_eq!(l.user.apps.len(), 1);
@@ -1773,15 +1783,19 @@ auto_pair = true
         l.upsert(
             Section::Apps,
             "Weixin.exe",
-            &patch(json!({"caret_use_top": false, "auto_pair": true})),
+            &patch(json!({"caret_use_top": false, "ignore_host_ime_close": true})),
         )
         .unwrap();
         l.reset_field(Section::Apps, "Weixin.exe", "caret_use_top")
             .unwrap();
         let v = l.view_of(Section::Apps, "Weixin.exe").unwrap();
         assert_eq!(v.effective["caret_use_top"], json!(true), "回到系统值");
-        assert_eq!(v.effective["auto_pair"], json!(true), "另一个改写保留");
-        assert_eq!(v.overridden, vec!["auto_pair".to_string()]);
+        assert_eq!(
+            v.effective["ignore_host_ime_close"],
+            json!(true),
+            "另一个改写保留"
+        );
+        assert_eq!(v.overridden, vec!["ignore_host_ime_close".to_string()]);
     }
 
     #[test]
@@ -1792,7 +1806,7 @@ auto_pair = true
                 .is_err()
         );
         assert!(
-            l.reset_field(Section::Apps, "Nope.exe", "auto_pair")
+            l.reset_field(Section::Apps, "Nope.exe", "ignore_host_ime_close")
                 .is_err()
         );
     }
@@ -1803,13 +1817,16 @@ auto_pair = true
         assert!(l.reset(Section::Apps, "weixin.exe"));
         assert_eq!(state_of(&l, "Weixin.exe"), RuleState::System);
         assert!(!l.reset(Section::Apps, "Weixin.exe"));
-        let mut u = layers(SYS, "[[apps]]\nprocess = \" x.exe \"\nauto_pair = true\n");
+        let mut u = layers(
+            SYS,
+            "[[apps]]\nprocess = \" x.exe \"\nignore_host_ime_close = true\n",
+        );
         assert!(u.reset(Section::Apps, "x.exe"), "已存的名字带空白也要能删");
     }
 
     #[test]
     fn reset_all_clears_all_three_sections() {
-        let usr = "[[apps]]\nprocess = \"Mine.exe\"\nauto_pair = true\n\n[[initial_mode_scope]]\nprocess = \"explorer.exe\"\nclasses = [\"X\"]\n\n[[commit_newline]]\nprocess = \"W.exe\"\nstyle = \"cr\"\n";
+        let usr = "[[apps]]\nprocess = \"Mine.exe\"\nignore_host_ime_close = true\n\n[[initial_mode_scope]]\nprocess = \"explorer.exe\"\nclasses = [\"X\"]\n\n[[commit_newline]]\nprocess = \"W.exe\"\nstyle = \"cr\"\n";
         let mut l = layers(SYS, usr);
         l.reset_all();
         let text = l.render_user().unwrap();
@@ -1822,20 +1839,20 @@ auto_pair = true
         l.upsert(
             Section::Apps,
             "Weixin.exe",
-            &patch(json!({"auto_pair": true})),
+            &patch(json!({"ignore_host_ime_close": true})),
         )
         .unwrap();
         l.set_disabled(Section::Apps, "Weixin.exe", true).unwrap();
         assert_eq!(state_of(&l, "Weixin.exe"), RuleState::Disabled);
         assert_eq!(
-            user_row(&l, Section::Apps, "Weixin.exe").unwrap()["auto_pair"],
+            user_row(&l, Section::Apps, "Weixin.exe").unwrap()["ignore_host_ime_close"],
             json!(true),
             "禁用期间改写还在"
         );
         l.set_disabled(Section::Apps, "Weixin.exe", false).unwrap();
         let v = l.view_of(Section::Apps, "Weixin.exe").unwrap();
         assert_eq!(v.state, RuleState::Modified, "启用后回到禁用前的改写状态");
-        assert_eq!(v.effective["auto_pair"], json!(true));
+        assert_eq!(v.effective["ignore_host_ime_close"], json!(true));
         assert!(
             user_row(&l, Section::Apps, "Weixin.exe")
                 .unwrap()
@@ -1858,7 +1875,10 @@ auto_pair = true
 
     #[test]
     fn set_disabled_on_unknown_process_errors_and_user_only_rules_are_allowed() {
-        let mut l = layers(SYS, "[[apps]]\nprocess = \"Mine.exe\"\nauto_pair = true\n");
+        let mut l = layers(
+            SYS,
+            "[[apps]]\nprocess = \"Mine.exe\"\nignore_host_ime_close = true\n",
+        );
         assert_eq!(
             l.set_disabled(Section::Apps, "Nope.exe", true).unwrap_err(),
             "无此规则"
@@ -1873,7 +1893,7 @@ auto_pair = true
 
     #[test]
     fn sections_are_independent() {
-        let sys = "[[apps]]\nprocess = \"explorer.exe\"\nauto_pair = true\n\n[[initial_mode_scope]]\nprocess = \"explorer.exe\"\nclasses = [\"CabinetWClass\"]\n";
+        let sys = "[[apps]]\nprocess = \"explorer.exe\"\nignore_host_ime_close = true\n\n[[initial_mode_scope]]\nprocess = \"explorer.exe\"\nclasses = [\"CabinetWClass\"]\n";
         let mut l = layers(sys, "");
         l.upsert(
             Section::Apps,
@@ -1963,14 +1983,14 @@ auto_pair = true
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(COMPAT_FILE_NAME),
-            "[[commit_newline]]\nprocess = \"WINWORD.EXE\"\nstyle = \"cr\"\n\n[[apps]]\nprocess = \"Old.exe\"\nfuture_key = 3\nauto_pair = true\n",
+            "[[commit_newline]]\nprocess = \"WINWORD.EXE\"\nstyle = \"cr\"\n\n[[apps]]\nprocess = \"Old.exe\"\nfuture_key = 3\nignore_host_ime_close = true\n",
         )
         .unwrap();
         let mut l = Layers::load(None, None, Some(&dir)).unwrap();
         l.upsert(
             Section::Apps,
             "Mine.exe",
-            &patch(json!({"auto_pair": true})),
+            &patch(json!({"ignore_host_ime_close": true})),
         )
         .unwrap();
         l.save(&dir).unwrap();
@@ -1998,7 +2018,7 @@ auto_pair = true
     fn export_user_contains_only_the_diff() {
         let l = layers(SYS, USER_A);
         let text = l.export(ExportScope::User).unwrap();
-        assert!(text.contains("auto_pair = true"), "{text}");
+        assert!(text.contains("ignore_host_ime_close = true"), "{text}");
         assert!(
             !text.contains("caret_use_top") && !text.contains("Feishu"),
             "用户导出只含差异: {text}"
@@ -2013,7 +2033,7 @@ auto_pair = true
         let l = layers(SYS, &usr);
         let text = l.export(ExportScope::Effective).unwrap();
         assert!(
-            text.contains("caret_use_top = true") && text.contains("auto_pair = true"),
+            text.contains("caret_use_top = true") && text.contains("ignore_host_ime_close = true"),
             "叠加后的全貌: {text}"
         );
         assert!(
@@ -2057,11 +2077,11 @@ auto_pair = true
         let incoming = "\
 [[apps]]
 process = \"Brand.exe\"
-auto_pair = true
+ignore_host_ime_close = true
 
 [[apps]]
 process = \"Weixin.exe\"
-auto_pair = true
+ignore_host_ime_close = true
 
 [[apps]]
 process = \"Dota.exe\"
@@ -2095,7 +2115,7 @@ composition_start_pair_guard = true
             .collect();
         let _ = l
             .import_preview(
-                "[[apps]]\nprocess = \"Brand.exe\"\nauto_pair = true\n",
+                "[[apps]]\nprocess = \"Brand.exe\"\nignore_host_ime_close = true\n",
                 ImportMode::Replace,
             )
             .unwrap();
@@ -2153,9 +2173,12 @@ composition_start_pair_guard = true
 
     #[test]
     fn import_merge_keeps_unmentioned_user_entries_and_replace_drops_them() {
-        let mut m = layers(SYS, "[[apps]]\nprocess = \"E.exe\"\nauto_pair = true\n");
+        let mut m = layers(
+            SYS,
+            "[[apps]]\nprocess = \"E.exe\"\nignore_host_ime_close = true\n",
+        );
         m.import_apply(
-            "[[apps]]\nprocess = \"C.exe\"\nauto_pair = true\n",
+            "[[apps]]\nprocess = \"C.exe\"\nignore_host_ime_close = true\n",
             ImportMode::Merge,
         )
         .unwrap();
@@ -2163,9 +2186,12 @@ composition_start_pair_guard = true
             m.view_of(Section::Apps, "E.exe").is_some()
                 && m.view_of(Section::Apps, "C.exe").is_some()
         );
-        let mut r = layers(SYS, "[[apps]]\nprocess = \"E.exe\"\nauto_pair = true\n");
+        let mut r = layers(
+            SYS,
+            "[[apps]]\nprocess = \"E.exe\"\nignore_host_ime_close = true\n",
+        );
         r.import_apply(
-            "[[apps]]\nprocess = \"C.exe\"\nauto_pair = true\n",
+            "[[apps]]\nprocess = \"C.exe\"\nignore_host_ime_close = true\n",
             ImportMode::Replace,
         )
         .unwrap();
@@ -2177,7 +2203,7 @@ composition_start_pair_guard = true
 
     #[test]
     fn import_reports_unknown_keys_and_sections() {
-        let text = "[[apps]]\nprocess = \"A.exe\"\nbogus_key = 1\nauto_pair = true\n\n[[mystery]]\nx = 1\n";
+        let text = "[[apps]]\nprocess = \"A.exe\"\nbogus_key = 1\nignore_host_ime_close = true\n\n[[mystery]]\nx = 1\n";
         let p = layers(SYS, "")
             .import_preview(text, ImportMode::Merge)
             .unwrap();
@@ -2196,7 +2222,7 @@ composition_start_pair_guard = true
     /// 无效取值只丢这一个键并报告，**且不能原样落进用户层文件**。
     #[test]
     fn import_drops_invalid_values_reports_them_and_never_persists_them() {
-        let text = "[[apps]]\nprocess = \"A.exe\"\nfirst_show_mode = \"bogus\"\nauto_pair = true\n";
+        let text = "[[apps]]\nprocess = \"A.exe\"\nfirst_show_mode = \"bogus\"\nignore_host_ime_close = true\n";
         let mut l = layers(SYS, "");
         let p = l.import_apply(text, ImportMode::Merge).unwrap();
         assert!(
@@ -2209,13 +2235,17 @@ composition_start_pair_guard = true
             row.get("first_show_mode").is_none(),
             "无效值不得落盘: {row:?}"
         );
-        assert_eq!(row["auto_pair"], json!(true), "同一条里的有效字段照常导入");
+        assert_eq!(
+            row["ignore_host_ime_close"],
+            json!(true),
+            "同一条里的有效字段照常导入"
+        );
     }
 
     #[test]
     fn import_rejects_invalid_process_names_and_reports_them() {
         let mut l = layers(SYS, "");
-        let p = l.import_apply("[[apps]]\nprocess = \" a/b.exe \"\nauto_pair = true\n\n[[apps]]\nprocess = \"ok.exe\"\nauto_pair = true\n", ImportMode::Merge).unwrap();
+        let p = l.import_apply("[[apps]]\nprocess = \" a/b.exe \"\nignore_host_ime_close = true\n\n[[apps]]\nprocess = \"ok.exe\"\nignore_host_ime_close = true\n", ImportMode::Merge).unwrap();
         assert_eq!(p.rejected.len(), 1, "{:?}", p.rejected);
         assert!(l.user.apps.iter().all(|r| !process_of(r).contains('/')));
         assert!(l.view_of(Section::Apps, "ok.exe").is_some());
@@ -2231,7 +2261,7 @@ composition_start_pair_guard = true
 
     #[test]
     fn importing_the_same_content_twice_is_idempotent() {
-        let text = "[[apps]]\nprocess = \"Weixin.exe\"\nauto_pair = true\n";
+        let text = "[[apps]]\nprocess = \"Weixin.exe\"\nignore_host_ime_close = true\n";
         let mut l = layers(SYS, "");
         assert_eq!(
             l.import_apply(text, ImportMode::Merge).unwrap().items[0].action,
@@ -2306,7 +2336,7 @@ composition_start_pair_guard = true
         let (d, u) = rpc_dirs("write");
         let r = call(
             "compat.upsert",
-            json!({"section": "apps", "process": "Weixin.exe", "patch": {"auto_pair": true}}),
+            json!({"section": "apps", "process": "Weixin.exe", "patch": {"ignore_host_ime_close": true}}),
             &d,
             &u,
         )
@@ -2316,7 +2346,7 @@ composition_start_pair_guard = true
         assert!(
             std::fs::read_to_string(u.join(COMPAT_FILE_NAME))
                 .unwrap()
-                .contains("auto_pair")
+                .contains("ignore_host_ime_close")
         );
 
         let r = call(
@@ -2331,7 +2361,7 @@ composition_start_pair_guard = true
 
         let r = call(
             "compat.resetField",
-            json!({"section": "apps", "process": "Weixin.exe", "key": "auto_pair"}),
+            json!({"section": "apps", "process": "Weixin.exe", "key": "ignore_host_ime_close"}),
             &d,
             &u,
         )
@@ -2384,7 +2414,7 @@ composition_start_pair_guard = true
         let (d, u) = rpc_dirs("nodir");
         let r = rpc(
             "compat.upsert",
-            &json!({"section": "apps", "process": "A.exe", "patch": {"auto_pair": true}}),
+            &json!({"section": "apps", "process": "A.exe", "patch": {"ignore_host_ime_close": true}}),
             Some(&d),
             None,
             None,
@@ -2398,7 +2428,7 @@ composition_start_pair_guard = true
         let (d, u) = rpc_dirs("dry");
         let r = call(
             "compat.import",
-            json!({"content": "[[apps]]\nprocess = \"New.exe\"\nauto_pair = true\n", "dryRun": true}),
+            json!({"content": "[[apps]]\nprocess = \"New.exe\"\nignore_host_ime_close = true\n", "dryRun": true}),
             &d,
             &u,
         )
@@ -2414,11 +2444,11 @@ composition_start_pair_guard = true
     fn rpc_import_backs_up_existing_user_file() {
         let (d, u) = rpc_dirs("bak");
         std::fs::create_dir_all(&u).unwrap();
-        let original = "[[apps]]\nprocess = \"Old.exe\"\nauto_pair = true\n";
+        let original = "[[apps]]\nprocess = \"Old.exe\"\nignore_host_ime_close = true\n";
         std::fs::write(u.join(COMPAT_FILE_NAME), original).unwrap();
         let r = call(
             "compat.import",
-            json!({"content": "[[apps]]\nprocess = \"New.exe\"\nauto_pair = true\n", "mode": "replace"}),
+            json!({"content": "[[apps]]\nprocess = \"New.exe\"\nignore_host_ime_close = true\n", "mode": "replace"}),
             &d,
             &u,
         )
@@ -2449,7 +2479,7 @@ composition_start_pair_guard = true
     fn rpc_reset_all_backs_up_and_clears() {
         let (d, u) = rpc_dirs("all");
         std::fs::create_dir_all(&u).unwrap();
-        let original = "[[apps]]\nprocess = \"Old.exe\"\nauto_pair = true\n";
+        let original = "[[apps]]\nprocess = \"Old.exe\"\nignore_host_ime_close = true\n";
         std::fs::write(u.join(COMPAT_FILE_NAME), original).unwrap();
         let r = call("compat.resetAll", json!({}), &d, &u).unwrap();
         assert!(r.wrote);
@@ -2472,7 +2502,7 @@ composition_start_pair_guard = true
         std::fs::write(u.join(COMPAT_FILE_NAME), broken).unwrap();
         let err = call(
             "compat.upsert",
-            json!({"section": "apps", "process": "A.exe", "patch": {"auto_pair": true}}),
+            json!({"section": "apps", "process": "A.exe", "patch": {"ignore_host_ime_close": true}}),
             &d,
             &u,
         )
@@ -2551,10 +2581,13 @@ composition_start_pair_guard = true
     /// S4：replace 模式的预览要让用户看到「哪些会被删掉」。
     #[test]
     fn replace_preview_lists_entries_that_will_be_removed() {
-        let l = layers(SYS, "[[apps]]\nprocess = \"Mine.exe\"\nauto_pair = true\n");
+        let l = layers(
+            SYS,
+            "[[apps]]\nprocess = \"Mine.exe\"\nignore_host_ime_close = true\n",
+        );
         let p = l
             .import_preview(
-                "[[apps]]\nprocess = \"Other.exe\"\nauto_pair = true\n",
+                "[[apps]]\nprocess = \"Other.exe\"\nignore_host_ime_close = true\n",
                 ImportMode::Replace,
             )
             .unwrap();
@@ -2587,7 +2620,7 @@ composition_start_pair_guard = true
         std::fs::write(u.join(COMPAT_FILE_NAME), broken).unwrap();
         let r = call(
             "compat.import",
-            json!({"content": "[[apps]]\nprocess = \"New.exe\"\nauto_pair = true\n", "mode": "replace"}),
+            json!({"content": "[[apps]]\nprocess = \"New.exe\"\nignore_host_ime_close = true\n", "mode": "replace"}),
             &d,
             &u,
         )
@@ -2604,7 +2637,7 @@ composition_start_pair_guard = true
         assert!(
             call(
                 "compat.import",
-                json!({"content": "[[apps]]\nprocess = \"New.exe\"\nauto_pair = true\n", "mode": "merge"}),
+                json!({"content": "[[apps]]\nprocess = \"New.exe\"\nignore_host_ime_close = true\n", "mode": "merge"}),
                 &d,
                 &u
             )
@@ -2624,7 +2657,7 @@ composition_start_pair_guard = true
                 std::thread::spawn(move || {
                     call(
                         "compat.upsert",
-                        json!({"section": "apps", "process": format!("P{i}.exe"), "patch": {"auto_pair": true}}),
+                        json!({"section": "apps", "process": format!("P{i}.exe"), "patch": {"ignore_host_ime_close": true}}),
                         &d,
                         &u,
                     )
@@ -2670,12 +2703,12 @@ composition_start_pair_guard = true
         for i in 0..8 {
             std::fs::write(
                 u.join(COMPAT_FILE_NAME),
-                format!("[[apps]]\nprocess = \"V{i}.exe\"\nauto_pair = true\n"),
+                format!("[[apps]]\nprocess = \"V{i}.exe\"\nignore_host_ime_close = true\n"),
             )
             .unwrap();
             call(
                 "compat.import",
-                json!({"content": "[[apps]]\nprocess = \"X.exe\"\nauto_pair = true\n", "mode": "replace"}),
+                json!({"content": "[[apps]]\nprocess = \"X.exe\"\nignore_host_ime_close = true\n", "mode": "replace"}),
                 &d,
                 &u,
             )
@@ -2697,7 +2730,7 @@ composition_start_pair_guard = true
         let (d, u) = rpc_dirs("dryrun_type");
         let err = call(
             "compat.import",
-            json!({"content": "[[apps]]\nprocess = \"N.exe\"\nauto_pair = true\n", "dryRun": "true"}),
+            json!({"content": "[[apps]]\nprocess = \"N.exe\"\nignore_host_ime_close = true\n", "dryRun": "true"}),
             &d,
             &u,
         )
@@ -2805,7 +2838,7 @@ composition_start_pair_guard = true
         assert!(
             call(
                 "compat.upsert",
-                json!({"section": "apps", "process": "A.exe", "patch": {"auto_pair": true}}),
+                json!({"section": "apps", "process": "A.exe", "patch": {"ignore_host_ime_close": true}}),
                 &d,
                 &u
             )
@@ -2827,7 +2860,7 @@ composition_start_pair_guard = true
         let (d, u) = rpc_dirs("samedir");
         let err = rpc(
             "compat.upsert",
-            &json!({"section": "apps", "process": "Weixin.exe", "patch": {"auto_pair": true}}),
+            &json!({"section": "apps", "process": "Weixin.exe", "patch": {"ignore_host_ime_close": true}}),
             Some(&d),
             None,
             Some(&d),
@@ -2928,7 +2961,7 @@ composition_start_pair_guard = true
             "Int 的默认值是 0"
         );
         assert_eq!(
-            sec_fields["auto_pair"].value,
+            sec_fields["ignore_host_ime_close"].value,
             Value::Null,
             "TriBool 未设为 null"
         );
@@ -3040,7 +3073,7 @@ mod window_identity_tests {
     use crate::compat_overlay::parse_raw;
     use serde_json::json;
 
-    const SYS: &str = "[[apps]]\nprocess = \"ahk.exe\"\nauto_pair = true\n\n[[apps]]\nprocess = \"ahk.exe\"\ntitle = \"Editor*\"\ninitial_mode = \"english\"\n";
+    const SYS: &str = "[[apps]]\nprocess = \"ahk.exe\"\nignore_host_ime_close = true\n\n[[apps]]\nprocess = \"ahk.exe\"\ntitle = \"Editor*\"\ninitial_mode = \"english\"\n";
 
     fn layers(usr: &str) -> Layers {
         Layers {
@@ -3066,12 +3099,15 @@ mod window_identity_tests {
         assert_eq!(views[1].state, RuleState::Modified);
         let v = l.view_of(Section::Apps, "ahk.exe").unwrap();
         assert_eq!(v.state, RuleState::System, "纯进程那条没被用户动过");
-        assert_eq!(v.effective["auto_pair"], json!(true));
+        assert_eq!(v.effective["ignore_host_ime_close"], json!(true));
 
         l.upsert(
             Section::Apps,
             "ahk.exe",
-            &json!({"auto_pair": false}).as_object().unwrap().clone(),
+            &json!({"ignore_host_ime_close": false})
+                .as_object()
+                .unwrap()
+                .clone(),
         )
         .unwrap();
         assert_eq!(
@@ -3143,7 +3179,9 @@ mod window_identity_tests {
     /// replace 导入会清掉用户层的窗口规则：预览必须把它列成 remove（列表里虽不显示）。
     #[test]
     fn replace_import_previews_removal_of_window_rules() {
-        let l = layers("[[apps]]\nprocess = \"ahk.exe\"\ntitle = \"T\"\nauto_pair = true\n");
+        let l = layers(
+            "[[apps]]\nprocess = \"ahk.exe\"\ntitle = \"T\"\nignore_host_ime_close = true\n",
+        );
         let p = l.import_preview("", ImportMode::Replace).unwrap();
         assert_eq!(
             p.items
@@ -3174,7 +3212,7 @@ mod window_identity_tests {
         let mut l = layers("");
         let p = l
             .import_apply(
-                "[[apps]]\nprocess = \"AHK.EXE\"\ntitle = \" EDITOR* \"\ncaret_use_top = true\n\n[[apps]]\nclass = \"Chrome_WidgetWin_*\"\ncomposition_placeholder = \"zwsp\"\n\n[[apps]]\nprocess = \"x.exe\"\nclass = 1\nauto_pair = true\n",
+                "[[apps]]\nprocess = \"AHK.EXE\"\ntitle = \" EDITOR* \"\ncaret_use_top = true\n\n[[apps]]\nclass = \"Chrome_WidgetWin_*\"\ncomposition_placeholder = \"zwsp\"\n\n[[apps]]\nprocess = \"x.exe\"\nclass = 1\nignore_host_ime_close = true\n",
                 ImportMode::Merge,
             )
             .unwrap();
@@ -3221,7 +3259,7 @@ mod window_admin_tests {
     use crate::compat_overlay::parse_raw;
     use serde_json::json;
 
-    const SYS: &str = "[[apps]]\nprocess = \"ahk.exe\"\nauto_pair = true\n\n[[apps]]\nprocess = \"AHK.exe\"\nclass = \"AutoHotkeyGUI\"\nfirst_show_mode = \"wait\"\ncaret_use_top = true\n\n[[apps]]\nclass = \"Chrome_WidgetWin_*\"\ncomposition_placeholder = \"zwsp\"\n";
+    const SYS: &str = "[[apps]]\nprocess = \"ahk.exe\"\nignore_host_ime_close = true\n\n[[apps]]\nprocess = \"AHK.exe\"\nclass = \"AutoHotkeyGUI\"\nfirst_show_mode = \"wait\"\ncaret_use_top = true\n\n[[apps]]\nclass = \"Chrome_WidgetWin_*\"\ncomposition_placeholder = \"zwsp\"\n";
 
     fn layers(usr: &str) -> Layers {
         Layers {
@@ -3346,7 +3384,7 @@ mod window_admin_tests {
     #[test]
     fn rename_changes_conditions_of_a_user_rule_in_place() {
         let mut l = layers(
-            "[[apps]]\nprocess = \"x.exe\"\nclass = \"A\"\nauto_pair = true\ncomment = \"c\"\n",
+            "[[apps]]\nprocess = \"x.exe\"\nclass = \"A\"\nignore_host_ime_close = true\ncomment = \"c\"\n",
         );
         l.rename(Section::Apps, k("x.exe", "a", ""), k("X.exe", "B*", "T?"))
             .unwrap();
@@ -3355,7 +3393,7 @@ mod window_admin_tests {
         assert_eq!(row["process"], json!("X.exe"));
         assert_eq!(row["class"], json!("B*"));
         assert_eq!(row["title"], json!("T?"));
-        assert_eq!(row["auto_pair"], json!(true), "字段保留");
+        assert_eq!(row["ignore_host_ime_close"], json!(true), "字段保留");
         assert_eq!(row["comment"], json!("c"));
         assert!(l.view_of(Section::Apps, k("x.exe", "A", "")).is_none());
 
@@ -3376,7 +3414,7 @@ mod window_admin_tests {
     #[test]
     fn rename_refuses_factory_rules_collisions_and_bad_targets() {
         let mut l = layers(
-            "[[apps]]\nprocess = \"AHK.exe\"\nclass = \"AutoHotkeyGUI\"\nauto_pair = false\n\n[[apps]]\nprocess = \"x.exe\"\nauto_pair = true\n",
+            "[[apps]]\nprocess = \"AHK.exe\"\nclass = \"AutoHotkeyGUI\"\nignore_host_ime_close = false\n\n[[apps]]\nprocess = \"x.exe\"\nignore_host_ime_close = true\n",
         );
         let before = l.user.clone();
         let err = l
@@ -3484,10 +3522,11 @@ mod window_admin_tests {
         let v = serde_json::to_value(&report[0]).unwrap();
         assert_eq!(v["class"], json!("K"));
 
-        let l = layers("[[apps]]\nprocess = \"x.exe\"\ntitle = \"T\"\nauto_pair = true\n");
+        let l =
+            layers("[[apps]]\nprocess = \"x.exe\"\ntitle = \"T\"\nignore_host_ime_close = true\n");
         let p = l
             .import_preview(
-                "[[apps]]\nclass = \"New*\"\nauto_pair = true\n\n[[apps]]\nprocess = \"y.exe\"\nclass = \"bad\\u0007\"\nauto_pair = true\n\n[[commit_newline]]\nprocess = \"*\"\nstyle = \"cr\"\n",
+                "[[apps]]\nclass = \"New*\"\nignore_host_ime_close = true\n\n[[apps]]\nprocess = \"y.exe\"\nclass = \"bad\\u0007\"\nignore_host_ime_close = true\n\n[[commit_newline]]\nprocess = \"*\"\nstyle = \"cr\"\n",
                 ImportMode::Replace,
             )
             .unwrap();
@@ -3541,7 +3580,7 @@ mod window_admin_tests {
 
         let out = call(
             "compat.upsert",
-            json!({"section": "apps", "class": "Foo*", "patch": {"auto_pair": true}}),
+            json!({"section": "apps", "class": "Foo*", "patch": {"ignore_host_ime_close": true}}),
         )
         .unwrap();
         assert!(out.wrote);
@@ -3652,7 +3691,7 @@ mod window_admin_tests {
     fn existing_non_conforming_rules_are_editable_and_only_new_identities_are_validated() {
         let long = "x".repeat(MAX_PATTERN_CHARS + 10);
         let usr = format!(
-            "[[apps]]\nprocess = \"a.exe\"\nclass = \"{long}\"\nauto_pair = true\n\n[[commit_newline]]\nprocess = \"*\"\nstyle = \"cr\"\n"
+            "[[apps]]\nprocess = \"a.exe\"\nclass = \"{long}\"\nignore_host_ime_close = true\n\n[[commit_newline]]\nprocess = \"*\"\nstyle = \"cr\"\n"
         );
         let mut l = layers(&usr);
         let bad = k("a.exe", &long, "");
@@ -3675,7 +3714,7 @@ mod window_admin_tests {
             l.upsert(
                 Section::Apps,
                 k("b.exe", &long, ""),
-                &patch(json!({"auto_pair": true}))
+                &patch(json!({"ignore_host_ime_close": true}))
             )
             .is_err(),
             "新建仍校验"

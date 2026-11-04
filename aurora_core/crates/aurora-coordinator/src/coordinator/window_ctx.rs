@@ -14,8 +14,8 @@
 //! （[`Coordinator::focus_window_of`]）。标题按用户数据处理：本模块的日志只记长度。
 
 use super::*;
-use std::hash::{Hash, Hasher};
 use aurora_config::app_compat::{AppCompatRule, ResolvedRule, RuleId, RuleKey, WindowCtx};
+use std::hash::{Hash, Hasher};
 
 /// 一个焦点窗口的身份：顶层窗口类名 + 标题。拿不到的项为空串，带对应条件的规则一律不命中
 /// （「不知道是哪个窗口」不能套窗口规则）。
@@ -271,7 +271,7 @@ impl Coordinator {
     ///
     /// 给只知道 pid 的路径用（输入诊断上报、UIElement 推断、按 pid 的推送判定）。对刚获焦的
     /// 那个 token，它与 [`Self::focus_window_of_token`] 必然相同——密码抑制的两侧（服务端
-    /// `apply_input_diag` 按 pid、推给 DLL 的按 token）因此对焦点实例算出同一个值。
+    /// `apply_input_scope` 按 pid、推给 DLL 的按 token）因此对焦点实例算出同一个值。
     pub(crate) fn focus_window_of_pid(&self, pid: u32) -> FocusWindow {
         if pid == 0 {
             return FocusWindow::default();
@@ -448,7 +448,6 @@ impl Coordinator {
             return;
         }
         self.push_password_suppress_config(token);
-        self.push_english_pair_config(token);
         self.push_composition_placeholder_config(token);
         self.push_multiline_commit_config(token);
     }
@@ -1050,7 +1049,10 @@ initial_punct = "english"
     /// 标题是用户数据：窗口的 `{:?}` 只输出长度。
     #[test]
     fn focus_window_debug_never_contains_the_title() {
-        let c = coord_with_rules("title_dbg", "[[apps]]\ntitle = \"*\"\nauto_pair = false\n");
+        let c = coord_with_rules(
+            "title_dbg",
+            "[[apps]]\ntitle = \"*\"\ncaret_use_top = true\n",
+        );
         let w = c.focus_window_of("a.exe", "C", "机密文件");
         assert_eq!(w.title, "机密文件", "前置：标题确实留下了");
         let s = format!("{w:?}");
@@ -1071,7 +1073,7 @@ initial_punct = "english"
     fn title_match_switch_is_pushed_and_follows_reload() {
         let (c, user) = coord_with_user_rules(
             "titlesw",
-            "[[apps]]\nprocess = \"a.exe\"\ntitle = \"*x*\"\nauto_pair = false\n",
+            "[[apps]]\nprocess = \"a.exe\"\ntitle = \"*x*\"\ncaret_use_top = true\n",
         );
         c.pid_names.lock().unwrap().insert(7, "a.exe".into());
         c.pid_names.lock().unwrap().insert(8, "b.exe".into());
@@ -1101,7 +1103,7 @@ initial_punct = "english"
 
         std::fs::write(
             user.join("compat.toml"),
-            "[[apps]]\nprocess = \"a.exe\"\nclass = \"C\"\nauto_pair = false\n",
+            "[[apps]]\nprocess = \"a.exe\"\nclass = \"C\"\ncaret_use_top = true\n",
         )
         .unwrap();
         c.reload_app_compat();
@@ -1436,7 +1438,7 @@ password_force_english = true
 [[apps]]
 process = "p4menu.exe"
 first_show_mode = "fast"
-auto_pair = true
+ignore_host_ime_close = true
 
 [[apps]]
 process = "p4menu.exe"
@@ -1459,7 +1461,7 @@ first_show_mode = "wait"
             Some(F::Instant)
         );
 
-        c.set_auto_pair_rule(2);
+        c.set_ignore_host_ime_close_rule(2);
         let text = std::fs::read_to_string(user.join("compat.toml")).unwrap();
         let raw: toml::Table = toml::from_str(&text).unwrap();
         let apps = raw["apps"].as_array().unwrap();
@@ -1468,12 +1470,15 @@ first_show_mode = "wait"
             .find(|r| r.get("class").is_some())
             .expect("窗口规则还在");
         assert!(
-            pinned.get("auto_pair").is_none(),
-            "auto_pair 的出处是纯进程那条: {text}"
+            pinned.get("ignore_host_ime_close").is_none(),
+            "ignore_host_ime_close 的出处是纯进程那条: {text}"
         );
         let plain = apps.iter().find(|r| r.get("class").is_none()).unwrap();
-        assert_eq!(plain["auto_pair"].as_bool(), Some(false), "{text}");
-        assert_eq!(c.active_compat.lock().unwrap().auto_pair, Some(false));
+        assert_eq!(
+            plain["ignore_host_ime_close"].as_bool(),
+            Some(false),
+            "{text}"
+        );
         let _ = std::fs::remove_dir_all(&user);
     }
 
@@ -1488,12 +1493,12 @@ first_show_mode = "wait"
 [[apps]]
 process = "*"
 first_show_mode = "wait"
-auto_pair = true
+ignore_host_ime_close = true
 
 [[apps]]
 process = "p4menu.exe"
 first_show_mode = "fast"
-auto_pair = false
+ignore_host_ime_close = false
 "#,
         );
         c.pid_names.lock().unwrap().insert(902, "p4menu.exe".into());
@@ -1502,13 +1507,10 @@ auto_pair = false
             c.active_compat.lock().unwrap().first_show_mode,
             Some(F::Fast)
         );
-        assert_eq!(c.active_compat.lock().unwrap().auto_pair, Some(false));
 
         c.set_first_show_mode(0);
-        c.set_auto_pair_rule(0);
         let ac = *c.active_compat.lock().unwrap();
         assert_eq!(ac.first_show_mode, Some(F::Wait), "* 的值透上来");
-        assert_eq!(ac.auto_pair, Some(true));
         let _ = std::fs::remove_dir_all(&user);
     }
 

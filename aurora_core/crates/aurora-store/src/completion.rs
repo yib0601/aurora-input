@@ -1,21 +1,15 @@
-//! 补全候选的**用户学习数据**：邮箱后缀词频与网址输入历史。
+//! 补全候选的**用户学习数据**（目前只有快捷输入历史一类）。
 //!
-//! ## 一张表承载两类，而不是两张表
+//! ## 键编码与 kind 闭集
 //!
-//! 两者的形态完全一样——「一条文本 + 用过多少次 + 最后一次什么时候」，消费端也一样
-//! （按 `(count, last_used)` 排序后作为补全候选）。拆两张表就要把
-//! record/list/remove/clear/prune/export/import 七组原语各写两遍，而它们唯一的差别
-//! 只是表名；两份实现迟早分叉，分叉的表现是「邮箱后缀按频次排了、网址历史没排」
-//! 这类只在一边出现的怪事。
-//!
-//! 故 key 编码为 `"{kind}\0{text}"`，[`CompletionKind`] 是全部合法 kind 的**闭集**——
+//! key 编码为 `"{kind}\0{text}"`，[`CompletionKind`] 是全部合法 kind 的**闭集**——
 //! 用枚举而不是裸字符串，是因为 kind 拼错不会报错，只会写进一个谁也读不到的分区，
 //! 且清空时同样读不到（"emial" 那条数据会永远留在库里）。
 //!
 //! ## 键不带方案：这是全局属性
 //!
-//! 与 [`crate::common_chars`] 同一条判据——「我常用哪个邮箱后缀」「我访问过哪个网址」
-//! 与用五笔还是拼音毫无关系。带 schema 前缀会让用户切个方案就发现补全全没了。
+//! 与 [`crate::common_chars`] 同一条判据——「我在快捷输入里打过哪些字面文本」
+//! 与用五笔还是拼音毫无关系。带 schema 前缀会让用户切个方案就发现历史全没了。
 //!
 //! ## 与 [`crate::freq`] 的分界
 //!
@@ -31,34 +25,25 @@ use crate::store::{COMPLETION, Store};
 /// 闭集：新增一类补全数据就在这里加一个变体，`as_str` 是它在库里的唯一写法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompletionKind {
-    /// 邮箱后缀（存 `@` **之后**的部分，如 `qq.com`）。
-    ///
-    /// 不含 `@`：用户可能把同一个域名写进预置列表时带不带 `@` 不一致，存归一化后的
-    /// 形态才能与预置列表比对去重。拼回完整邮箱是消费端的事。
-    EmailSuffix,
-    /// 网址输入历史（存上屏的完整文本，如 `www.example.com/path`）。
-    UrlHistory,
     /// 快捷输入历史（存在快捷输入里上屏过的字面文本，如 `${reset_time}`、`RESET_TIME`）。
     ///
     /// **区分大小写地存**：`RESET_TIME` 与 `reset_time` 是两条（t46）。按前缀**不区分大小写**
     /// 地取是消费端的事，见协调器 `quick_history_candidates`。
+    ///
+    /// 曾经还有 `EmailSuffix` / `UrlHistory` 两类（邮箱后缀补全、网址输入历史）。那两个
+    /// 输入模式已整块删除，这两个 kind 随之撤掉：存量行在 `from_key` 处返回 `None`，
+    /// 读盘时按「未知分区」跳过、下一次落盘即从文件里消失。
     QuickHistory,
 }
 
 impl CompletionKind {
     /// 全部类别。导出、整表清空等「对每一类都做一遍」的地方一律遍历它，不各自手写列表
     /// ——新增一类时手写的列表会被漏，症状是那一类不进备份、还原时也清不掉。
-    pub const ALL: [CompletionKind; 3] = [
-        CompletionKind::EmailSuffix,
-        CompletionKind::UrlHistory,
-        CompletionKind::QuickHistory,
-    ];
+    pub const ALL: [CompletionKind; 1] = [CompletionKind::QuickHistory];
 
     /// 库中的字面写法。**改动即破坏存量数据**（旧 kind 的记录会读不到）。
     pub fn as_str(self) -> &'static str {
         match self {
-            CompletionKind::EmailSuffix => "email_suffix",
-            CompletionKind::UrlHistory => "url_history",
             CompletionKind::QuickHistory => "quick_history",
         }
     }
@@ -69,8 +54,6 @@ impl CompletionKind {
     /// 易混（这里返回 `Option` 而非 `Result`，签名并不兼容）。同 `DictSection::from_key`。
     pub fn from_key(s: &str) -> Option<Self> {
         match s {
-            "email_suffix" => Some(CompletionKind::EmailSuffix),
-            "url_history" => Some(CompletionKind::UrlHistory),
             "quick_history" => Some(CompletionKind::QuickHistory),
             _ => None,
         }
@@ -88,9 +71,10 @@ pub struct CompletionRecord {
 
 /// 单条文本的长度上限（字符数）。
 ///
-/// 网址可以很长，但**不该无上限**：上屏文本直接进 key，一条畸形长文本会把整张表撑大，
-/// 而补全候选窗根本显示不下。与 [`crate::user_words::USER_WORD_CODE_MAX_CHARS`] 同一
-/// 用意，取值放宽到 512 是因为带查询串的网址确实能到几百字符。
+/// 快捷输入的历史文本可以很长（整句短语），但**不该无上限**：上屏文本直接进 key，
+/// 一条畸形长文本会把整张表撑大，而补全候选窗根本显示不下。与
+/// [`crate::user_words::USER_WORD_CODE_MAX_CHARS`] 同一用意，取值放宽到 512 是因为
+/// 长短语确实能到几百字符。
 pub const COMPLETION_TEXT_MAX_CHARS: usize = 512;
 
 /// value: count u32 + last_used i64 = 12 字节（与 [`crate::freq`] 同构）。
@@ -115,7 +99,7 @@ fn enc_key(kind: CompletionKind, text: &str) -> String {
     format!("{}\u{0}{}", kind.as_str(), text)
 }
 
-/// 扫描某 kind 全部记录用的前缀（含分隔符，避免 `email` 误配 `email_suffix`）。
+/// 扫描某 kind 全部记录用的前缀（含分隔符，避免 `quick` 误配 `quick_history_x`）。
 fn scan_prefix(kind: CompletionKind) -> String {
     format!("{}\u{0}", kind.as_str())
 }
@@ -596,10 +580,10 @@ mod tests {
     #[test]
     fn reload_keeps_hand_edit_even_with_unflushed_changes() {
         let s = store("reload_edit");
-        s.record_completion(CompletionKind::EmailSuffix, "qq.com")
+        s.record_completion(CompletionKind::QuickHistory, "qq.com")
             .unwrap();
         s.flush_completions().unwrap();
-        s.record_completion(CompletionKind::EmailSuffix, "163.com")
+        s.record_completion(CompletionKind::QuickHistory, "163.com")
             .unwrap(); // 未落盘
         let p = s.completion_path();
         let edited = std::fs::read_to_string(&p)
@@ -607,8 +591,8 @@ mod tests {
             .replace("qq.com", "hand.example");
         std::fs::write(&p, &edited).unwrap();
         assert!(s.reload_completions());
-        assert!(has(&s, CompletionKind::EmailSuffix, "hand.example"));
-        assert!(!has(&s, CompletionKind::EmailSuffix, "qq.com"));
+        assert!(has(&s, CompletionKind::QuickHistory, "hand.example"));
+        assert!(!has(&s, CompletionKind::QuickHistory, "qq.com"));
         assert_eq!(
             std::fs::read_to_string(&p).unwrap(),
             edited,
@@ -620,18 +604,18 @@ mod tests {
     #[test]
     fn corrupt_completion_self_heals_from_bak() {
         let s = store("heal");
-        s.record_completion(CompletionKind::EmailSuffix, "qq.com")
+        s.record_completion(CompletionKind::QuickHistory, "qq.com")
             .unwrap();
         s.flush_completions().unwrap();
-        s.record_completion(CompletionKind::EmailSuffix, "163.com")
+        s.record_completion(CompletionKind::QuickHistory, "163.com")
             .unwrap();
         s.flush_completions().unwrap(); // .bak = 只有 qq.com 的那一版
         let p = s.completion_path();
         let s = reopen("heal", s);
         std::fs::write(&p, b"\xff garbage").unwrap();
         let s = reopen("heal", s);
-        assert!(has(&s, CompletionKind::EmailSuffix, "qq.com"));
-        s.record_completion(CompletionKind::EmailSuffix, "gmail.com")
+        assert!(has(&s, CompletionKind::QuickHistory, "qq.com"));
+        s.record_completion(CompletionKind::QuickHistory, "gmail.com")
             .unwrap();
         s.flush_completions().unwrap();
         let txt = std::fs::read_to_string(&p).unwrap();
@@ -644,7 +628,7 @@ mod tests {
         let p = s.completion_path();
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, b"\xff garbage").unwrap();
-        s.record_completion(CompletionKind::UrlHistory, "example.com")
+        s.record_completion(CompletionKind::QuickHistory, "example.com")
             .unwrap();
         s.flush_completions().unwrap();
         let kept = std::fs::read_dir(s.user_text_dir().join(".backup"))
@@ -682,15 +666,17 @@ mod tests {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(
             &p,
-            "---\ncolumns: [kind, text, count, last_used]\nwind: {kind: completion, escape: true}\n...\n# no comment\nemail_suffix\tqq.com\t2\t1\nnope\tx\t1\t1\nemail_suffix\ty.com\tz\t1\n",
+            "---\ncolumns: [kind, text, count, last_used]\nwind: {kind: completion, escape: true}\n...\n# no comment\nquick_history\tqq.com\t2\t1\nnope\tx\t1\t1\nquick_history\ty.com\tz\t1\nemail_suffix\told.com\t5\t1\n",
         )
         .unwrap();
-        assert!(has(&s, CompletionKind::EmailSuffix, "qq.com"));
+        assert!(has(&s, CompletionKind::QuickHistory, "qq.com"));
+        // 后三行各坏一处：未知 kind、count 非数字、**已撤销的旧 kind**（`email_suffix`，
+        // 邮箱模式删除前的存量行）——存档里的旧行必须被跳过而不是炸掉整张表。
         assert_eq!(
             aurora_userdata::issues::list_under(&p),
             vec![aurora_userdata::issues::FileIssue {
                 path: p.clone(),
-                kind: aurora_userdata::issues::IssueKind::BadLines(2)
+                kind: aurora_userdata::issues::IssueKind::BadLines(3)
             }]
         );
         aurora_userdata::issues::clear(&p);
@@ -700,21 +686,21 @@ mod tests {
     fn record_accumulates_count() {
         let s = store("acc");
         assert_eq!(
-            s.get_completion(CompletionKind::EmailSuffix, "qq.com")
+            s.get_completion(CompletionKind::QuickHistory, "qq.com")
                 .unwrap(),
             None
         );
 
         assert!(
-            s.record_completion(CompletionKind::EmailSuffix, "qq.com")
+            s.record_completion(CompletionKind::QuickHistory, "qq.com")
                 .unwrap()
         );
         assert!(
-            s.record_completion(CompletionKind::EmailSuffix, "qq.com")
+            s.record_completion(CompletionKind::QuickHistory, "qq.com")
                 .unwrap()
         );
         let rec = s
-            .get_completion(CompletionKind::EmailSuffix, "qq.com")
+            .get_completion(CompletionKind::QuickHistory, "qq.com")
             .unwrap()
             .expect("记过两次应查得到");
         assert_eq!(rec.count, 2, "同一条重复记录应累加而非新增");
@@ -722,62 +708,20 @@ mod tests {
     }
 
     #[test]
-    fn kinds_do_not_leak_into_each_other() {
-        let s = store("kinds");
-        s.record_completion(CompletionKind::EmailSuffix, "same.text")
-            .unwrap();
-        s.record_completion(CompletionKind::UrlHistory, "same.text")
-            .unwrap();
-
-        // 同一条文本在两个 kind 下各有独立计数。
-        s.record_completion(CompletionKind::UrlHistory, "same.text")
-            .unwrap();
-        assert_eq!(
-            s.get_completion(CompletionKind::EmailSuffix, "same.text")
-                .unwrap()
-                .unwrap()
-                .count,
-            1
-        );
-        assert_eq!(
-            s.get_completion(CompletionKind::UrlHistory, "same.text")
-                .unwrap()
-                .unwrap()
-                .count,
-            2
-        );
-
-        // 清一类不影响另一类——设置里「清空网址历史」不该抹掉邮箱学习。
-        assert_eq!(s.clear_completions(CompletionKind::UrlHistory).unwrap(), 1);
-        assert_eq!(
-            s.list_completions(CompletionKind::UrlHistory, "", 0, 0)
-                .unwrap()
-                .1,
-            0
-        );
-        assert_eq!(
-            s.list_completions(CompletionKind::EmailSuffix, "", 0, 0)
-                .unwrap()
-                .1,
-            1
-        );
-    }
-
-    #[test]
     fn list_filters_by_prefix_and_sorts_by_count() {
         let s = store("list");
         for _ in 0..3 {
-            s.record_completion(CompletionKind::UrlHistory, "www.b.com")
+            s.record_completion(CompletionKind::QuickHistory, "www.b.com")
                 .unwrap();
         }
-        s.record_completion(CompletionKind::UrlHistory, "www.a.com")
+        s.record_completion(CompletionKind::QuickHistory, "www.a.com")
             .unwrap();
-        s.record_completion(CompletionKind::UrlHistory, "bbs.c.com")
+        s.record_completion(CompletionKind::QuickHistory, "bbs.c.com")
             .unwrap();
 
         // 前缀过滤：bbs. 那条不在 www. 的结果里。
         let (rows, total) = s
-            .list_completions(CompletionKind::UrlHistory, "www.", 0, 0)
+            .list_completions(CompletionKind::QuickHistory, "www.", 0, 0)
             .unwrap();
         assert_eq!(total, 2, "www. 前缀应命中两条，实际 {:?}", rows);
         // 次数多的在前，与字典序相反 —— 证明排的是频次而不是 redb 的返回序。
@@ -786,7 +730,7 @@ mod tests {
 
         // 空前缀 = 全部。
         assert_eq!(
-            s.list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            s.list_completions(CompletionKind::QuickHistory, "", 0, 0)
                 .unwrap()
                 .1,
             3
@@ -797,10 +741,11 @@ mod tests {
     fn list_paginates() {
         let s = store("page");
         for t in ["a", "b", "c"] {
-            s.record_completion(CompletionKind::UrlHistory, t).unwrap();
+            s.record_completion(CompletionKind::QuickHistory, t)
+                .unwrap();
         }
         let (page, total) = s
-            .list_completions(CompletionKind::UrlHistory, "", 1, 1)
+            .list_completions(CompletionKind::QuickHistory, "", 1, 1)
             .unwrap();
         assert_eq!(total, 3, "total 是命中总数而非本页条数");
         assert_eq!(page.len(), 1);
@@ -809,22 +754,22 @@ mod tests {
     #[test]
     fn remove_one_leaves_the_rest() {
         let s = store("rm");
-        s.record_completion(CompletionKind::EmailSuffix, "qq.com")
+        s.record_completion(CompletionKind::QuickHistory, "qq.com")
             .unwrap();
-        s.record_completion(CompletionKind::EmailSuffix, "163.com")
+        s.record_completion(CompletionKind::QuickHistory, "163.com")
             .unwrap();
 
         assert!(
-            s.remove_completion(CompletionKind::EmailSuffix, "qq.com")
+            s.remove_completion(CompletionKind::QuickHistory, "qq.com")
                 .unwrap()
         );
         assert!(
-            !s.remove_completion(CompletionKind::EmailSuffix, "qq.com")
+            !s.remove_completion(CompletionKind::QuickHistory, "qq.com")
                 .unwrap(),
             "删第二次应返回 false 而不是报错"
         );
         assert_eq!(
-            s.list_completions(CompletionKind::EmailSuffix, "", 0, 0)
+            s.list_completions(CompletionKind::QuickHistory, "", 0, 0)
                 .unwrap()
                 .1,
             1
@@ -837,17 +782,17 @@ mod tests {
         // hot 记 3 次、mid 2 次、cold 1 次 —— 裁剪应按补全展示的同一排序取舍。
         for (text, n) in [("hot", 3), ("mid", 2), ("cold", 1)] {
             for _ in 0..n {
-                s.record_completion(CompletionKind::UrlHistory, text)
+                s.record_completion(CompletionKind::QuickHistory, text)
                     .unwrap();
             }
         }
         assert_eq!(
-            s.prune_completions(CompletionKind::UrlHistory, 2, None)
+            s.prune_completions(CompletionKind::QuickHistory, 2, None)
                 .unwrap(),
             1
         );
         let (rows, total) = s
-            .list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            .list_completions(CompletionKind::QuickHistory, "", 0, 0)
             .unwrap();
         assert_eq!(total, 2);
         assert_eq!(
@@ -857,17 +802,17 @@ mod tests {
 
         // 未超上限时不动任何东西；max=0 表示不限。
         assert_eq!(
-            s.prune_completions(CompletionKind::UrlHistory, 5, None)
+            s.prune_completions(CompletionKind::QuickHistory, 5, None)
                 .unwrap(),
             0
         );
         assert_eq!(
-            s.prune_completions(CompletionKind::UrlHistory, 0, None)
+            s.prune_completions(CompletionKind::QuickHistory, 0, None)
                 .unwrap(),
             0
         );
         assert_eq!(
-            s.list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            s.list_completions(CompletionKind::QuickHistory, "", 0, 0)
                 .unwrap()
                 .1,
             2
@@ -883,21 +828,21 @@ mod tests {
         let s = store("prunekeep");
         for (text, n) in [("old_hot", 5), ("old_mid", 3)] {
             for _ in 0..n {
-                s.record_completion(CompletionKind::UrlHistory, text)
+                s.record_completion(CompletionKind::QuickHistory, text)
                     .unwrap();
             }
         }
         // 模拟「上屏一条新网址」：count=1，排序上垫底。
-        s.record_completion(CompletionKind::UrlHistory, "fresh")
+        s.record_completion(CompletionKind::QuickHistory, "fresh")
             .unwrap();
 
         assert_eq!(
-            s.prune_completions(CompletionKind::UrlHistory, 2, Some("fresh"))
+            s.prune_completions(CompletionKind::QuickHistory, 2, Some("fresh"))
                 .unwrap(),
             1
         );
         let (rows, total) = s
-            .list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            .list_completions(CompletionKind::QuickHistory, "", 0, 0)
             .unwrap();
         assert_eq!(total, 2, "保留集仍恰好是 max 条，实际 {rows:?}");
         let kept: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
@@ -915,12 +860,12 @@ mod tests {
         );
 
         // 不传 keep 时行为不变（批量维护等调用方仍走纯 LFU）。
-        s.record_completion(CompletionKind::UrlHistory, "fresh2")
+        s.record_completion(CompletionKind::QuickHistory, "fresh2")
             .unwrap();
-        s.prune_completions(CompletionKind::UrlHistory, 2, None)
+        s.prune_completions(CompletionKind::QuickHistory, 2, None)
             .unwrap();
         let (rows2, _) = s
-            .list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            .list_completions(CompletionKind::QuickHistory, "", 0, 0)
             .unwrap();
         assert!(
             !rows2.iter().any(|r| r.0 == "fresh2"),
@@ -931,14 +876,17 @@ mod tests {
     #[test]
     fn oversized_and_empty_text_are_ignored() {
         let s = store("guard");
-        assert!(!s.record_completion(CompletionKind::UrlHistory, "").unwrap());
+        assert!(
+            !s.record_completion(CompletionKind::QuickHistory, "")
+                .unwrap()
+        );
         let long = "x".repeat(COMPLETION_TEXT_MAX_CHARS + 1);
         assert!(
-            !s.record_completion(CompletionKind::UrlHistory, &long)
+            !s.record_completion(CompletionKind::QuickHistory, &long)
                 .unwrap()
         );
         assert_eq!(
-            s.list_completions(CompletionKind::UrlHistory, "", 0, 0)
+            s.list_completions(CompletionKind::QuickHistory, "", 0, 0)
                 .unwrap()
                 .1,
             0
@@ -947,39 +895,8 @@ mod tests {
         // 恰好等于上限的仍收。
         let ok = "x".repeat(COMPLETION_TEXT_MAX_CHARS);
         assert!(
-            s.record_completion(CompletionKind::UrlHistory, &ok)
+            s.record_completion(CompletionKind::QuickHistory, &ok)
                 .unwrap()
-        );
-    }
-
-    #[test]
-    fn jsonl_roundtrip_carries_both_kinds() {
-        let a = store("exp");
-        a.record_completion(CompletionKind::EmailSuffix, "qq.com")
-            .unwrap();
-        a.record_completion(CompletionKind::EmailSuffix, "qq.com")
-            .unwrap();
-        a.record_completion(CompletionKind::UrlHistory, "www.x.com")
-            .unwrap();
-        let dump = a.export_completions_jsonl().unwrap();
-        assert_eq!(dump.lines().count(), 2, "两个 kind 各一条:\n{dump}");
-
-        let b = store("imp");
-        let (imported, skipped) = b.import_completions_jsonl(&dump).unwrap();
-        assert_eq!((imported, skipped), (2, 0));
-        assert_eq!(
-            b.get_completion(CompletionKind::EmailSuffix, "qq.com")
-                .unwrap()
-                .unwrap()
-                .count,
-            2,
-            "count 应随导出导入保住"
-        );
-        assert_eq!(
-            b.list_completions(CompletionKind::UrlHistory, "", 0, 0)
-                .unwrap()
-                .1,
-            1
         );
     }
 
@@ -1006,24 +923,24 @@ mod tests {
     #[test]
     fn import_merges_by_max_and_skips_junk() {
         let s = store("merge");
-        s.record_completion(CompletionKind::EmailSuffix, "qq.com")
+        s.record_completion(CompletionKind::QuickHistory, "qq.com")
             .unwrap(); // count=1
 
         let jsonl = concat!(
-            r#"{"kind":"email_suffix","text":"qq.com","count":9,"last_used":100}"#,
+            r#"{"kind":"quick_history","text":"qq.com","count":9,"last_used":100}"#,
             "\n",
             r#"not json"#,
             "\n",
             r#"{"kind":"no_such_kind","text":"x","count":1}"#,
             "\n",
-            r#"{"kind":"email_suffix","count":1}"#,
+            r#"{"kind":"quick_history","count":1}"#,
             "\n",
         );
         let (imported, skipped) = s.import_completions_jsonl(jsonl).unwrap();
         assert_eq!(imported, 1);
         assert_eq!(skipped, 3, "坏行/未知 kind/缺 text 各跳一条");
         assert_eq!(
-            s.get_completion(CompletionKind::EmailSuffix, "qq.com")
+            s.get_completion(CompletionKind::QuickHistory, "qq.com")
                 .unwrap()
                 .unwrap()
                 .count,
@@ -1034,31 +951,34 @@ mod tests {
 
     #[test]
     fn kind_str_roundtrip_is_closed() {
-        for k in [CompletionKind::EmailSuffix, CompletionKind::UrlHistory] {
+        for k in CompletionKind::ALL {
             assert_eq!(CompletionKind::from_key(k.as_str()), Some(k));
         }
         assert_eq!(CompletionKind::from_key("emial_suffix"), None);
+        // 已撤销的旧 kind：存量存档里的行不再被认回。
+        assert_eq!(CompletionKind::from_key("email_suffix"), None);
+        assert_eq!(CompletionKind::from_key("url_history"), None);
     }
 
     /// 按键路径读写都只碰内存（redb 暂停照样补全、记录、裁剪）。
     #[test]
     fn completion_hot_path_does_not_touch_redb() {
         let s = store("hot");
-        s.record_completion(CompletionKind::EmailSuffix, "qq.com")
+        s.record_completion(CompletionKind::QuickHistory, "qq.com")
             .unwrap();
         s.pause().unwrap();
         assert!(
-            s.record_completion(CompletionKind::EmailSuffix, "163.com")
+            s.record_completion(CompletionKind::QuickHistory, "163.com")
                 .unwrap()
         );
         assert_eq!(
-            s.list_completions(CompletionKind::EmailSuffix, "", 0, 0)
+            s.list_completions(CompletionKind::QuickHistory, "", 0, 0)
                 .unwrap()
                 .1,
             2
         );
         assert_eq!(
-            s.prune_completions(CompletionKind::EmailSuffix, 1, None)
+            s.prune_completions(CompletionKind::QuickHistory, 1, None)
                 .unwrap(),
             1
         );
@@ -1072,14 +992,14 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         {
             let s = Store::open(&p).unwrap();
-            s.record_completion(CompletionKind::UrlHistory, "example.com")
+            s.record_completion(CompletionKind::QuickHistory, "example.com")
                 .unwrap();
-            s.record_completion(CompletionKind::UrlHistory, "example.com")
+            s.record_completion(CompletionKind::QuickHistory, "example.com")
                 .unwrap();
         }
         let s = Store::open(&p).unwrap();
         let rec = s
-            .get_completion(CompletionKind::UrlHistory, "example.com")
+            .get_completion(CompletionKind::QuickHistory, "example.com")
             .unwrap()
             .unwrap();
         assert_eq!(rec.count, 2);
@@ -1090,7 +1010,7 @@ mod tests {
     #[test]
     fn flush_does_not_block_readers() {
         let s = std::sync::Arc::new(store("flush_nonblock"));
-        s.record_completion(CompletionKind::EmailSuffix, "qq.com")
+        s.record_completion(CompletionKind::QuickHistory, "qq.com")
             .unwrap();
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         let rx = std::sync::Mutex::new(rx);
@@ -1114,7 +1034,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
         let t = std::time::Instant::now();
         let n = s
-            .list_completions(CompletionKind::EmailSuffix, "", 0, 0)
+            .list_completions(CompletionKind::QuickHistory, "", 0, 0)
             .unwrap()
             .1;
         let waited = t.elapsed();

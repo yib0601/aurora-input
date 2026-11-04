@@ -9,10 +9,10 @@
 
 use crate::coordinator::{Coordinator, State};
 use crate::pipeline::ModeKind;
-use tracing::debug;
 use aurora_bridge::handler::KeyAction;
 use aurora_dict::WILDCARD_SLOT;
 use aurora_keys::keymap;
+use tracing::debug;
 
 /// 反查缓冲 → 查询模式串：缓冲里**每一个**通配键（含首位）都换成槽位字符。
 ///
@@ -152,8 +152,8 @@ impl Coordinator {
         if !state.has_more {
             return;
         }
-        let new_limit =
-            (state.candidate_limit.saturating_mul(2)).min(aurora_engine::engine::CANDIDATE_LIMIT_CAP);
+        let new_limit = (state.candidate_limit.saturating_mul(2))
+            .min(aurora_engine::engine::CANDIDATE_LIMIT_CAP);
         if new_limit <= state.candidate_limit {
             state.has_more = false;
             return;
@@ -173,11 +173,11 @@ impl Coordinator {
 mod tests {
     use super::reverse_pattern;
     use crate::coordinator::Coordinator;
-    use std::path::PathBuf;
-    use std::sync::Arc;
     use aurora_bridge::handler::{KeyEventData, MessageHandler};
     use aurora_config::Config;
     use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     const VK_BACKSLASH: u32 = 0xDC;
     const VK_ESCAPE: u32 = 0x1B;
@@ -324,9 +324,9 @@ mod tests {
         match act {
             aurora_bridge::handler::KeyAction::InsertText { text, .. } => Some(text),
             // 顶字重开：先上屏、组合区延后重建（`commit_then_new_composition`）。
-            aurora_bridge::handler::KeyAction::CommitThenDeferComposition { commit_text, .. } => {
-                Some(commit_text)
-            }
+            aurora_bridge::handler::KeyAction::CommitThenDeferComposition {
+                commit_text, ..
+            } => Some(commit_text),
             _ => None,
         }
     }

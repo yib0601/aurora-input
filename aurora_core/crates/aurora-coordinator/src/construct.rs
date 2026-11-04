@@ -263,7 +263,7 @@ impl Coordinator {
             .ui_tx
             .send(UiCommand::SetTooltipDelay(rt0.config.ui.tooltip.delay));
         // 快捷输入调整 / 拆字字根字体（PUA 字根渲染，路径 + DWrite 家族名取自主码表方案
-        // [engine.chaizi]）/ 注释库 / emoji 的首次装载，见 `load_data_on_start`。
+        // [engine.chaizi]）/ 注释库的首次装载，见 `load_data_on_start`。
         coordinator.load_data_on_start();
         // 统一应用外观项（幂等）：补齐上面手动块未含的翻页栏 / 页码等外观项，
         // 使首次启动即按 config 应用（与 reload_user_config 同一路径）。
@@ -271,7 +271,7 @@ impl Coordinator {
         coordinator
     }
 
-    /// 生产构造器在 `build` 之后的**非 UI** 数据装载（快捷输入调整、拆字、注释库、emoji）。
+    /// 生产构造器在 `build` 之后的**非 UI** 数据装载（快捷输入调整、拆字、注释库）。
     ///
     /// 抽出来是为了让 `debug_desktop_startup_and_prewarm`（本机复现内存的探针入口）与
     /// `new` 走同一份序列，不各抄一份而漂移。
@@ -283,8 +283,6 @@ impl Coordinator {
         self.sync_chaizi_assets();
         // 注释词库首次加载（`[[ui.comment_dicts]]`，出厂为空数组=不加载任何库）。
         self.sync_comment_dicts();
-        // emoji 扩展表首次加载（`[input.emoji]`，出厂 enabled=false ⇒ 不打开任何文件）。
-        self.sync_emoji_dict();
     }
 
     /// 启动预热线程的主体（`new` 里延迟 1.5 秒后调；**阻塞**，只可在后台线程 / 测试里调）：
@@ -677,7 +675,7 @@ mod p1_meta_tests {
             s.record_freq("pinyin", "nihao", "你好").unwrap();
             s.record_assoc_pick("pinyin", "我们", "我们的").unwrap();
             s.record_completion(
-                aurora_store::completion::CompletionKind::EmailSuffix,
+                aurora_store::completion::CompletionKind::QuickHistory,
                 "qq.com",
             )
             .unwrap();
@@ -713,7 +711,7 @@ mod p1_meta_tests {
         assert!(!s.runtime().assoc_history("pinyin", "我们", 10).is_empty());
         assert!(
             s.get_completion(
-                aurora_store::completion::CompletionKind::EmailSuffix,
+                aurora_store::completion::CompletionKind::QuickHistory,
                 "qq.com"
             )
             .unwrap()

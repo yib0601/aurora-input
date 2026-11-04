@@ -7,14 +7,14 @@ use crate::coordinator::{
     CommittedSeg, Coordinator, PunctEmptyCodePolicy, SchemaToggleOrigin, State, SwitchCommit,
     ToggleLanding,
 };
-use crate::pipeline::{ModeKind, RewindOrigin};
+use crate::pipeline::ModeKind;
 use crate::preedit_cursor;
 use crate::theme_style::ThemeStyle;
-use tracing::{debug, info, warn};
 use aurora_bridge::handler::KeyAction;
 use aurora_config::BoundAction;
 use aurora_config::Config;
 use aurora_ui_types::UiCommand;
+use tracing::{debug, info, warn};
 
 use crate::coordinator::{numpad_char, printable_char, punct_char};
 use aurora_bridge::handler::KeyEventData;
@@ -944,59 +944,6 @@ impl Coordinator {
         // 布局无需在此恢复：active 已清空，下一次 notify_ui_update 会自动算回全局基线。
     }
 
-    /// 快捷输入里按 `@`：缓冲像个用户名就带着它转交邮箱模式（GH#162）。
-    ///
-    /// 与临英转交（`handle_temp_english_key`）同一个用意：五笔用户名常超过四码，正常流里
-    /// 早已顶字上屏，只有攒得住一整段的模式才能把完整用户名带到 `@`。
-    ///
-    /// 闸门比临英多几条，因为快捷输入的缓冲不一定是「一段英文」：
-    /// - **缓冲像用户名**：首字符是字母或数字，其余只含字母、数字与 `._-`。`${x}`、`a+b`
-    ///   这类缓冲里的 `@` 维持原有语义（字面或顶屏）。词组透镜的缓冲带分词符 `'`，本就不过
-    ///   这一条，不另设闸门。
-    /// - **数字透镜只认纯数字**：QQ 邮箱的用户名就是号码，得收；但 `1.5`、`2024-10-04`
-    ///   也过得了上一条，它们是算式 / 日期，那里的 `@` 原本恒为字面，不能抢。
-    /// - **不是 `free_input = always` 的实例**：那是专做字面输入的实例，`@` 照字面。
-    /// - **没有分步上屏的段**（`committed_text` 为空）：同 `try_prefix_hijack` 的理由，
-    ///   转交不处置已转换的前缀，它会成孤儿；那个状态下的 `@` 也几乎一定不是邮箱。
-    /// - **光标在缓冲末尾**：光标在中间时 `@` 是插进去的，整个缓冲当用户名就错了。
-    ///
-    /// 开关仍是 `input.email.enabled`，没有第二道。
-    fn mix_email_handoff(
-        &self,
-        state: &mut State,
-        data: &KeyEventData,
-        shift: bool,
-        lens: MixLens,
-    ) -> Option<KeyAction> {
-        let at = crate::handle_email::EMAIL_AT;
-        if printable_char(data.key_code, shift) != Some(at)
-            || !self.rt().config.input.email.enabled
-            || (lens == MixLens::Numeric && !state.mix_buffer.bytes().all(|b| b.is_ascii_digit()))
-            || self.mix_free_input(state.mix_id) == FreeInputMode::Always
-            || !state.committed_text.is_empty()
-            || state.mix_cursor != state.mix_buffer.len()
-            || !Self::looks_like_email_user(&state.mix_buffer)
-        {
-            return None;
-        }
-        let buffer = format!("{}{}", state.mix_buffer, at);
-        let origin = RewindOrigin::Mix {
-            idx: state.mix_id,
-            prefix: state.mix_prefix.clone(),
-        };
-        Some(self.enter_email_mode(state, buffer, origin))
-    }
-
-    /// 缓冲是否像邮箱用户名：非空，首字符是 ASCII 字母或数字，其余只含字母、数字与 `._-`。
-    ///
-    /// 刻意比 RFC 的 local-part 窄：快捷输入的缓冲同时是算式与字面输入的载体，`+`、`$`
-    /// 这类字符在那里各有含义，收进来就会把 `1+2@`、`${x}@` 也当成邮箱。
-    fn looks_like_email_user(buf: &str) -> bool {
-        let mut chars = buf.chars();
-        matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
-            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    }
-
     /// 快捷输入此刻的**高亮候选**是不是英文候选（英文成员 / 英文段 / 词组透镜）——
     /// 大小写档位循环（`input.english_case_cycle_key`）在快捷输入里的夺取判据，对齐临英。
     ///
@@ -1688,7 +1635,7 @@ impl Coordinator {
         }
     }
 
-    /// 当前激活模式的指示名 (全称, 短称)；None = 无可指示模式（普通输入/网址模式）。
+    /// 当前激活模式的指示名 (全称, 短称)；None = 无可指示模式（普通输入）。
     /// 临时拼音/双拼按目标方案派生（拼/双）；mix/special 取配置 name + short_name。
     pub(crate) fn mode_indicator_names(&self, state: &State) -> Option<(String, String)> {
         match state.active? {
@@ -1702,11 +1649,6 @@ impl Coordinator {
                 Some((format!("临时{}", disp), short))
             }
             ModeKind::TempEnglish => Some(("临时英文".to_string(), "英".to_string())),
-            ModeKind::Url => Some(("网址输入".to_string(), "网址".to_string())),
-            ModeKind::Email => Some(("邮箱输入".to_string(), "邮箱".to_string())),
-            // 短名用 `U+` 而不是「码」之类的意译：用户是照着 `U+4E00` 这个写法来的，
-            // 徽标与他刚打进去的前缀一致，比任何中文缩写都直接。
-            ModeKind::Unicode => Some(("Unicode 输入".to_string(), "U+".to_string())),
             // 生僻字模式：名字写死而不像 special 那样从方案取——它没有宿主方案可取名，
             // 是单例。指示必须有：这个模式下候选被大幅收窄，用户不知道自己在里面的话，
             // 「怎么一个字都打不出来」无从解释（模式本身就允许候选为空）。
@@ -2237,7 +2179,7 @@ impl Coordinator {
 
     pub(crate) fn mix_select(&self, state: &mut State, page_offset: usize) -> KeyAction {
         // 展开态下序号顺延到下一行，数字键跟着走（同临拼）。
-        let (start, end) = self.select_range(state);
+        let (start, end) = self.page_range(state);
         let gi = start + page_offset;
         if gi >= end {
             return KeyAction::Consumed;
@@ -2298,8 +2240,7 @@ impl Coordinator {
             let code = Self::cand_code(&state.mix_buffer, &cand);
             // 记账码：码表按输入码（码位独立），拼音/英文按候选码。见 `freq_code`。
             // 归属按候选来源反查成员方案，与读端逐段应用的归属同源（见 `mix_candidate_owner`）。
-            // 走 `_cand_in`：mix 列表里现在有 emoji 候选，那道 `is_emoji_suggestion`
-            // 守卫必须一起带上（见 `record_selection_cand_in`）。
+            // 走 `_cand_in`：英文头部候选要按它对应的词库词记（见 `record_selection_cand_in`）。
             let mix_member_owner = self.mix_candidate_owner(state, &cand);
             self.record_selection_cand_in(
                 mix_member_owner.as_deref(),
@@ -2351,7 +2292,7 @@ impl Coordinator {
             if recordable {
                 // 记账码：码表按输入码（码位独立），拼音/英文按候选码。见 `freq_code`。
                 // 归属同上，与读端同源（见 `mix_candidate_owner`）。
-                // 同上走 `_cand_in`，带 emoji 守卫。
+                // 同上走 `_cand_in`。
                 // 英文头部候选按它对应的词库词记（A2-39②，见 `mix_freq_candidate`）；
                 // 下面造词 / 临时词晋升仍按候选本身的归属，不受这一换的影响。
                 match self.mix_freq_candidate(state, &cand) {
@@ -2363,42 +2304,32 @@ impl Coordinator {
                     None => self.push_commit_history(&cand.text),
                 }
                 let mix_member_owner = self.mix_candidate_owner(state, &cand);
-                // ⚠️ emoji 候选**不进分段、不参与造词**：它是按候选文本查表追加上去的，
-                // 与 `mix_buffer` 没有编码对应关系（`code` 恒空、`consumed_length` 恒 0）。
-                // 放进 `committed_segs` 会让 `learn_phrase_on_commit` 把它当成一段正常文本
-                // 参与造词，产出「你🙂」这类词条 —— 与「emoji 不记词频」是同一条理由
-                // （见 `record_selection_cand_in`），只是这条通向用户词库、后果更持久。
-                //
-                // ★ 主路径不受此影响是因为它的 emoji 候选走整体上屏那一支、本就不 push 段；
-                // mix 这一支是**无条件** push 的，故须显式排除。
-                if !cand.is_emoji_suggestion {
-                    state.committed_segs.push(CommittedSeg {
-                        // 消费整串：回退码即整个缓冲
-                        raw_code: state.mix_buffer.clone(),
-                        // 造词码取候选码（全拼语义），与主路 / 临拼整体上屏同口径；
-                        // 取整个缓冲会把 `h`（或双拼击键 `hc`）写进词库。
-                        code: cand_code.clone(),
-                        text: cand.text.clone(),
-                        source: cand.source,
-                        boundary: cand.boundary,
-                        learn: cand.meta.learn_code.clone(),
-                    });
-                    // 单段整句同样要造词（混输下拼音子引擎的整句一次上屏亦只 push 一段）。
-                    // 闸门与归属按**本候选的成员方案**，不按活跃方案（见
-                    // `learn_phrase_on_commit_in`）；归不到成员（内置来源等）就不造词。
-                    if let Some(owner) = mix_member_owner.as_deref() {
-                        let learned_code =
-                            self.learn_phrase_on_commit_in(state, cand.is_synthesized, Some(owner));
-                        // 6b：选中已有临时词推进晋升计数，与主路同一函数；归属同上取成员方案。
-                        // 点查码与主路同取 `cand_code`（与上面分段的造词码同一份）。
-                        if !cand.is_phrase {
-                            self.bump_selected_temp_word(
-                                owner,
-                                &cand,
-                                &cand_code,
-                                learned_code.as_deref(),
-                            );
-                        }
+                state.committed_segs.push(CommittedSeg {
+                    // 消费整串：回退码即整个缓冲
+                    raw_code: state.mix_buffer.clone(),
+                    // 造词码取候选码（全拼语义），与主路 / 临拼整体上屏同口径；
+                    // 取整个缓冲会把 `h`（或双拼击键 `hc`）写进词库。
+                    code: cand_code.clone(),
+                    text: cand.text.clone(),
+                    source: cand.source,
+                    boundary: cand.boundary,
+                    learn: cand.meta.learn_code.clone(),
+                });
+                // 单段整句同样要造词（混输下拼音子引擎的整句一次上屏亦只 push 一段）。
+                // 闸门与归属按**本候选的成员方案**，不按活跃方案（见
+                // `learn_phrase_on_commit_in`）；归不到成员（内置来源等）就不造词。
+                if let Some(owner) = mix_member_owner.as_deref() {
+                    let learned_code =
+                        self.learn_phrase_on_commit_in(state, cand.is_synthesized, Some(owner));
+                    // 6b：选中已有临时词推进晋升计数，与主路同一函数；归属同上取成员方案。
+                    // 点查码与主路同取 `cand_code`（与上面分段的造词码同一份）。
+                    if !cand.is_phrase {
+                        self.bump_selected_temp_word(
+                            owner,
+                            &cand,
+                            &cand_code,
+                            learned_code.as_deref(),
+                        );
                     }
                 }
             } else if matches!(lens, MixLens::Free | MixLens::English)
@@ -2465,7 +2396,6 @@ impl Coordinator {
     /// **成员顺序即候选优先级**——把 `quick_input.calc` 排在最前即得「计算结果作首选」。
     pub(crate) fn update_mix_candidates(&self, state: &mut State) {
         self.refill_mix_candidates(state);
-        self.grid_resume(state);
     }
 
     fn refill_mix_candidates(&self, state: &mut State) {
@@ -2836,13 +2766,6 @@ impl Coordinator {
         // 统一展开汇聚点：混输成员词库候选内 `$` 特殊语法在此展开（见 finalize_candidates）。
         finalized.extend(self.finalize_candidates(cands, &state.mix_buffer));
         state.candidates = finalized;
-        // Emoji 扩展：与主路径同一位置（所有加工之后、简繁展开之前）。快捷输入没有自己的
-        // emoji 开关，用的就是全局 `[input.emoji]`——与临拼同一条理由：没有独立开关时，
-        // 临时模式应与正式方案表现一致。
-        //
-        // 放在 finalize **之后**：宿主判据看的是候选最终文本，`$AA`/`$CC` 展开前的源码形态
-        // 不该被拿去查 emoji 表。
-        self.apply_emoji_suggestions(&mut state.candidates);
         // 简繁 1对多变体展开（约束见 expand_s2t_variants 文档）。
         self.expand_s2t_variants(state);
         // 编码栏按合并后的首选（之后随高亮）选形态：上面 `text_display` 取的是给出显示串的
@@ -3064,10 +2987,6 @@ impl Coordinator {
         ) {
             return act;
         }
-        // 展开态专属键（←→ / Esc / Tab）先于编码区光标与 Esc 臂，同临拼。
-        if let Some(act) = self.grid_key_action(state, data) {
-            return act;
-        }
         // 编码区光标移动（左右 / Home / End）。注：数字透镜下 -/= 等是输入字符，但方向键
         // 在两个透镜里都不是输入，故可在分派前统一拦截。
         if let Some(act) = self.overlay_cursor_key(state, data) {
@@ -3091,8 +3010,6 @@ impl Coordinator {
         };
         // 进入键二次按下（缓冲空 + 无已转换前缀）：按中英标点配置上屏该符号并退出。
         // 必须前置于下方数字透镜——否则 ; 等会被 printable_char 当表达式字符吞进缓冲。
-        // 顺带武装智能符号：时限内再按同键即换英文形（`;` → `；` → `;`），否则这个键被模式
-        // 占着、英文形没有通路。press2 的拦截在 try_activate_mode 开头，早于模式激活链。
         // `free_input = always` 的实例除外：它的引导键必须能作字面字符打进缓冲，否则
         // 「进模式后第一个想打的就是引导键那个符号」永远只会上屏符号并退出，专做字面
         // 输入的实例连门都进不去。（这类"某开关要否决某条既有通路"的改动，历史上多次
@@ -3105,7 +3022,6 @@ impl Coordinator {
             && let Some(ch) = punct_char(data.key_code, false)
         {
             let out = self.convert_punct_char(state, ch);
-            self.arm_smart_symbol_after_commit(state, ch, &out);
             self.record_commit(&out, 0, -1, aurora_store::stats::CommitSource::Punctuation);
             self.exit_mix_mode(state);
             self.notify_ui_hide();
@@ -3246,12 +3162,6 @@ impl Coordinator {
                 let free_on = self.mix_free_input(state.mix_id) != FreeInputMode::Off;
                 let is_letter = (keymap::VK_A..=keymap::VK_Z).contains(&data.key_code);
 
-                // ⓪ 邮箱模式转交（GH#162）：必须早于①——`auto` 下 `@` 会被①⑤收成字面，
-                // `off` 下会被⑥连同高亮候选顶屏。闸门见 `mix_email_handoff`。
-                if let Some(act) = self.mix_email_handoff(state, data, shift, lens) {
-                    return act;
-                }
-
                 // ① 输入字符（按 lens）
                 let input = match lens {
                     // 自由输入：一切可打印键字面入缓冲（保留 Shift 形态）；小键盘同样是字面。
@@ -3351,9 +3261,6 @@ impl Coordinator {
                     // 上线后才暴露，因为在此之前这些符号本就走不进缓冲。
                     let sel = if lens == MixLens::Numeric {
                         is_letter.then(|| (data.key_code - keymap::VK_A) as usize)
-                    } else if !shift && data.key_code == keymap::VK_0 && Self::grid_active(state) {
-                        // 展开态下 0 选第 10 格（序号顺延时标「0」的那格）；收起态的 0 照旧。
-                        Some(9)
                     } else {
                         (!shift && (keymap::VK_1..=keymap::VK_9).contains(&data.key_code))
                             .then(|| (data.key_code - keymap::VK_1) as usize)
@@ -3502,7 +3409,7 @@ impl Coordinator {
                             .highlighted_global_index(state)
                             .min(state.candidates.len() - 1);
                         // 顶屏也是一次选中：记词频（含上屏历史）与输入统计，与 `mix_select_at`
-                        // 整体上屏那支同口径（归属按成员方案、带 emoji 守卫）；对照临英 ⑥ 与
+                        // 整体上屏那支同口径（归属按成员方案）；对照临英 ⑥ 与
                         // 主输入路 `commit_highlight_then_char`。必须在 `exit_mix_mode` 清缓冲前。
                         // 重复上屏候选已由 `has_head` 排除；数字透镜无编码可记，只记历史。
                         let cand = state.candidates[idx].clone();
@@ -3617,7 +3524,12 @@ impl Coordinator {
                     // 标点恒在此按 `Punctuation` 单独记（同临英 ⑥）。有高亮候选时上方已记候选段、
                     // 顶层兜底随之跳过，不记就漏；无候选时（只剩已转换前缀 / 空缓冲）也显式记——
                     // 前缀在分步选中时已记过，交给兜底会把「前缀+标点」整串再按「候选」记一遍。
-                    self.record_commit(&punct, 0, -1, aurora_store::stats::CommitSource::Punctuation);
+                    self.record_commit(
+                        &punct,
+                        0,
+                        -1,
+                        aurora_store::stats::CommitSource::Punctuation,
+                    );
                     self.exit_mix_mode(state);
                     self.notify_ui_hide();
                     Self::commit_action(format!("{}{}", head, punct), true)
@@ -3999,7 +3911,6 @@ mod exit_clears_rewind_tests {
             st.rewind = Some(crate::pipeline::Rewind {
                 snapshot: "z".into(),
                 host_text: "l".into(),
-                origin: crate::pipeline::RewindOrigin::Normal,
             });
             exit(&c, &mut st);
             assert!(st.rewind.is_none(), "{name} 退出后夺取回退登记不得残留");

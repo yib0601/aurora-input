@@ -166,9 +166,9 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering::Relaxed;
     use aurora_config::app_compat::{AppCompat, AppCompatRule};
     use aurora_ipc::protocol::caret_source::{GUI_CARET, TSF_SELECTION};
+    use std::sync::atomic::Ordering::Relaxed;
 
     const PID: u32 = 4242;
     const PROC: &str = "ai.exe";

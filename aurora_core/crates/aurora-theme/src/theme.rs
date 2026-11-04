@@ -126,11 +126,6 @@ pub fn load_typed_dirs(dirs: &[PathBuf], name: &str) -> anyhow::Result<Theme> {
     Ok(theme)
 }
 
-/// 读取 themes_dir/<name>/theme.toml 并按 base 链深合并（单目录；兼容旧调用）。
-pub fn load_merged(themes_dir: &Path, name: &str, depth: usize) -> anyhow::Result<Value> {
-    load_merged_dirs_at(&[themes_dir.to_path_buf()], name, depth)
-}
-
 /// 多目录 base 深合并（base 在下、派生在上）。防御循环继承（最多 8 层）。
 ///
 /// 返回的 Value **已逐层过一遍 [`normalize_theme_for_merge`]**：视图节点都已收进 `views`、

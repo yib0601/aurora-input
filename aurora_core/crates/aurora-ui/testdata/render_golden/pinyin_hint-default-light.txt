@@ -249,24 +249,3 @@ draw text="果" at=(0.0,0.0) size=18.0 weight=0 family=None color=[37, 99, 235, 
 draw text="‹" at=(41.399998,279.40002) size=14.0 weight=0 family=None color=[154, 160, 174, 255]
 draw text="" at=(58.6,279.40002) size=14.0 weight=0 family=None color=[90, 96, 114, 255]
 draw text="›" at=(67.399994,279.40002) size=14.0 weight=0 family=None color=[59, 130, 246, 255]
-== 候选窗 网格 ==
-Column padding=Edges { l: 5.0, t: 5.0, r: 5.0, b: 5.0 } bg=Some([255, 255, 255, 255]) radius=12.0 border=Some(([226, 229, 235, 255], 1.0)) m=(257.2,119.799995) rect=Rect { x: 0.0, y: 0.0, w: 257.2, h: 119.799995 }
-  Row padding=Edges { l: 8.0, t: 6.0, r: 8.0, b: 6.0 } cross=Center bg=Some([0, 0, 0, 0]) radius=8.0 fill=true m=(247.20001,33.6) rect=Rect { x: 5.0, y: 5.0, w: 247.20001, h: 33.6 }
-    Row text=Some("ping") color=[90, 96, 114, 255] size=Some(18.0) caret=Some(4) m=(43.2,21.6) rect=Rect { x: 13.0, y: 10.999999, w: 43.2, h: 21.6 }
-  Row margin=Edges { l: 0.0, t: 0.0, r: 0.0, b: 4.0 } fixed_h=Some(1.0) bg=Some([0, 0, 0, 18]) fill=true m=(247.20001,1.0) rect=Rect { x: 5.0, y: 38.6, w: 247.20001, h: 1.0 }
-  Column m=(247.20001,71.2) rect=Rect { x: 5.0, y: 43.6, w: 247.20001, h: 71.2 }
-    Row cross=Center m=(247.20001,35.6) rect=Rect { x: 5.0, y: 43.6, w: 247.20001, h: 35.6 }
-      Row padding=Edges { l: 10.0, t: 7.0, r: 10.0, b: 7.0 } cross=Center min_w=Some(117.600006) bg=Some([59, 130, 246, 26]) radius=8.0 tag=0 m=(117.600006,35.6) rect=Rect { x: 5.0, y: 43.6, w: 117.600006, h: 35.6 }
-        Row margin=Edges { l: 0.0, t: 0.0, r: 1.0, b: 0.0 } text=Some("1") color=[154, 160, 174, 255] size=Some(12.0) m=(7.2000003,14.400001) rect=Rect { x: 15.0, y: 54.199997, w: 7.2000003, h: 14.400001 }
-        Row margin=Edges { l: 3.0, t: 0.0, r: 0.0, b: 0.0 } text=Some("苹(ping)果") color=[37, 99, 235, 255] runs=[ColorRun { start: 3, end: 9, rgba: [194, 65, 12, 255] }] size=Some(18.0) m=(86.4,21.6) rect=Rect { x: 26.2, y: 50.6, w: 86.4, h: 21.6 }
-      Row padding=Edges { l: 10.0, t: 7.0, r: 10.0, b: 7.0 } cross=Center min_w=Some(129.6) bg=Some([0, 0, 0, 8]) radius=8.0 tag=1 m=(129.6,35.6) rect=Rect { x: 122.600006, y: 43.6, w: 129.6, h: 35.6 }
-        Row margin=Edges { l: 0.0, t: 0.0, r: 1.0, b: 0.0 } text=Some("2") color=[154, 160, 174, 255] size=Some(12.0) m=(7.2000003,14.400001) rect=Rect { x: 132.6, y: 54.199997, w: 7.2000003, h: 14.400001 }
-        Row margin=Edges { l: 3.0, t: 0.0, r: 0.0, b: 0.0 } text=Some("瓶(ping)子") color=[74, 74, 74, 255] runs=[ColorRun { start: 3, end: 9, rgba: [194, 65, 12, 255] }] size=Some(18.0) m=(86.4,21.6) rect=Rect { x: 143.8, y: 50.6, w: 86.4, h: 21.6 }
-    Row cross=Center m=(247.20001,35.6) rect=Rect { x: 5.0, y: 79.2, w: 247.20001, h: 35.6 }
-      Row padding=Edges { l: 10.0, t: 7.0, r: 10.0, b: 7.0 } cross=Center min_w=Some(117.600006) radius=8.0 tag=2 m=(117.600006,35.6) rect=Rect { x: 5.0, y: 79.2, w: 117.600006, h: 35.6 }
-        Row margin=Edges { l: 0.0, t: 0.0, r: 1.0, b: 0.0 } text=Some("3") color=[0, 0, 0, 0] size=Some(12.0) m=(7.2000003,14.400001) rect=Rect { x: 15.0, y: 89.799995, w: 7.2000003, h: 14.400001 }
-        Row margin=Edges { l: 3.0, t: 0.0, r: 0.0, b: 0.0 } text=Some("平安") color=[74, 74, 74, 255] size=Some(18.0) m=(21.6,21.6) rect=Rect { x: 26.2, y: 86.2, w: 21.6, h: 21.6 }
-      Row padding=Edges { l: 10.0, t: 7.0, r: 10.0, b: 7.0 } cross=Center min_w=Some(129.6) radius=8.0 tag=3 m=(129.6,35.6) rect=Rect { x: 122.600006, y: 79.2, w: 129.6, h: 35.6 }
-        Row margin=Edges { l: 0.0, t: 0.0, r: 1.0, b: 0.0 } text=Some("4") color=[0, 0, 0, 0] size=Some(12.0) m=(7.2000003,14.400001) rect=Rect { x: 132.6, y: 89.799995, w: 7.2000003, h: 14.400001 }
-        Row margin=Edges { l: 3.0, t: 0.0, r: 0.0, b: 0.0 } text=Some("频(pin)道") color=[74, 74, 74, 255] runs=[ColorRun { start: 3, end: 8, rgba: [194, 65, 12, 255] }] size=Some(18.0) m=(75.600006,21.6) rect=Rect { x: 143.8, y: 86.2, w: 75.600006, h: 21.6 }
-        Row margin=Edges { l: 6.0, t: 0.0, r: 0.0, b: 0.0 } text=Some("pd") color=[154, 160, 174, 255] size=Some(14.0) m=(16.800001,16.800001) rect=Rect { x: 225.40001, y: 88.6, w: 16.800001, h: 16.800001 }

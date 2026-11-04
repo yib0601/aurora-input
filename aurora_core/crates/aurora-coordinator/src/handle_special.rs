@@ -5,12 +5,12 @@
 use crate::coordinator::{Coordinator, PunctEmptyCodePolicy, State, numpad_char, punct_char};
 use crate::pipeline::ModeKind;
 use crate::preedit_cursor;
-use tracing::debug;
 use aurora_bridge::handler::{KeyAction, KeyEventData};
 use aurora_candidate::Candidate;
 use aurora_engine::AdmitFn;
 use aurora_ipc::protocol::MOD_SHIFT;
 use aurora_keys::keymap;
+use tracing::debug;
 
 /// 特殊模式取候选的常规上限（本值是从 special 模式沿用的既有行为，未改）。
 ///
@@ -659,14 +659,11 @@ impl Coordinator {
             return act;
         }
         // 进入键二次按下（缓冲空）：按中英标点配置上屏该符号并退出。
-        // 顺带武装智能符号：时限内再按同键即换英文形，否则这个键被模式占着、英文形没有通路。
-        // press2 的拦截在 try_activate_mode 开头，早于模式激活链。
         if state.special_buffer.is_empty()
             && self.match_special_trigger(data.key_code) == Some(state.special_id)
             && let Some(ch) = punct_char(data.key_code, data.modifiers & MOD_SHIFT != 0)
         {
             let out = self.convert_punct_char(state, ch);
-            self.arm_smart_symbol_after_commit(state, ch, &out);
             self.record_commit(&out, 0, -1, aurora_store::stats::CommitSource::Punctuation);
             self.exit_special_mode(state);
             self.notify_ui_hide();
@@ -882,7 +879,12 @@ impl Coordinator {
                         }
                     };
                     let punct = self.convert_punct_char(state, ch);
-                    self.record_commit(&punct, 0, -1, aurora_store::stats::CommitSource::Punctuation);
+                    self.record_commit(
+                        &punct,
+                        0,
+                        -1,
+                        aurora_store::stats::CommitSource::Punctuation,
+                    );
                     self.exit_special_mode(state);
                     self.notify_ui_hide();
                     Self::commit_action(format!("{}{}", committed, punct), true)
@@ -902,10 +904,10 @@ mod tests {
     //! ——别指望 `build_dev/data`，那是集成层「缺数据则整族静默跳过而计数照绿」的来源。
     use super::*;
     use crate::coordinator::Coordinator;
-    use std::sync::Arc;
     use aurora_candidate::Candidate;
     use aurora_config::Config;
     use aurora_store::Store;
+    use std::sync::Arc;
 
     /// 造一个含若干 overlay 方案的 data_dir。
     ///
@@ -1578,8 +1580,8 @@ mod tests {
         use super::set_common;
         use crate::coordinator::Coordinator;
         use crate::pipeline::ModeKind;
-        use std::sync::Arc;
         use aurora_config::Config;
+        use std::sync::Arc;
 
         /// overlay（快符）方案 id。`zz_` 前缀避开开发机上真实安装的方案。
         const KF: &str = "zz_kfx";

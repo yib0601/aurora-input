@@ -28,8 +28,8 @@
 //! 4. 其余（`global` / `pending_load` / `warned_invalid`）只在单独一句里取、取完即放。
 
 use super::*;
-use std::sync::atomic::{AtomicU64, Ordering};
 use aurora_config::app_compat::AppSchema;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 按应用方案的运行时态。独立成结构体：五个量只服务这一个功能，散在 `Coordinator` 的
 /// 百来个字段里既难找也难看出它们之间的约束。

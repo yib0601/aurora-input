@@ -146,12 +146,6 @@ impl DataNeeds {
         let main_modes = [
             &cfg.input.temp_english.comment_template_vertical,
             &cfg.input.temp_english.comment_template_horizontal,
-            &cfg.input.url.comment_template_vertical,
-            &cfg.input.url.comment_template_horizontal,
-            &cfg.input.email.comment_template_vertical,
-            &cfg.input.email.comment_template_horizontal,
-            &cfg.input.unicode.comment_template_vertical,
-            &cfg.input.unicode.comment_template_horizontal,
         ];
         layers.extend(
             main_modes
@@ -422,7 +416,7 @@ mod tests {
         let base = factory();
         assert!(!derive(&base).correct_pinyin, "前置条件：出厂不引用");
         type Edit = fn(&mut Config);
-        let slots: [(&str, Edit); 16] = [
+        let slots: [(&str, Edit); 10] = [
             ("全局竖", |c| {
                 c.ui.candidate.comment_template_vertical = V.into()
             }),
@@ -446,24 +440,6 @@ mod tests {
             }),
             ("临英横", |c| {
                 c.input.temp_english.comment_template_horizontal = Some(V.into())
-            }),
-            ("网址竖", |c| {
-                c.input.url.comment_template_vertical = Some(V.into())
-            }),
-            ("网址横", |c| {
-                c.input.url.comment_template_horizontal = Some(V.into())
-            }),
-            ("邮箱竖", |c| {
-                c.input.email.comment_template_vertical = Some(V.into())
-            }),
-            ("邮箱横", |c| {
-                c.input.email.comment_template_horizontal = Some(V.into())
-            }),
-            ("Unicode竖", |c| {
-                c.input.unicode.comment_template_vertical = Some(V.into())
-            }),
-            ("Unicode横", |c| {
-                c.input.unicode.comment_template_horizontal = Some(V.into())
             }),
             ("悬停段", |c| {
                 c.ui.tooltip.sections[0].template = V.into();

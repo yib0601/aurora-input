@@ -3,7 +3,6 @@
 //! 与 Go 版本 `aurora_core/internal/coordinator/` 对齐。
 
 pub(crate) mod aux_code_source;
-pub(crate) mod candidate_grid;
 pub(crate) mod candidate_nav;
 pub mod candidate_pull;
 #[cfg(test)]
@@ -24,8 +23,6 @@ pub mod dict_transfer_api;
 pub mod direct_switch;
 pub mod draft_window;
 pub mod edit_ops;
-#[cfg(test)]
-mod email_mode_tests;
 pub(crate) mod english_candidates;
 pub(crate) mod english_learn;
 #[cfg(test)]
@@ -41,7 +38,6 @@ pub mod handle_cmdbar_macos;
 pub mod handle_common_chars;
 pub mod handle_direct_aux;
 pub mod handle_draft;
-pub mod handle_email;
 pub mod handle_lifecycle;
 pub mod handle_menu;
 pub mod handle_mode;
@@ -53,17 +49,15 @@ pub mod handle_special;
 pub mod handle_temp;
 pub mod handle_tooltip;
 pub mod handle_uielement;
-pub mod handle_unicode;
-mod handle_url;
 pub(crate) mod heap_trim;
+pub(crate) mod hijack_rewind;
 pub(crate) mod hint_text;
 pub mod host_services;
-pub mod input_diag;
+pub mod input_scope;
 pub mod key_convert;
 pub mod key_gate;
 pub(crate) mod key_resolver;
 pub mod layout;
-pub mod mode_completion;
 pub mod pipeline;
 pub(crate) mod preedit_cursor;
 pub mod process_memory;

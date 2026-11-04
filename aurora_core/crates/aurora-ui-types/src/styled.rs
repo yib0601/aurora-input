@@ -22,7 +22,6 @@ pub use aurora_theme::InlineColor;
 pub const TEXT_ROLES: &[&str] = &[
     // 候选上下文（`Coordinator::eval_var`）
     "code_hint",
-    "emoji",
     "code_rev",
     "code_rev_all",
     "shuangpin",

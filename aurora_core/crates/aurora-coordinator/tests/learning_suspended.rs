@@ -9,15 +9,15 @@
 //! （「幻」「枫」连打产出草稿 `xnsm → 幻枫`，见 `draft_recall_without_terminator.rs`）。
 //! 词典缺失时自动跳过（`build_dev/data` 不存在时静默跳过）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_coordinator::web_host::WebDataHost;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -65,7 +65,6 @@ fn setup(tag: &str) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
     cfg.schema.available = vec!["wubi86".into()];
     cfg.schema.active = "wubi86".into();
     cfg.input.default.chinese_mode = true;
-    cfg.input.symbol.smart_mode = false;
     // 下一词只在智能联想档学（`learns_next_words`）。
     cfg.input.association.kind = "smart".to_string();
     cfg.input.association.mode = "continuous".to_string();

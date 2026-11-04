@@ -34,11 +34,11 @@
 use crate::coordinator::{Coordinator, State};
 use std::sync::Mutex;
 
-use tracing::{debug, info};
 use aurora_ipc::protocol::{
     UIELEMENT_ACTION_ABORT, UIELEMENT_ACTION_FINALIZE, UIELEMENT_ACTION_SET_PAGE,
     UIELEMENT_ACTION_SET_SELECTION, UiElementPage,
 };
+use tracing::{debug, info};
 
 impl Coordinator {
     /// 消费一次 DLL 的 `CMD_UIELEMENT_STATE`：**两张账一起写完，再统一刷一次 UI**。
@@ -442,12 +442,14 @@ impl Coordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use aurora_bridge::handler::{COMPOSITION_PLACEHOLDER, KeyAction, KeyEventData, MessageHandler};
+    use aurora_bridge::handler::{
+        COMPOSITION_PLACEHOLDER, KeyAction, KeyEventData, MessageHandler,
+    };
     use aurora_candidate::Candidate;
     use aurora_config::{Config, PreeditDisplay};
     use aurora_ipc::protocol::EVENT_KEY_DOWN;
     use aurora_ui_types::UiCommand;
+    use std::sync::Arc;
 
     fn coord() -> (Arc<Coordinator>, std::sync::mpsc::Receiver<UiCommand>) {
         Coordinator::new_headless_with_ui(Config::default(), None)

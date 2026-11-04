@@ -18,7 +18,6 @@ use crate::compat_overlay::{
     FieldEdit, Obj, Raw, apply_edits, compose, is_disabled, materialize, overlay_raw, parse_raw,
     render_raw, rule_id, sanitize, unset_of, wildcard_match_folded,
 };
-use crate::config::SmartMethod;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -920,25 +919,6 @@ pub struct AppCompatRule {
         skip_serializing_if = "is_false"
     )]
     pub host_render: bool,
-    /// 该应用是否启用符号自动配对；`None` = 不干预，沿用全局 `input.auto_pair.*`。
-    ///
-    /// **必须是 `Option` 不能是 `bool`**：理由同 `initial_mode`——`#[serde(default)]` 下的
-    /// bool 会让所有未配置规则的应用都拿到 `false`，等于给全世界关掉了自动配对。
-    ///
-    /// 典型用途是表格类宿主（Excel / WPS 表格）：配对后要把光标退回两符号之间，而它们在
-    /// 「输入态」下把方向键解释成"确认单元格并移动"，光标回退无法实现（TSF `SetSelection`
-    /// 路线已实测失败，见 project_pair_caret_tsf_setselection_rejected）。关掉配对是目前
-    /// 唯一可行的兼容策略。
-    ///
-    /// ⚠ 消费点有**三条**，缺一即半截修复：`active_pairs()`（中文标点态）、
-    /// `english_pairs_via_pipeline()`（英文标点流水线）、`push_english_pair_config()`
-    /// （纯英文模式由 C++ `_englishPairEngine` 独立处理，协调器根本收不到那些键）。
-    #[serde(
-        default,
-        deserialize_with = "crate::tolerant_de::tolerant_opt_bool",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub auto_pair: Option<bool>,
     /// 该应用的密码框是否强制英文；`None` = 跟随全局 `input.password_force_english`（A2-37 / t197）。
     ///
     /// 典型用途是「宿主把普通输入框误报成密码框」：全局开着保护真密码框，只对误报的那个
@@ -973,17 +953,6 @@ pub struct AppCompatRule {
         skip_serializing_if = "Option::is_none"
     )]
     pub schema: Option<String>,
-    /// 该应用的智能符号替换方案；`None` = 沿用全局 `input.symbol.smart_method`。
-    ///
-    /// `DeleteReplace`（全局默认）依赖对宿主做删改，在 Tabby 一类终端上会出严重错误；
-    /// `HoldComposition` 全程不做删改、兼容性更好。两者本就是现成的全局枚举，这里只是
-    /// 让它可以按宿主覆盖。
-    #[serde(
-        default,
-        deserialize_with = "crate::tolerant_de::tolerant_opt",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub smart_method: Option<SmartMethod>,
     /// 光标坐标水平校正（dp，96dpi 基准逻辑像素，正=右）。
     ///
     /// 用于宿主报告的 caret 坐标**系统性偏移**的场景（如 Windows Terminal，其它输入法
@@ -1436,15 +1405,6 @@ pub fn set_user_host_render(
     edit_user_apps(user_dir, target, &[set_value("host_render", enabled)])
 }
 
-/// 设置用户层 compat.toml 中指定进程的符号自动配对开关（`None` = 清除）。
-pub fn set_user_auto_pair(
-    user_dir: &Path,
-    target: impl Into<RuleKey>,
-    enabled: Option<bool>,
-) -> Result<(), std::io::Error> {
-    edit_user_apps(user_dir, target, &[set_or_clear("auto_pair", enabled)])
-}
-
 /// 设置用户层 compat.toml 中指定进程的密码框强制英文（`None` = 清除）。
 pub fn set_user_password_force_english(
     user_dir: &Path,
@@ -1526,15 +1486,6 @@ pub fn set_user_ignore_host_ime_close(
         None => FieldEdit::Inherit("ignore_host_ime_close".to_string()),
     };
     edit_user_apps(user_dir, target, &[edit])
-}
-
-/// 设置用户层 compat.toml 中指定进程的智能符号替换方案（`None` = 清除）。
-pub fn set_user_smart_method(
-    user_dir: &Path,
-    target: impl Into<RuleKey>,
-    method: Option<SmartMethod>,
-) -> Result<(), std::io::Error> {
-    edit_user_apps(user_dir, target, &[set_or_clear("smart_method", method)])
 }
 
 /// 设置用户层 compat.toml 中指定进程的光标坐标校正偏移（像素，正=右/下）。
@@ -2806,51 +2757,6 @@ mod tests {
         );
     }
 
-    /// 三个新增 per-app 字段的解析。`auto_pair` / `smart_method` 是 `Option`，
-    /// **未配置必须是 `None` 而不是 `Some(false)`/`Some(默认值)`**——那是「跟随全局」
-    /// 与「显式关掉」的分界，退化成 bool 就等于给所有未配规则的应用都关掉了功能。
-    #[test]
-    fn parse_per_app_pair_symbol_and_offset() {
-        let toml = r#"
-            [[apps]]
-            process = "EXCEL.EXE"
-            auto_pair = false
-            caret_offset_x = -2
-            caret_offset_y = 3
-
-            [[apps]]
-            process = "Tabby.exe"
-            smart_method = "hold_composition"
-
-            [[apps]]
-            process = "plain.exe"
-            caret_use_top = true
-
-            [[apps]]
-            process = "QQ.exe"
-            composition_start_pair_guard = true
-        "#;
-        let compat = AppCompat::from_rules(toml::from_str::<AppCompatFile>(toml).unwrap().apps);
-
-        let excel = compat.get_rule("excel.exe").unwrap();
-        assert_eq!(excel.auto_pair, Some(false));
-        assert_eq!((excel.caret_offset_x, excel.caret_offset_y), (-2, 3));
-        assert_eq!(excel.smart_method, None, "未配 = 跟随全局");
-
-        let tabby = compat.get_rule("TABBY.EXE").unwrap();
-        assert_eq!(tabby.smart_method, Some(SmartMethod::HoldComposition));
-        assert_eq!(tabby.auto_pair, None, "未配 = 跟随全局");
-
-        // 只配了别的字段的规则，三个新字段必须全部是"不干预"，不能被默认值污染。
-        let plain = compat.get_rule("plain.exe").unwrap();
-        assert_eq!(plain.auto_pair, None);
-        assert_eq!(plain.smart_method, None);
-        assert_eq!((plain.caret_offset_x, plain.caret_offset_y), (0, 0));
-
-        let qq = compat.get_rule("qq.exe").unwrap();
-        assert_eq!(qq.composition_start_pair_guard, Some(true));
-    }
-
     /// `password_force_english` 三态解析：未配 = `None`（跟随全局），显式 true/false 原样保留。
     #[test]
     fn parse_password_force_english_tristate() {
@@ -2902,7 +2808,7 @@ mod tests {
 
                 [[apps]]
                 process = "other.exe"
-                auto_pair = false
+                ignore_host_ime_close = false
                 "#
             );
             let file = toml::from_str::<AppCompatFile>(&toml)
@@ -2914,7 +2820,7 @@ mod tests {
                 "{bad}: 认不出 = 没配过"
             );
             assert_eq!(
-                compat.get_rule("other.exe").unwrap().auto_pair,
+                compat.get_rule("other.exe").unwrap().ignore_host_ime_close,
                 Some(false),
                 "{bad}: 同文件其它规则必须照常生效"
             );
@@ -2999,16 +2905,19 @@ mod tests {
         }
     }
 
-    /// 最初的现场：`auto_pair = "yes"` 曾让整份 compat.toml 静默失效。
+    /// 最初的现场：`ignore_host_ime_close = "yes"` 曾让整份 compat.toml 静默失效。
     #[test]
-    fn auto_pair_wrong_type_does_not_sink_the_file() {
+    fn ignored_host_ime_close_wrong_type_does_not_sink_the_file() {
         let file = toml::from_str::<AppCompatFile>(
-            "[[apps]]\nprocess = \"et.exe\"\nauto_pair = \"yes\"\n\n\
+            "[[apps]]\nprocess = \"et.exe\"\nignore_host_ime_close = \"yes\"\n\n\
              [[apps]]\nprocess = \"other.exe\"\ncaret_use_top = true\n",
         )
-        .expect("auto_pair 写错不得让整份失败");
+        .expect("ignore_host_ime_close 写错不得让整份失败");
         let compat = AppCompat::from_rules(file.apps);
-        assert_eq!(compat.get_rule("et.exe").unwrap().auto_pair, None);
+        assert_eq!(
+            compat.get_rule("et.exe").unwrap().ignore_host_ime_close,
+            None
+        );
         assert!(compat.get_rule("other.exe").unwrap().caret_use_top);
     }
 
@@ -3017,7 +2926,7 @@ mod tests {
     #[test]
     fn side_sections_process_wrong_type_voids_only_that_rule() {
         let file = toml::from_str::<AppCompatFile>(
-            "[[apps]]\nprocess = \"other.exe\"\nauto_pair = false\n\n\
+            "[[apps]]\nprocess = \"other.exe\"\nignore_host_ime_close = false\n\n\
              [[initial_mode_scope]]\nprocess = 1\nclasses = [\"X\"]\n\n\
              [[initial_mode_scope]]\ncomment = 2\nprocess = \"explorer.exe\"\nclasses = [\"Progman\"]\n\n\
              [[commit_newline]]\nprocess = true\nstyle = \"cr\"\n\n\
@@ -3026,7 +2935,10 @@ mod tests {
         .expect("process / comment 类型写错不得让整份失败");
         let compat = AppCompat::from_parts(file.apps, file.initial_mode_scope)
             .with_commit_newline(file.commit_newline);
-        assert_eq!(compat.get_rule("other.exe").unwrap().auto_pair, Some(false));
+        assert_eq!(
+            compat.get_rule("other.exe").unwrap().ignore_host_ime_close,
+            Some(false)
+        );
         assert!(compat.initial_mode_applies_to_window("explorer.exe", "Progman"));
         assert!(!compat.initial_mode_applies_to_window("explorer.exe", "X"));
         assert_eq!(
@@ -3055,7 +2967,7 @@ mod tests {
 
             [[apps]]
             process = "plain.exe"
-            auto_pair = false
+            ignore_host_ime_close = false
             "#,
         );
         assert_eq!(
@@ -3083,7 +2995,7 @@ mod tests {
 
                 [[apps]]
                 process = "other.exe"
-                auto_pair = false
+                ignore_host_ime_close = false
                 "#
             ));
             assert_eq!(
@@ -3092,7 +3004,7 @@ mod tests {
                 "{bad}: 认不出 = 没配过"
             );
             assert_eq!(
-                compat.get_rule("other.exe").unwrap().auto_pair,
+                compat.get_rule("other.exe").unwrap().ignore_host_ime_close,
                 Some(false),
                 "{bad}: 同文件其它规则必须照常生效"
             );
@@ -3567,7 +3479,7 @@ mod layering_tests {
     #[test]
     fn unset_returns_a_system_field_to_follow_global() {
         let c = load(
-            "[[apps]]\nprocess = \"EXCEL.EXE\"\nfirst_show_mode = \"wait\"\nauto_pair = false\n",
+            "[[apps]]\nprocess = \"EXCEL.EXE\"\nfirst_show_mode = \"wait\"\nignore_host_ime_close = false\n",
             "[[apps]]\nprocess = \"excel.exe\"\nunset = [\"first_show_mode\"]\n",
             "unset",
         );
@@ -3576,7 +3488,7 @@ mod layering_tests {
             r.first_show_mode, None,
             "unset 后回到跟随全局，而不是继承出厂的 wait"
         );
-        assert_eq!(r.auto_pair, Some(false), "别的字段不受影响");
+        assert_eq!(r.ignore_host_ime_close, Some(false), "别的字段不受影响");
     }
 
     #[test]
@@ -3584,17 +3496,21 @@ mod layering_tests {
         let (d, c, u) = (tmp("3_d"), tmp("3_c"), tmp("3_u"));
         write(
             &d,
-            "[[apps]]\nprocess = \"A.exe\"\ncaret_use_top = true\nauto_pair = true\n",
+            "[[apps]]\nprocess = \"A.exe\"\ncaret_use_top = true\nignore_host_ime_close = true\n",
         );
         write(
             &c,
-            "[[apps]]\nprocess = \"A.exe\"\nauto_pair = false\ncaret_offset_x = 4\n",
+            "[[apps]]\nprocess = \"A.exe\"\nignore_host_ime_close = false\ncaret_offset_x = 4\n",
         );
         write(&u, "[[apps]]\nprocess = \"A.exe\"\ncaret_offset_x = 9\n");
         let rt = AppCompat::load_layered(Some(&d), Some(&c), Some(&u));
         let r = rt.get_rule("A.exe").unwrap();
         assert!(r.caret_use_top, "data 层的字段被继承到最上层");
-        assert_eq!(r.auto_pair, Some(false), "custom 层覆盖 data 层");
+        assert_eq!(
+            r.ignore_host_ime_close,
+            Some(false),
+            "custom 层覆盖 data 层"
+        );
         assert_eq!(r.caret_offset_x, 9, "user 层覆盖 custom 层");
         for x in [&d, &c, &u] {
             let _ = std::fs::remove_dir_all(x);
@@ -3607,7 +3523,7 @@ mod layering_tests {
         let sys = "[[apps]]\nprocess = \"WINWORD.EXE\"\ncaret_offset_y = 3\n\n\
                    [[commit_newline]]\nprocess = \"WINWORD.EXE\"\nstyle = \"cr\"\n\n\
                    [[initial_mode_scope]]\nprocess = \"explorer.exe\"\nclasses = [\"Progman\", \"WorkerW\"]\n";
-        let user = "[[apps]]\nprocess = \"WINWORD.EXE\"\nauto_pair = false\n\n\
+        let user = "[[apps]]\nprocess = \"WINWORD.EXE\"\nignore_host_ime_close = false\n\n\
                     [[apps]]\nprocess = \"explorer.exe\"\ncaret_use_top = true\n";
         let c = load(sys, user, "sections");
         assert_eq!(
@@ -3896,12 +3812,12 @@ mod layering_tests {
     fn duplicate_rows_for_one_process_in_a_layer_overlay_in_order() {
         let c = load(
             "",
-            "[[apps]]\nprocess = \"x.exe\"\nfirst_show_mode = \"wait\"\nauto_pair = true\n\n[[apps]]\nprocess = \"X.EXE\"\nfirst_show_mode = \"fast\"\n",
+            "[[apps]]\nprocess = \"x.exe\"\nfirst_show_mode = \"wait\"\nignore_host_ime_close = true\n\n[[apps]]\nprocess = \"X.EXE\"\nfirst_show_mode = \"fast\"\n",
             "dups",
         );
         let r = c.get_rule("x.exe").unwrap();
         assert_eq!(r.first_show_mode, Some(FirstShowMode::Fast), "后写的赢");
-        assert_eq!(r.auto_pair, Some(true), "先写的其它字段保留");
+        assert_eq!(r.ignore_host_ime_close, Some(true), "先写的其它字段保留");
     }
 
     /// 进程名带首尾空格：读入时就 trim，运行时查表才匹配得上。
@@ -3909,7 +3825,7 @@ mod layering_tests {
     fn process_names_with_padding_are_trimmed_on_load() {
         let c = load(
             "",
-            "[[apps]]\nprocess = \" Foo.exe \"\nauto_pair = true\n",
+            "[[apps]]\nprocess = \" Foo.exe \"\nignore_host_ime_close = true\n",
             "pad",
         );
         assert!(
@@ -3923,7 +3839,7 @@ mod layering_tests {
     fn unset_accepts_a_bare_string_and_can_lift_a_disable() {
         let c = load(
             "[[apps]]\nprocess = \"A.exe\"\nfirst_show_mode = \"wait\"\n",
-            "[[apps]]\nprocess = \"A.exe\"\nunset = \"first_show_mode\"\nauto_pair = true\n",
+            "[[apps]]\nprocess = \"A.exe\"\nunset = \"first_show_mode\"\nignore_host_ime_close = true\n",
             "unsetstr",
         );
         assert_eq!(c.get_rule("A.exe").unwrap().first_show_mode, None);
@@ -3972,7 +3888,7 @@ mod layering_tests {
     #[test]
     fn skipped_content_is_treated_as_damage_and_backed_up() {
         let dir = tmp("skipped");
-        let text = "[apps]\nprocess = \"lost.exe\"\nauto_pair = true\n";
+        let text = "[apps]\nprocess = \"lost.exe\"\nignore_host_ime_close = true\n";
         write(&dir, text);
         with_system("", || {
             set_user_first_show_mode(&dir, "a.exe", Some(FirstShowMode::Fast)).unwrap()
@@ -4008,7 +3924,7 @@ mod layering_tests {
             "[[apps]]\nprocess = \"a.exe\"\nfirst_show_mode = \"turbo\"\n",
         );
         with_system("", || {
-            set_user_auto_pair(&dir, "a.exe", Some(true)).unwrap()
+            set_user_ignore_host_ime_close(&dir, "a.exe", Some(true)).unwrap()
         });
         assert!(
             read(&dir).contains("first_show_mode = \"turbo\""),
@@ -4110,7 +4026,7 @@ mod layering_tests {
         assert_eq!(mode("AutoHotkeyGUI"), Some(FirstShowMode::Instant));
         assert_eq!(mode("Other"), Some(FirstShowMode::Fast), "纯进程那条不动");
         assert!(
-            set_user_auto_pair(&dir, "", Some(true)).is_err(),
+            set_user_ignore_host_ime_close(&dir, "", Some(true)).is_err(),
             "身份为空不写"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -4138,8 +4054,7 @@ mod layering_tests {
     #[test]
     fn menu_clear_of_a_system_field_writes_unset_and_runtime_follows_global() {
         let (d, u) = (tmp("m_clr_d"), tmp("m_clr_u"));
-        let sys =
-            "[[apps]]\nprocess = \"EXCEL.EXE\"\nfirst_show_mode = \"wait\"\nauto_pair = false\n";
+        let sys = "[[apps]]\nprocess = \"EXCEL.EXE\"\nfirst_show_mode = \"wait\"\nignore_host_ime_close = false\n";
         write(&d, sys);
         with_system(sys, || {
             set_user_first_show_mode(&u, "excel.exe", None).unwrap()
@@ -4155,7 +4070,7 @@ mod layering_tests {
             r.first_show_mode, None,
             "菜单选「跟随全局」必须真的跟随全局，不能被出厂值顶回来"
         );
-        assert_eq!(r.auto_pair, Some(false));
+        assert_eq!(r.ignore_host_ime_close, Some(false));
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::remove_dir_all(&u);
     }
@@ -4352,7 +4267,7 @@ mod layering_tests {
         let dir = tmp("m_keep");
         write(
             &dir,
-            "[[apps]]\nprocess = \"other.exe\"\nauto_pair = true\nfuture_field = 7\n\n\
+            "[[apps]]\nprocess = \"other.exe\"\nignore_host_ime_close = true\nfuture_field = 7\n\n\
              [[commit_newline]]\nprocess = \"w.exe\"\nstyle = \"cr\"\n\n\
              [[initial_mode_scope]]\nprocess = \"explorer.exe\"\nclasses = [\"A\"]\n",
         );
@@ -4382,11 +4297,9 @@ mod layering_tests {
         with_system("", || {
             set_user_initial_mode(&u, "a.exe", Some(InitialMode::English)).unwrap();
             set_user_initial_punct(&u, "a.exe", Some(InitialMode::Chinese)).unwrap();
-            set_user_auto_pair(&u, "a.exe", Some(false)).unwrap();
             set_user_password_force_english(&u, "a.exe", Some(true)).unwrap();
             set_user_schema(&u, "a.exe", Some("@remember".into())).unwrap();
             set_user_ignore_host_ime_close(&u, "a.exe", Some(true)).unwrap();
-            set_user_smart_method(&u, "a.exe", Some(SmartMethod::HoldComposition)).unwrap();
             set_user_caret_offset(&u, "a.exe", 3, -4).unwrap();
             set_user_status_fallback(&u, "a.exe", Some(StatusFallback::Hide)).unwrap();
         });
@@ -4394,11 +4307,9 @@ mod layering_tests {
         let r = rt.get_rule("a.exe").expect("菜单写入后运行时必须读得到");
         assert_eq!(r.initial_mode, Some(InitialMode::English));
         assert_eq!(r.initial_punct, Some(InitialMode::Chinese));
-        assert_eq!(r.auto_pair, Some(false), "显式 false 必须落盘");
         assert_eq!(r.password_force_english, Some(true));
         assert_eq!(r.app_schema(), Some(AppSchema::Remember));
         assert_eq!(r.ignore_host_ime_close, Some(true));
-        assert_eq!(r.smart_method, Some(SmartMethod::HoldComposition));
         assert_eq!((r.caret_offset_x, r.caret_offset_y), (3, -4));
         assert_eq!(r.status_fallback_position, Some(StatusFallback::Hide));
         let _ = std::fs::remove_dir_all(&u);
@@ -4584,12 +4495,12 @@ mod resolve_tests {
             [[apps]]
             process = "ahk.exe"
             class = "AutoHotkeyGUI"
-            auto_pair = true
+            ignore_host_ime_close = true
             [[apps]]
             process = "ahk.exe"
             class = "AutoHotkeyGUI"
             title = "T*"
-            unset = ["auto_pair"]
+            unset = ["ignore_host_ime_close"]
             [[apps]]
             process = "ahk.exe"
             class = "Off"
@@ -4608,16 +4519,19 @@ mod resolve_tests {
             "更具体的 AutoHotkeyGUI 那条没写这个字段，出处是通配那条"
         );
         assert_eq!(
-            c.menu_writeback_target(&gui, &["auto_pair"]),
+            c.menu_writeback_target(&gui, &["ignore_host_ime_close"]),
             Some(id("autohotkeygui", ""))
         );
         assert_eq!(
-            c.menu_writeback_target(&ctx("ahk.exe", "AutoHotkeyGUI", "Title"), &["auto_pair"]),
+            c.menu_writeback_target(
+                &ctx("ahk.exe", "AutoHotkeyGUI", "Title"),
+                &["ignore_host_ime_close"]
+            ),
             Some(id("autohotkeygui", "t*")),
             "unset 也是出处"
         );
         assert_eq!(
-            c.menu_writeback_target(&gui, &["caret_use_top", "auto_pair"]),
+            c.menu_writeback_target(&gui, &["caret_use_top", "ignore_host_ime_close"]),
             Some(id("autohotkeygui", "")),
             "多字段取任一"
         );
@@ -4640,7 +4554,7 @@ mod resolve_tests {
             "仅窗口条件（不限进程）的出处不改它，写纯进程键即可压过"
         );
         assert_eq!(
-            c.menu_writeback_target(&ctx("", "AutoHotkeyGUI", ""), &["auto_pair"]),
+            c.menu_writeback_target(&ctx("", "AutoHotkeyGUI", ""), &["ignore_host_ime_close"]),
             None
         );
     }
@@ -4768,7 +4682,7 @@ mod resolve_tests {
     #[test]
     fn an_empty_process_name_gets_no_rule_at_all() {
         let c = one(
-            "[[apps]]\nprocess = \"*\"\ninitial_mode = \"english\"\n\n[[apps]]\nclass = \"C\"\nauto_pair = true\n",
+            "[[apps]]\nprocess = \"*\"\ninitial_mode = \"english\"\n\n[[apps]]\nclass = \"C\"\nignore_host_ime_close = true\n",
         );
         assert!(c.get_rule("").is_none());
         let r = c.resolve(&ctx("", "C", "t"));
@@ -4789,13 +4703,17 @@ mod resolve_tests {
             [
                 "[[apps]]\nprocess = \"Foo.exe\"\nfirst_show_mode = \"wait\"\n",
                 "",
-                "[[apps]]\nprocess = \"*\"\nfirst_show_mode = \"instant\"\nauto_pair = false\n\n[[apps]]\nprocess = \"foo.exe\"\nunset = [\"first_show_mode\"]\n",
+                "[[apps]]\nprocess = \"*\"\nfirst_show_mode = \"instant\"\nignore_host_ime_close = false\n\n[[apps]]\nprocess = \"foo.exe\"\nunset = [\"first_show_mode\"]\n",
             ],
             "unsetstar",
         );
         let foo = c.get_rule("foo.exe").unwrap();
         assert_eq!(foo.first_show_mode, None, "出厂值与通配值一并取消");
-        assert_eq!(foo.auto_pair, Some(false), "没 unset 的字段照常继承通配");
+        assert_eq!(
+            foo.ignore_host_ime_close,
+            Some(false),
+            "没 unset 的字段照常继承通配"
+        );
         assert_eq!(
             c.get_rule("bar.exe").and_then(|r| r.first_show_mode),
             Some(FirstShowMode::Instant)
@@ -4805,13 +4723,16 @@ mod resolve_tests {
     #[test]
     fn empty_class_or_title_never_hits_a_rule_with_that_condition() {
         let c = one(
-            "[[apps]]\nclass = \"*\"\ncaret_use_top = true\n\n[[apps]]\ntitle = \"*\"\nauto_pair = false\n",
+            "[[apps]]\nclass = \"*\"\ncaret_use_top = true\n\n[[apps]]\ntitle = \"*\"\nignore_host_ime_close = false\n",
         );
         assert!(c.resolve(&ctx("a.exe", "", "")).rule.is_none());
         let r = c.resolve(&ctx("a.exe", "X", ""));
         let r = r.rule.as_ref().unwrap();
         assert!(r.caret_use_top);
-        assert_eq!(r.auto_pair, None, "标题为空，带标题条件的规则不命中");
+        assert_eq!(
+            r.ignore_host_ime_close, None,
+            "标题为空，带标题条件的规则不命中"
+        );
     }
 
     /// 行内 unset 跨级生效：更具体那条把通配设下的字段取消 = 本窗口回到全局默认。
@@ -4880,21 +4801,24 @@ mod resolve_tests {
     #[test]
     fn get_rule_is_resolve_without_a_window() {
         let c = one(
-            "[[apps]]\nprocess = \"a.exe\"\nauto_pair = true\n\n[[apps]]\nprocess = \"a.exe\"\nclass = \"X\"\nauto_pair = false\n",
+            "[[apps]]\nprocess = \"a.exe\"\nignore_host_ime_close = true\n\n[[apps]]\nprocess = \"a.exe\"\nclass = \"X\"\nignore_host_ime_close = false\n",
         );
-        assert_eq!(c.get_rule("A.EXE").and_then(|r| r.auto_pair), Some(true));
+        assert_eq!(
+            c.get_rule("A.EXE").and_then(|r| r.ignore_host_ime_close),
+            Some(true)
+        );
         assert_eq!(
             c.resolve(&ctx("a.exe", "", ""))
                 .rule
                 .as_ref()
-                .and_then(|r| r.auto_pair),
+                .and_then(|r| r.ignore_host_ime_close),
             Some(true)
         );
         assert_eq!(
             c.resolve(&ctx("a.exe", "x", ""))
                 .rule
                 .as_ref()
-                .and_then(|r| r.auto_pair),
+                .and_then(|r| r.ignore_host_ime_close),
             Some(false)
         );
         assert!(c.get_rule("b.exe").is_none());
@@ -4958,7 +4882,7 @@ mod resolve_tests {
     #[test]
     fn resolve_reports_which_window_rules_matched_in_compose_order() {
         let c = one(
-            "[[apps]]\nprocess = \"a.exe\"\ntitle = \"T*\"\nauto_pair = true\n\n[[apps]]\nclass = \"C\"\nauto_pair = false\n\n[[apps]]\nprocess = \"a.exe\"\ncaret_use_top = true\n",
+            "[[apps]]\nprocess = \"a.exe\"\ntitle = \"T*\"\nignore_host_ime_close = true\n\n[[apps]]\nclass = \"C\"\nignore_host_ime_close = false\n\n[[apps]]\nprocess = \"a.exe\"\ncaret_use_top = true\n",
         );
         let r = c.resolve(&ctx("a.exe", "c", "Title"));
         assert_eq!(
@@ -5005,7 +4929,7 @@ mod resolve_tests {
     #[test]
     fn composition_placeholder_goes_through_the_unified_composition() {
         let c = one(
-            "[[apps]]\nprocess = \"*\"\ncomposition_placeholder = \"zwsp\"\n\n[[apps]]\nprocess = \"wps.exe\"\ncomposition_placeholder = \"space\"\n\n[[apps]]\nprocess = \"code.exe\"\nauto_pair = true\n",
+            "[[apps]]\nprocess = \"*\"\ncomposition_placeholder = \"zwsp\"\n\n[[apps]]\nprocess = \"wps.exe\"\ncomposition_placeholder = \"space\"\n\n[[apps]]\nprocess = \"code.exe\"\nignore_host_ime_close = true\n",
         );
         assert_eq!(
             c.composition_placeholder_for("x.exe"),
@@ -5101,13 +5025,15 @@ mod resolve_tests {
     #[test]
     fn has_title_rules_counts_only_enabled_app_rules_with_a_title() {
         assert!(
-            !one("[[apps]]\nprocess = \"a.exe\"\nclass = \"C\"\nauto_pair = false\n")
+            !one("[[apps]]\nprocess = \"a.exe\"\nclass = \"C\"\nignore_host_ime_close = false\n")
                 .has_title_rules()
         );
-        assert!(one("[[apps]]\ntitle = \"*x*\"\nauto_pair = false\n").has_title_rules());
+        assert!(
+            one("[[apps]]\ntitle = \"*x*\"\nignore_host_ime_close = false\n").has_title_rules()
+        );
         assert!(
             !one(
-                "[[apps]]\nprocess = \"a.exe\"\ntitle = \"x\"\ndisabled = true\nauto_pair = false\n"
+                "[[apps]]\nprocess = \"a.exe\"\ntitle = \"x\"\ndisabled = true\nignore_host_ime_close = false\n"
             )
             .has_title_rules(),
             "禁用的不算"
@@ -5123,15 +5049,16 @@ mod resolve_tests {
     /// 「本进程可能命中标题规则」：不限进程的标题规则对所有进程成立，进程标题规则只对本进程。
     #[test]
     fn process_may_match_title_follows_the_buckets() {
-        let own = one("[[apps]]\nprocess = \"A.exe\"\ntitle = \"x*\"\nauto_pair = false\n");
+        let own =
+            one("[[apps]]\nprocess = \"A.exe\"\ntitle = \"x*\"\nignore_host_ime_close = false\n");
         assert!(own.process_may_match_title("a.EXE"));
         assert!(!own.process_may_match_title("b.exe"), "别的进程用不上");
         assert!(!own.process_may_match_title(""), "进程名未知");
-        let any = one("[[apps]]\ntitle = \"x*\"\nauto_pair = false\n");
+        let any = one("[[apps]]\ntitle = \"x*\"\nignore_host_ime_close = false\n");
         assert!(any.process_may_match_title("b.exe"));
         let off = one(
-            "[[apps]]\nprocess = \"a.exe\"\ntitle = \"x*\"\ndisabled = true\nauto_pair = false\n\n\
-             [[apps]]\nprocess = \"a.exe\"\nclass = \"C\"\nauto_pair = false\n",
+            "[[apps]]\nprocess = \"a.exe\"\ntitle = \"x*\"\ndisabled = true\nignore_host_ime_close = false\n\n\
+             [[apps]]\nprocess = \"a.exe\"\nclass = \"C\"\nignore_host_ime_close = false\n",
         );
         assert!(
             !off.process_may_match_title("a.exe"),
@@ -5152,7 +5079,8 @@ mod resolve_tests {
         assert!(sig("").is_empty());
         assert_ne!(sig("Doc 1"), sig("Other"));
         assert_ne!(sig("Doc 1"), sig("Doc Mail"), "多命中一条就不同");
-        let none = one("[[apps]]\nprocess = \"a.exe\"\nclass = \"Main\"\nauto_pair = false\n");
+        let none =
+            one("[[apps]]\nprocess = \"a.exe\"\nclass = \"Main\"\nignore_host_ime_close = false\n");
         assert!(
             none.title_signature(&ctx("a.exe", "Main", "Doc"))
                 .is_empty()
@@ -5195,15 +5123,15 @@ mod resolve_tests {
     fn bucketed_resolve_and_lookup_table_match_the_full_scan() {
         let c = load(
             [
-                "[[apps]]\nprocess = \"*\"\ncaret_offset_x = 1\nauto_pair = true\n\n\
+                "[[apps]]\nprocess = \"*\"\ncaret_offset_x = 1\nignore_host_ime_close = true\n\n\
                  [[apps]]\nclass = \"Chrome_*\"\ncaret_offset_x = 2\n\n\
                  [[apps]]\ntitle = \"*Doc*\"\ninitial_mode = \"english\"\n\n\
-                 [[apps]]\nprocess = \"A.exe\"\ncaret_offset_x = 3\nunset = [\"auto_pair\"]\n\n\
+                 [[apps]]\nprocess = \"A.exe\"\ncaret_offset_x = 3\nunset = [\"ignore_host_ime_close\"]\n\n\
                  [[apps]]\nprocess = \"a.exe\"\nclass = \"chrome_w?\"\ncaret_offset_y = 4\n\n\
                  [[apps]]\nprocess = \"b.exe\"\nclass = \"*\"\ndisabled = true\ncaret_offset_x = 9\n\n\
                  [[apps]]\nprocess = \"b.exe\"\nfirst_show_mode = \"wait\"\n",
                 "[[apps]]\nprocess = \"*\"\nfirst_show_mode = \"fast\"\n\n\
-                 [[apps]]\nprocess = \"c.exe\"\nclass = \"Ǆ*\"\nauto_pair = false\n",
+                 [[apps]]\nprocess = \"c.exe\"\nclass = \"Ǆ*\"\nignore_host_ime_close = false\n",
                 "[[apps]]\nprocess = \"a.exe\"\ncaret_offset_y = 7\n\n\
                  [[apps]]\nclass = \"Chrome_*\"\ntitle = \"x?\"\ncaret_use_top = true\n",
             ],
@@ -5337,7 +5265,7 @@ first_show_mode = "instant"
 [[apps]]
 process = "EXCEL.EXE"
 unset = ["first_show_mode"]
-auto_pair = false
+ignore_host_ime_close = false
 
 [[apps]]
 process = "MapleStory.exe"
@@ -5353,19 +5281,18 @@ unknown_future = [1, 2]
 [[apps]]
 process = "newapp.exe"
 initial_mode = "chinese"
-auto_pair = true
+ignore_host_ime_close = true
 
 [[apps]]
 process = 1
-auto_pair = true
+ignore_host_ime_close = true
 
 [[apps]]
-auto_pair = true
+ignore_host_ime_close = true
 
 [[apps]]
 process = "typo.exe"
 first_show_mode = "wiat"
-smart_method = "hold_composition"
 "#,
         r#"
 [[apps]]

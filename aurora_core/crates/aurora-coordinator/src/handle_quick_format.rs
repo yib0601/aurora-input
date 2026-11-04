@@ -438,8 +438,8 @@ impl Coordinator {
     /// 取不到示例的条目（农历超出 1900–2100、表达式写错）为空串。⚠️ 「示例为空」
     /// **不等于**「这条永远不出」——它只说明这一组样本值渲染不出来。
     fn quick_format_samples(&self) -> std::collections::HashMap<String, String> {
-        use chrono::Datelike;
         use aurora_quick_input::QuickSource;
+        use chrono::Datelike;
         let dp = self.rt().config.schema.quick_input.decimal_places;
         let mut samples_adjust = self.quick_adjust_snapshot();
         for a in samples_adjust.values_mut() {

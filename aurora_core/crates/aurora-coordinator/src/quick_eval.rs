@@ -6,10 +6,10 @@
 //! 求值用 [`Registry::quick`]（纯函数 + `quick` 取值函数族，**不含动作函数**）：
 //! 格式表描述的是候选长什么样，不该能改剪贴板、按键或配置。
 
-use chrono::{DateTime, Local};
-use tracing::{debug, warn};
 use aurora_cmdbar::{EvalContext, PhraseEval, Registry, Services, evaluate_phrase};
 use aurora_quick_input::{FormatTable, QuickValues};
+use chrono::{DateTime, Local};
+use tracing::{debug, warn};
 
 /// 格式表专用求值上下文。
 ///

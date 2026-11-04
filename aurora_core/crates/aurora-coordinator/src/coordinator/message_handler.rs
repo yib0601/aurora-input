@@ -20,18 +20,6 @@ impl Coordinator {
         self.note_word_boundary();
     }
 
-    /// 仍挂在组合里的智能符号（HoldComposition）。超出时限的视为没有：C++ 定时器到点已自行提交，
-    /// 这边的 `held_text` 不会随之清掉，拿它当「还在组合」会二次提交（"。" → 等 >500ms → "=" → "。。="）。
-    pub(crate) fn live_held_text(&self) -> Option<String> {
-        let arm = self.smart_symbol.lock().unwrap_or_else(|e| e.into_inner());
-        let timeout = self.smart_symbol_timeout();
-        if arm.at.is_some_and(|t| t.elapsed() < timeout) {
-            arm.held_text.clone()
-        } else {
-            None
-        }
-    }
-
     /// 当前焦点应用的上屏换行档位：per-app（compat `[[commit_newline]]`）→ 全局
     /// （`input.commit_newline`）→ 出厂 [`NewlineStyle::Keep`]。
     ///
@@ -528,10 +516,7 @@ impl MessageHandler for Coordinator {
         }
         let mut changed = false;
         for _ in 0..notches {
-            // 展开态滚一行（同 `mouse_page`）：网格里逐个移动高亮，滚一格只挪一个字，太慢。
-            let moved = if Self::grid_active(&state) {
-                self.grid_scroll(&mut state, !up)
-            } else if up {
+            let moved = if up {
                 self.move_up(&mut state)
             } else {
                 self.move_down(&mut state)
@@ -845,32 +830,20 @@ impl MessageHandler for Coordinator {
     /// 再做 preedit 占位后处理。集中在此避免修改 40+ 个 commit 返回点（对齐旧 Go
     /// HandleKeyEvent 末尾的 recordCommitFallback 思路）。
     fn handle_key_event_policed(&self, data: &KeyEventData) -> KeyAction {
-        // 「上一次按键送达之后、这一按之前，有键被透传给了宿主」⇒ 智能符号武装态失效。
+        // 「上一次按键送达之后、这一按之前，有键被透传给了宿主」⇒ 说明光标前最后一段已不是
+        // 我们上屏的那段，两处会话状态据此复位：撤销上屏计数（否则「你好」后透传一个 0 再
+        // 撤销，删的是「好0」）与草稿滑窗（否则「你」「0」「好」连打会登记「你好」——光标
+        // 回声在自提交后 200ms 内被忽略，靠 SelectionChanged 断不了）。
         //
-        // 这是出口那道「非同键按键解除武装」够不着的那一块：英文半角下 TSF 只吃标点键
-        // （`_IsCustomEnglishPunctKey` → `IsPunctuationKey`，11 个 OEM 键），中间打的字母
-        // 数字**根本不产生按键事件**，而英文模式又没有编码缓冲，`smart_symbol_press2` 的
-        // 「缓冲非空」也恒为假。两道判据同时失明，只有 DLL 知道这件事发生过，于是由它经
-        // `toggles` 的 `TOGGLE_PASSTHROUGH_KEY` 位如实上报（见 C++ `_NotePassthroughKeyDown`）。
+        // 事件源是 DLL 经 `toggles` 的 `TOGGLE_PASSTHROUGH_KEY` 位上报告（见 C++
+        // `_NotePassthroughKeyDown`）：英文半角下 TSF 只吃标点键，中间打的字母数字根本不产生
+        // 按键事件，服务端没有别的途径知道。**必须在 `handle_key_event` 之前**——这一位说的是
+        // 「这一按之前已经发生过」，放到出口就晚了一整拍。
         //
-        // **必须在 `handle_key_event` 之前**：出口那道是「这一按之后」的清理，而这一位说的是
-        // 「这一按之前已经发生过」，放到出口就晚了一整拍——press2 早已误触发。
-        //
-        // 同一个事实还说明光标前最后一段已不是我们上屏的那段，另两处据此复位：撤销上屏计数
-        // （否则「你好」后透传一个 0 再撤销，删的是「好0」）与草稿滑窗（否则「你」「0」「好」连打
-        // 会登记「你好」——光标回声在自提交后 200ms 内被忽略，靠 SelectionChanged 断不了）。
         // 中文半角空闲的数字键 DLL 不再转发（NumberKeyPolicy.h），这是服务端唯一知道它们的途径。
         //
         // 位为假时（绝大多数按键）连锁都不取。旧 DLL 不置位 ⇒ 行为与改造前逐字一致。
         if data.event_type == EVENT_KEY_DOWN && data.toggles & TOGGLE_PASSTHROUGH_KEY != 0 {
-            {
-                let mut arm = self.smart_symbol.lock().unwrap_or_else(|e| e.into_inner());
-                if arm.armed {
-                    debug!("SmartSymbol: 上一按之后有键被透传给宿主，解除武装");
-                    arm.armed = false;
-                    arm.hold_pending_commit = false;
-                }
-            }
             self.note_host_wrote_text("宿主自行出字");
         }
         let action = self.handle_key_event(data);
@@ -883,82 +856,12 @@ impl MessageHandler for Coordinator {
         // 自提交打点 + 码表自动造词投喂。与 record_input_stats 同一收口理由：上屏路径有
         // 40+ 个返回点，且约 10 处绕过 commit_action 直接构造 InsertText，散点接线必漏。
         self.note_commit_action(&action);
-        // PassThrough / UpdateComposition 时 C++ 侧会调 FlushHoldCompositionIfActive 提交旧符号；
-        // coordinator 需同步清除 held_text，防止后续标点的 pre_held_text 捡到已提交的旧值
-        // 而造成二次提交（"。。="）。仅在 held_text 非空时操作，避免干扰无 Hold 状态的武装态。
-        match &action {
-            KeyAction::PassThrough
-            | KeyAction::NotHandled
-            | KeyAction::UpdateComposition { .. } => {
-                let mut arm = self.smart_symbol.lock().unwrap_or_else(|e| e.into_inner());
-                if arm.held_text.is_some() {
-                    arm.held_text = None;
-                    arm.armed = false;
-                    arm.hold_pending_commit = false;
-                }
-            }
-            _ => {}
-        }
-        // 「中间按了别的键」⇒ 智能符号武装态失效。
-        //
-        // press1 之后的武装态只该等**同一个键**的第二次按下；中间任何一次别的按键（字母进
-        // 缓冲、空格、退格、英文模式下直接上屏的字母……）都意味着光标前已不再是 press1 那个
-        // 符号，再按同键就该当全新 press1。此前这条判据**完全不存在**：上面那段清理按
-        // `held_text.is_some()` 开门，而出厂方案 `DeleteReplace` 的 `held_text` 恒为 `None`，
-        // 于是它对出厂路径整段惰性——`HoldComposition` 侥幸不中招靠的正是那段，不是有判据。
-        //
-        // 判据用**本次按键产出的标点字符**与 `arm.key` 比，而不是虚拟键码：武装侧记的就是
-        // 字符（三条武装通路里 `arm_smart_symbol_after_commit` 根本拿不到键码）。产不出字符的
-        // （字母、功能键）与产出的不是 `arm.key` 那个符号的（数字、别的标点）一律解除。
-        //
-        // **只解除 `armed`，不碰 `held_text`**：后者的生命周期归上面那段按 action 判（C++ 侧
-        // `FlushHoldCompositionIfActive` 提交了才清）。在这里一并清掉会让下一个标点的
-        // `pre_held_text` 捡不到仍挂在组合态里的旧符号，变成二次提交。press2 的门是 `armed`，
-        // 清它已经足够。
-        //
-        // 与标点分支里那几处 `disarm_smart_symbol()`（它会连 `held_text` 一起清）**不矛盾**：
-        // 那些点都在 `try_smart_symbol_replace` 之后，而它的落地分支里凡是继续往下走的
-        // （press1 不武装 / `DeleteReplace` / `HoldComposition` 且有活跃编码）都已把 `held_text`
-        // 置空，唯一置 `Some` 的那条当场短路返回 `HoldComposition`。那里清的是个空值。
-        // 本处不同：出口对**任何**按键生效，包括 hold 正挂着的那些帧。
-        //
-        // **只在 keydown 上做**：修饰键（Shift/Ctrl/CapsLock）的 keyup 是会转发到服务端的
-        // （见 C++ `_DispatchPendingToggleKeyUp`），在 keyup 上解除会误伤「按住 Shift 连按两次
-        // `？`」这类正常 press2。
-        //
-        // 本条只覆盖**桌面宿主**（bridge 的按键出口）。`aurora-mobile` 走内层 `handle_key_event`，
-        // 不经这里；那一侧由 `smart_symbol_press2` 里「press1 之后又打了编码」那条判据兜住。
-        // 两条覆盖面不同、各有独立会红的用例，见 `tests/smart_symbol.rs` 的同名注释。
-        if data.event_type == EVENT_KEY_DOWN {
-            let mut arm = self.smart_symbol.lock().unwrap_or_else(|e| e.into_inner());
-            if arm.armed {
-                // `punct_char` 只认主键盘那 21 个键。英文全角那条路（`handle_english_full_width`）
-                // 经 `full_width_source_char` 连**小键盘**一起吃下，`.` `/` `+` `-` `*` 都能武装，
-                // 而它们在 `punct_char` 里是 `None` ⇒ 只问 `punct_char` 会把它们判成「别的键」，
-                // 在 press1 那一按当场自解武装、press2 永远不来。故按同一张来源表补上小键盘。
-                // 带 Ctrl/Alt/Win 的组合键**一律算「别的键」**：`Ctrl+.` 的 `punct_char` 仍是
-                // `.`，不排除就会被当成同键而保住武装，可它根本不是在打标点——宿主拿它做什么
-                // （移动光标、跳转、执行命令）服务端不知道，之后再按 `。` 就可能对着已经挪走的
-                // 光标做替换。与 C++ `_IsCustomEnglishPunctKey` 的同款守卫对齐。
-                let same_key = data.modifiers & MOD_SHORTCUT == 0
-                    && punct_char(data.key_code, data.modifiers & MOD_SHIFT != 0)
-                        .or_else(|| numpad_char(data.key_code))
-                        .is_some_and(|ch| ch == arm.key);
-                if !same_key {
-                    arm.armed = false;
-                    arm.hold_pending_commit = false;
-                }
-            }
-        }
         // 检索范围临时放宽的失效：本次组合结束（缓冲已空）即恢复配置档位。
         // 与 record_input_stats / note_commit_action 同一收口理由——`input_buffer.clear()`
         // 有十几个调用点（上屏/取消/切焦点/模式切换），散点接线必漏。放在按键处理的唯一出口，
         // 天然覆盖全部结束路径。用户选字上屏后下一次输入即回到智能档；而放宽期间继续敲字母、
         // 退格改码、翻页都不会丢状态（缓冲非空），符合「找生僻字常要改几次编码」的实际。
         self.expire_scope_override();
-        // 配对状态保活：须在 handle_key_event **之后**刷新，否则本次按键的陈旧判定
-        // 会先被自己刷新掉，TTL 永不触发。栈空时是空操作。
-        self.touch_pair_state();
         // 联想占位组合的两道收口，都挂在这个唯一出口上（透传这一格是它们共同的病灶）：
         //
         // ① `assoc_release_on_passthrough` —— 联想**还活着**，而这一键在既有分支里落到了
@@ -1015,15 +918,6 @@ impl MessageHandler for Coordinator {
         // 别让上一键的登记漏到这一键。
         self.commit_code_pending
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        // 按下时已没有输入会话（或只剩联想）= 上一次组合已经结束（出口有几十处），「本次展开过」
-        // 随之作废。不看「候选为空」：码表空码、拼音分步上屏后删空余码时组合还在。
-        if data.event_type == EVENT_KEY_DOWN {
-            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if !Self::has_input_session(&st) || st.assoc_active() {
-                st.grid_keep = false;
-            }
-        }
-
         // 方案级行为覆盖的**兜底**同步点：代际未变时是一次 atomic load + 比较，可忽略。
         // 它保证「切方案后 [punct] 没落地」最迟在下一次按键收敛——其余三个调用点
         // （push_state_update / show_status / apply_ui_config）只是让它当场可见。
@@ -1381,13 +1275,6 @@ impl MessageHandler for Coordinator {
             return act;
         }
 
-        // 配对跳出键：**全模式统一前置判定**，必须早于下面的英文模式分支——英文模式对普通键
-        // 直接 PassThrough，判定放在中文路径里就永远跑不到（旧实现即如此，是「英文模式跳不出
-        // 中文里打的配对」的根因之一）。守卫与失效方向见 try_jump_out。
-        if let Some(act) = self.try_jump_out(&state, data) {
-            return act;
-        }
-
         // 英文模式
         if !state.chinese_mode {
             // 全角：键已被 TSF 的 `english_fullwidth` 分支吃下等 Rust 出字，此处必须转换，
@@ -1447,8 +1334,8 @@ impl MessageHandler for Coordinator {
             return KeyAction::PassThrough;
         }
 
-        // 统一夺取回退：夺取式模式（URL/后续 z 临拼）中，退到夺取边界再按退格 →
-        // 撤销夺取、把快照回放回正常码表输入流（而非停在无候选的独占模式）。
+        // 统一夺取回退：z 夺取（临拼 / 临英 / 快捷输入 / 生僻字 / 反查）中，退到夺取边界
+        // 再按退格 → 撤销夺取、把快照回放回正常码表输入流（而非停在无候选的独占模式）。
         // 须先于下方单点分派，否则退格会被模式处理器按普通删字符消费。
         if data.key_code == keymap::VK_BACK && self.can_rewind(&state) {
             return self.rewind_hijack(&mut state);
@@ -1458,9 +1345,6 @@ impl MessageHandler for Coordinator {
         match state.active {
             Some(ModeKind::TempPinyin) => return self.handle_temp_pinyin_key(&mut state, data),
             Some(ModeKind::TempEnglish) => return self.handle_temp_english_key(&mut state, data),
-            Some(ModeKind::Url) => return self.handle_url_key(&mut state, data),
-            Some(ModeKind::Email) => return self.handle_email_key(&mut state, data),
-            Some(ModeKind::Unicode) => return self.handle_unicode_key(&mut state, data),
             // ★ 生僻字模式复用 special 的整套按键处理（缓冲/光标/退格/选词/翻页）。
             // 两者只差「引擎取哪个方案」与「候选过不过生僻准入」，那两处分别在
             // `overlay_engine_schema` 与 `update_special_candidates` 里分流。
@@ -1512,13 +1396,6 @@ impl MessageHandler for Coordinator {
                 return KeyAction::ClearComposition;
             }
             return KeyAction::PassThrough;
-        }
-
-        // ── 前缀夺取式模式激活 ──
-        // 普通输入累积时，若 input_buffer + 当前键字符 恰好等于某前缀，则夺取进入对应模式。
-        // 置于主分派前，确保「补全前缀的那一键」先被截获，不落入普通码表/标点处理。
-        if let Some(act) = self.try_prefix_hijack(&mut state, data) {
-            return act;
         }
 
         debug!(
@@ -1645,15 +1522,11 @@ impl MessageHandler for Coordinator {
         // 本档位，空闲半角照样放行 ⇒ 普通宿主只出 `.`，Chrome 类宿主再加我们插的「。」。
         // 这里与 Test 对齐，空闲半角一律透传。
         //
-        // 比上面那臂多判一个挂着的智能符号：HoldComposition 挂着组合时 C++ 视作有会话、已吃下
-        // 本键，透传就是「吃了再吐」；交给标点臂，它会把挂着的符号一并上屏。超时的不算——C++ 定时器
-        // 已自行提交、没有会话了，而 `held_text` 在这边不会随之清掉。
         if state.numpad_origin
             && !state.full_width
             && state.input_buffer.is_empty()
             && state.committed_text.is_empty()
             && state.candidates.is_empty()
-            && self.live_held_text().is_none()
             && let Some(ch) = punct_char(data.key_code, data.modifiers & MOD_SHIFT != 0)
         {
             self.record_commit(&ch.to_string(), 0, -1, CommitSource::Punctuation);
@@ -1693,14 +1566,9 @@ impl MessageHandler for Coordinator {
             // ——`keys.session_actions` 里绑 `cancel` 的键走的是同一个函数，两条通路
             // 行为必然一致。
             //
-            // 没有会话（也没挂着待定标点）时交还宿主：Linux / macOS 没有 TSF 那道前置闸门，
-            // 每个键都会到这里，空闲 Esc 若照样回 ClearComposition 就被吞掉（GH#209：
-            // 浏览器 Vimium 收不到 Esc）。
-            keymap::VK_ESCAPE
-                if !Self::has_input_session(&state) && self.live_held_text().is_none() =>
-            {
-                KeyAction::PassThrough
-            }
+            // 没有会话时交还宿主：Linux / macOS 没有 TSF 那道前置闸门，每个键都会到这里，
+            // 空闲 Esc 若照样回 ClearComposition 就被吞掉（GH#209：浏览器 Vimium 收不到 Esc）。
+            keymap::VK_ESCAPE if !Self::has_input_session(&state) => KeyAction::PassThrough,
             keymap::VK_ESCAPE => self.cancel_session(&mut state),
             keymap::VK_BACK => {
                 // 联想态：收掉候选并结束占位组合。**必须先于下面的既有分支**——那些分支
@@ -1961,7 +1829,7 @@ impl MessageHandler for Coordinator {
                     && !self.assoc_yields_select_key(&state)
                     && let Some(offset) = self.select_key_offset(data.key_code)
                 {
-                    let (start, end) = self.select_range(&state);
+                    let (start, end) = self.page_range(&state);
                     let idx = start + offset;
                     if idx < end {
                         let cand = state.candidates[idx].clone();
@@ -2173,7 +2041,7 @@ impl MessageHandler for Coordinator {
                     if !self.assoc_yields_select_key(&state)
                         && let Some(offset) = self.select_key_offset(data.key_code)
                     {
-                        let (start, end) = self.select_range(&state);
+                        let (start, end) = self.page_range(&state);
                         let idx = start + offset;
                         if idx < end {
                             let cand = state.candidates[idx].clone();
@@ -2227,25 +2095,14 @@ impl MessageHandler for Coordinator {
                 if let Some(ch) = punct_char(data.key_code, shift) {
                     // 联想态：先把联想**整个**收掉，再按空闲态出标点（联想不顶屏）。
                     //
-                    // ★ 必须早于下面的智能符号：`hold_composition` 的 press1 在「无输入」时
-                    // 短路返回 `HoldComposition`，联想态恰是「缓冲空 + 候选非空」——收口若
-                    // 放在后面的清候选处，这条路根本走不到，联想候选留在 `candidates` 里，
+                    // ★ 必须早于下面的标点流水线：收口若放在后面的清候选处，这条路走不到，
+                    //   联想候选留在 `candidates` 里，
                     // 此后的光标上报被当成组合期间的上报锁住组合起点（现象：候选窗位置
                     // 不再跟随光标）。普通出口虽清了候选，也漏清编码栏标识与自动隐藏计时。
                     let was_assoc =
                         self.exit_assoc(&mut state, crate::handle_assoc::AssocExit::TopCommitKey);
                     if was_assoc {
                         self.notify_ui_hide();
-                    }
-                    // 快照 held_text：非参与集合的标点会在 try_smart_symbol_replace 中解除武装
-                    // 并清空 held_text，须在此前保存，以便下方普通标点流程将旧符号纳入 CommitText。
-                    // 加超时防护：若 arm.at 已超出 timeout，说明 C++ timer 已自然触发提交，
-                    // held_text 已过期——不再使用，防止二次提交（"。" → 等待 >500ms → "=" → "。。="）。
-                    let pre_held_text = self.live_held_text();
-                    // 智能符号模式：同键连按删中文标点改英文（press2 短路返回）。
-                    // 须在候选提交逻辑之前：press2 时无待输入，依赖光标前字符匹配武装态。
-                    if let Some(act) = self.try_smart_symbol_replace(&state, ch, data.prev_char) {
-                        return act;
                     }
                     // 标点顶码上屏开关：有编码/已确认前缀时，码表/混输按方案
                     // engine.codetable.punct_commit 决定是否顶字上屏。
@@ -2260,162 +2117,32 @@ impl MessageHandler for Coordinator {
                             // 英文方案恒允许：`punct_commit` 是码表「标点顶字」的方案属性，
                             // 英文词后接标点是最基本的用法，不该被码表的出厂 false 吞掉。
                             Some(
-                                aurora_engine::EngineType::Pinyin | aurora_engine::EngineType::English,
+                                aurora_engine::EngineType::Pinyin
+                                | aurora_engine::EngineType::English,
                             ) => true,
                             // 码表/混输：读有效码表配置（全局 schema.codetable + 方案 override）。
                             _ => self.engine_mgr.codetable_settings().punct_commit,
                         };
                         if !punct_commit {
-                            // 标点被吞掉、编码原样保留 ⇒ 符号**从未上屏**，而本次按键刚刚在
-                            // `try_smart_symbol_replace` 里被武装成 press1。不解除的话，下次按
-                            // 同键会以 press2 的身份去删一个从未出现在屏幕上的符号。与紧邻下方
-                            // `clear_no_input` 分支同源，那里已这么做了——这条当时漏了。
-                            //
-                            // ⚠️ 如实交代：本行**当前没有独立会红的用例**。这条路吞键后编码原样
-                            // 保留，此后「缓冲重新变空」的两条路都已各自有解除——键盘路必经一次
-                            // 别的按键（出口那道判据），鼠标点选候选走 `select_candidate_at`
-                            // （那里也解除了）——构造不出只靠本行才不炸的时序。
-                            // 留着不是为了补一道防线，而是维持「武装态不得指向从未上屏的符号」
-                            // 这条不变式——放任它成立，那两道判据哪天被收窄就直接漏成缺陷。
-                            self.disarm_smart_symbol();
+                            // 标点被吞掉、编码原样保留——该功能少用，吞键比 Go 的 `return nil`
+                            // 透传更符合预期。
                             return KeyAction::Consumed;
                         }
                         // 空码 + `punct_on_empty_behavior = "clear_no_input"`：废码丢弃，标点
                         // 本身也不产出——整个按键当没按过。
                         //
-                        // ★ 短路点刻意放在 `hold_info` **之前**、两个上屏出口之上。标点有两条
-                        // 彼此独立的上屏通路（下面的智能符号 `CommitAndHoldComposition`、再往下
-                        // 的普通标点出口），在任一条里判都必漏另一条，而漏掉的那条是「只在开了
-                        // 智能符号的宿主上复现」的间歇性不一致。放这里一处覆盖两条。
-                        //
-                        // ⚠️ 也必须早于标点流水线（`convert_punct` / `record_commit` / 配对栈）：
-                        // 走到那里再丢弃，会记一次从未上屏的标点、并把它压进配对栈，表现为
-                        // 后续的跳出键行为错乱。
+                        // ⚠️ 必须早于标点流水线（`convert_punct` / `record_commit`）：走到那里
+                        // 再丢弃，会记一次从未上屏的标点。
                         if self.punct_empty_code_policy(&state)
                             == PunctEmptyCodePolicy::ClearNoInput
                         {
                             self.reset_pinyin_composition(&mut state);
-                            // 标点不上屏 ⇒ 没有可 hold 的对象，且本次按键**可能已被
-                            // `try_smart_symbol_replace` 武装成新的 press1**。不解除的话，下次按
-                            // 同键会以 press2 的身份去删一个从未出现在屏幕上的符号。
-                            self.disarm_smart_symbol();
                             self.notify_ui_hide();
-                            // 上一个智能符号若还挂在组合态里（`pre_held_text`），它此刻**只存在于
-                            // 组合态**——直接 ClearComposition 会连它一起收掉，表现为「按标点丢
-                            // 废码时，上一个符号跟着不见了」。用一次提交把它落实。
-                            //
-                            // ★ 提交的文本必须是**空串**：符号那一份由宿主端交代（TSF/macOS 的
-                            // absorb 前缀会让 `full = prefix + ""` 正好是它，薄宿主上它早已
-                            // `EditOp::Commit` 真上屏）。服务端把它填进 text 就是双写，与上面
-                            // 普通标点出口删掉的那行同源。记账仍要记——文本产出与统计是两件事。
-                            if let Some(held) = pre_held_text {
-                                self.record_commit(&held, 0, -1, CommitSource::Punctuation);
-                                return Self::commit_action(String::new(), true);
-                            }
                             return KeyAction::ClearComposition;
-                        }
-                        // HoldComposition + has_input：arm 已设 hold_pending_commit，
-                        // 顶屏上屏候选后开 HoldComposition 放入中文标点。
-                        let hold_info = {
-                            let arm = self.smart_symbol.lock().unwrap_or_else(|e| e.into_inner());
-                            if arm.armed && arm.hold_pending_commit {
-                                Some((
-                                    arm.str.clone(),
-                                    self.smart_symbol_timeout().as_millis() as u32,
-                                ))
-                            } else {
-                                None
-                            }
-                        };
-                        if let Some((hold_text, timeout_ms)) = hold_info {
-                            // 命令候选顶屏 → 执行命令（与按空格一致），不走智能符号 Hold。
-                            if let Some(act) = self.top_commit_command_guard(&mut state) {
-                                // 标点被命令吃掉、从未上屏，而本次按键刚在
-                                // `try_smart_symbol_replace` 里武装成 press1；命令又会清空缓冲
-                                // （`commit_command` 两条分支都清），于是下次按同键时 press2 的
-                                // 「缓冲非空」判据恰好放行、「非同键」判据因确是同键也放行 ⇒
-                                // 去删一个从未出现在屏幕上的符号。同 `!punct_commit` / `clear_no_input`。
-                                self.disarm_smart_symbol();
-                                return act;
-                            }
-                            // 空码丢弃（`punct_on_empty_behavior = "clear"`）：与下方普通标点
-                            // 出口同判据、同语义。本分支是智能符号专属的**独立**上屏通路，
-                            // 只改那边会得到「开了智能符号的宿主上开关不生效」的间歇性不一致。
-                            //
-                            // `clear_no_input` 已在上方单点短路，走不到这里；此处只区分
-                            // 「丢废码但出标点」与「照常上屏」。
-                            let discard_empty_code =
-                                self.punct_empty_code_policy(&state) == PunctEmptyCodePolicy::Clear;
-                            self.learn_on_main_punct_top_commit(&mut state);
-                            let committed = self.take_committed(&mut state);
-                            let mut commit_text = if discard_empty_code {
-                                String::new()
-                            } else {
-                                self.maybe_convert(&state, &committed)
-                            };
-                            if !state.candidates.is_empty() {
-                                let (start, _) = self.page_range(&state);
-                                let idx =
-                                    (start + state.selected_index).min(state.candidates.len() - 1);
-                                let cand = state.candidates[idx].clone();
-                                // 记账码：码表按输入码（码位独立），拼音/英文按候选码；
-                                // 通配组码记全码。见 `main_freq_code`。
-                                let freq_code = self.main_freq_code(&state.input_buffer, &cand);
-                                self.record_selection_cand(&freq_code, &cand);
-                                self.record_commit(
-                                    &cand.text,
-                                    state.input_buffer.len() as u32,
-                                    (idx - start) as i32,
-                                    CommitSource::Candidate,
-                                );
-                                commit_text.push_str(&self.cand_convert_text(&state, &cand));
-                            } else if !state.input_buffer.is_empty() && !discard_empty_code {
-                                // 无候选顶屏的是原码 → 同回车，用用户所打的大小写形态。
-                                let raw = preedit_cursor::cased_or_buffer(
-                                    &state.input_buffer,
-                                    &state.input_buffer_cased,
-                                );
-                                // 原码类上屏进上屏历史（转换前形态、不含标点，同回车）。
-                                self.push_commit_history(&format!("{committed}{raw}"));
-                                if committed.is_empty() && self.engine_mgr.active_is_english() {
-                                    self.learn_english_raw(
-                                        &self.engine_mgr.active_schema_id(),
-                                        raw,
-                                    );
-                                }
-                                // 输入统计同回车上屏原码：只记本次上屏的原码（已转换前缀选词时已记过），
-                                // 标点在下面另记一笔。此前只记了标点，原码在统计里消失。
-                                self.record_commit(
-                                    raw,
-                                    raw.len() as u32,
-                                    -1,
-                                    CommitSource::RawInput,
-                                );
-                                commit_text.push_str(raw);
-                            }
-                            state.input_buffer.clear();
-                            state.candidates.clear();
-                            {
-                                let mut arm =
-                                    self.smart_symbol.lock().unwrap_or_else(|e| e.into_inner());
-                                arm.held_text = Some(hold_text.clone());
-                                arm.hold_pending_commit = false;
-                            }
-                            self.record_commit(&hold_text, 0, -1, CommitSource::Punctuation);
-                            self.notify_ui_hide();
-                            return KeyAction::CommitAndHoldComposition {
-                                commit_text,
-                                hold_text,
-                                timeout_ms,
-                            };
                         }
                     }
                     // 命令候选顶屏 → 执行命令（与按空格一致），不上屏 display 标签、不追加标点。
                     if let Some(act) = self.top_commit_command_guard(&mut state) {
-                        // 同上一处 command guard：标点没上屏而武装已生效，不解除就会在下次按同键
-                        // 时删掉一个从未出现过的符号。这两处与 `!punct_commit` / `clear_no_input`
-                        // 是同一族——**凡「本次按键已武装、但标点最终没上屏」的提前返回都要解除**。
-                        self.disarm_smart_symbol();
                         return act;
                     }
                     // 标点/符号键：先上屏已转换前缀 + 首选候选（若有输入），再追加（转换后的）标点
@@ -2440,22 +2167,6 @@ impl MessageHandler for Coordinator {
                     } else {
                         self.maybe_convert(&state, &committed)
                     };
-                    // ⛔ 此前有 HoldComposition 残留时（非参与集合的标点令 arm 解除武装），
-                    // 这里**曾把旧符号拼进 out 首部**——已删除，那是双写。
-                    //
-                    // 组合态里那个符号的去向由**宿主端**交代，服务端出的文本里不该再有它一份：
-                    //   · TSF   `CTextService::CommitText` 在 `replacingHeld=FALSE` 时调
-                    //           `AbsorbHeldIntoPrefix()`，`full = prefix + text`；
-                    //   · macOS `BridgeResponseRouter` 同款 `absorbHeldIntoPrefix()`；
-                    //   · 薄宿主 `edit_ops::to_outcome` 把 `HoldComposition` 降级为直接
-                    //           `EditOp::Commit(text)`，符号早已真上屏。
-                    // 三条路都已经把它落实过一次，服务端再拼一次就是「。」+「。%」＝「。。%」
-                    // （出厂 `smart_chars` 不含 Shift+数字那族符号，故从 `%`/`=` 这类键先暴露）。
-                    //
-                    // 那行拼接的原注释写的是「CommitText 原子替换 TSF 组合态」——那是聚合方案
-                    // （a8b63e0）之前的语义。聚合把 hold 活跃时 CommitText 的默认语义从「替换
-                    // held」翻成了「追加 held」，本侧没跟着改，就成了双写。`pre_held_text` 仍需
-                    // 保留：下面 `clear_no_input` 那条要靠它判断「组合里还挂着东西」。
                     // ★ 联想态**不顶屏**（见 `commit_highlight_then_char` 里的同款守卫）。
                     //
                     // 顶屏的语义前提是「用户打了码、还没选词，按标点意味着『就选高亮那条吧』」。
@@ -2510,11 +2221,7 @@ impl MessageHandler for Coordinator {
                     // CapsLock + 无待提交内容：TSF 层应已透传此键，coordinator 不应收到；
                     // 防御性兜底——直接透传让系统产生原始 WM_KEYDOWN + WM_CHAR。
                     if state.caps_lock && !had_input {
-                        // 键交还宿主 ⇒ 这个标点**不是服务端出的**（宿主按 CapsLock 的英文语义
-                        // 自己打），而本次按键已在上面武装成 press1，武装串却是按中文列算的。
-                        // 同族第四处，判据同 `!punct_commit` / `clear_no_input` / 两处 command
-                        // guard：凡「本次按键已武装、标点最终不由服务端上屏」的提前返回都要解除。
-                        self.disarm_smart_symbol();
+                        // 键交还宿主（宿主按 CapsLock 的英文语义自己打），服务端不出字。
                         return KeyAction::PassThrough;
                     }
 
@@ -2524,8 +2231,6 @@ impl MessageHandler for Coordinator {
                     if state.caps_lock {
                         state.chinese_punct = false;
                     }
-                    // 引号交替态钉左：开了配对后一次按键即产出完整一对，交替开关不参与决策。
-                    let quote_paired = self.pin_quote_left_if_paired(&state, ch);
                     let piece = self.convert_punct(&state, ch, data.prev_char);
                     state.chinese_punct = saved_chinese_punct;
                     out.push_str(&piece);
@@ -2534,57 +2239,6 @@ impl MessageHandler for Coordinator {
                     self.record_commit(&piece, 0, -1, CommitSource::Punctuation);
                     if had_input {
                         self.notify_ui_hide();
-                    }
-                    // 标点配对（对齐 Go）：插入配对 + 智能跳过
-                    let pch = piece.chars().last().unwrap_or(' ');
-                    if let Some(pairs) = self.active_pairs(state.chinese_punct) {
-                        // 智能跳过：仅无候选前缀（out 即标点本身）时，输右括号→光标右移。
-                        // 引号一律不走此路（`quote_paired` 中文引号 / `*l != *r` 对称英文引号）：
-                        // 对称配对的按键不携带开/闭这一位，
-                        // 无从判断用户想跳出还是想嵌套新的一对，故取消右符号处理、跳出交给跳出键。
-                        // 非对称配对（括号类）则由 `right_symbol` 开关决定是否跳出。
-                        if out == piece
-                            && !quote_paired
-                            && self.rt().jump_out_on_right_symbol
-                            && pairs.iter().any(|(l, r)| *r == pch && *l != *r)
-                        {
-                            let mut tr =
-                                self.pair_tracker.lock().unwrap_or_else(|e| e.into_inner());
-                            // 同 handle_punct：多字符右段配不上单个标点按键，只能 Tab/Enter 跳出。
-                            if tr.peek().is_some_and(|e| e.right_is_char(pch)) {
-                                tr.pop();
-                                // 联想态：宿主里还挂着占位组合，而 `MoveCursorRight` 不碰组合。
-                                // 跳出语义保留（不改成再上屏一个右括号——那是「））」），占位组合
-                                // 按超时孤儿那套两路收口（见 `fire_assoc_hide`）：主动 push 结束
-                                // 组合；push 没落地时，下一次透传键由 `adopt_orphaned_placeholder`
-                                // 收掉——跳出合成的那个 VK_RIGHT 若被宿主会话转发回来，正是那一键。
-                                if was_assoc {
-                                    self.assoc_placeholder_orphaned
-                                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                                    self.push_end_composition();
-                                }
-                                return KeyAction::MoveCursorRight { count: 1 };
-                            }
-                            tr.clear();
-                        }
-                        // 插入配对：左括号 → 补右括号，光标置于其间
-                        if let Some((_, right)) = pairs.iter().find(|(l, _)| *l == pch).copied() {
-                            self.push_pair(pch, right);
-                            // 右引号已由本次配对补出，交替开关不该停在「右」——否则一旦中途
-                            // 关掉配对，遗留的右态会让下一个引号直接出闭引号。
-                            if quote_paired {
-                                self.punct
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .pin_quote_left(ch);
-                            }
-                            let cursor_offset = out.encode_utf16().count() as u32;
-                            let text = format!("{}{}", out, right);
-                            return KeyAction::InsertTextWithCursor {
-                                text,
-                                cursor_offset,
-                            };
-                        }
                     }
                     Self::commit_action(out, true)
                 } else if !state.input_buffer.is_empty() {
@@ -2655,13 +2309,13 @@ impl MessageHandler for Coordinator {
             &data.window_title,
         );
         // DLL 手里那份密码门控是按该 token **旧**窗口算的（没记录 = 握手时的空窗口），换窗口时
-        // 下面的 `apply_input_diag` 只降不升，见 `apply_input_diag_capped`。
+        // 下面的 `apply_input_scope` 只降不升，见 `apply_input_scope_capped`。
         let dll_pfe = self.password_force_english_for_token(data.client_token);
         let window_changed = self.note_focus_window(data.client_token, window.clone());
         self.update_active_compat(data.client_token);
         // 同一 token 换了窗口 ⇒ DLL 手里按 token 持有的那几项配置（占位字符、密码抑制、英文配对）
-        // 可能已不对，重推。放在下面 `apply_input_diag` 之前：服务端按新窗口算密码抑制时，DLL
-        // 那份尽量已在路上（不变量 core.suppress ⊆ C++.suppress，见 `apply_input_diag`）。
+        // 可能已不对，重推。放在下面 `apply_input_scope` 之前：服务端按新窗口算密码抑制时，DLL
+        // 那份尽量已在路上（不变量 core.suppress ⊆ C++.suppress，见 `apply_input_scope`）。
         if window_changed {
             self.repush_window_scoped_dll_config(data.client_token);
         }
@@ -2744,10 +2398,6 @@ impl MessageHandler for Coordinator {
         // （首次聚焦无配对 focus_lost 时，本处兜底）。
         self.last_commit_len
             .store(1, std::sync::atomic::Ordering::Relaxed);
-        // 配对状态归属校验（防御性）：配对栈是全局单栈、不分宿主，栈顶有可能是别的宿主压的。
-        // 真实失焦已在 handle_focus_lost 清过栈，能活到这里的只有 CtxLost 噪声，故本校验
-        // 正常不触发；留着是因为成本为零，且「全局单栈」这个事实没变。
-        self.clear_pair_tracker_if_foreign(data.client_token);
         // 记录活动客户端：鼠标点击的 commit 只推给它，避免广播多发
         if data.client_token != 0 {
             self.push_server.set_active_token(data.client_token);
@@ -2850,7 +2500,7 @@ impl MessageHandler for Coordinator {
         // docMgr（Excel 单元格 ↔ 公式栏）不重复弹，见 last_focus_tip_token。
         self.show_focus_status_if_enabled(data.client_token);
         let pid = (data.client_token >> 32) as u32;
-        self.apply_input_diag_capped(
+        self.apply_input_scope_capped(
             pid,
             data.disabled,
             data.reason,
@@ -2964,14 +2614,6 @@ impl MessageHandler for Coordinator {
         }
         if clears_input {
             // 失焦即清配对状态。**曾尝试按 reason 细分保留**（弹框夺走前台时光标其实还在
-            // 括号中间），2026-07-29 真机后放弃：配对状态存在 core 全局单栈与**每个宿主进程
-            // 各自一份**的 DLL 计数两处，而开启「为每个应用配置不同输入法」后切换应用会让
-            // 整个 IME 上下文重建；更根本的是焦点离开期间用户做了什么（点走光标、删掉括号）
-            // 输入法完全无法感知，保留状态本质上是猜测。实测「大部分情况不行」——
-            // 一个大部分情况下失效的功能比没有更糟，用户拍板放弃。
-            //
-            // 注意「同一焦点内」的陈旧风险与本项无关，仍由 state_ttl_secs 兜底。
-            self.clear_pair_tracker();
             // 撤销上屏计数复位：换窗/换文本框后光标前已非「刚上屏那段」，下次 undo 退化删 1。
             self.last_commit_len
                 .store(1, std::sync::atomic::Ordering::Relaxed);
@@ -3131,7 +2773,7 @@ impl MessageHandler for Coordinator {
         // 输入诊断态（密码抑制 / 禁用）是按焦点采的读数，切走本输入法后不会有人更新它；
         // 不清就会让新实例沿用上一实例留下的密码态（实测 Zen：无焦点态被判成密码，切回后图标恒显「英」）。
         // 清零后由 DLL 随后补发的 input_state_report 覆盖（同一 bridge 线程按序处理）。
-        self.apply_input_diag((client_token >> 32) as u32, false, 0, 0);
+        self.apply_input_scope((client_token >> 32) as u32, false, 0, 0);
         let status = self.build_status();
         self.push_activation_status(client_token);
         self.notify_toolbar_async(); // 激活态 → 工具栏显示（异步，避免 foreground_fullscreen_kind 阻塞 bridge 线程）
@@ -3320,8 +2962,6 @@ impl MessageHandler for Coordinator {
         self.record_app_mode(chinese_mode);
         self.record_last_state();
         self.punct.lock().unwrap_or_else(|e| e.into_inner()).reset();
-        self.disarm_smart_symbol();
-        // 配对栈刻意不清，理由同 handle_toggle_mode。
         self.push_state_update();
         self.show_status(); // 与 Shift 切换（handle_toggle_mode）统一：Ctrl+Space/外部切换也显示中/英提示
         self.notify_toolbar();
@@ -3351,7 +2991,6 @@ impl MessageHandler for Coordinator {
         // 临时拼音/快捷输入的缓冲与前缀不在 input_buffer 里，只清后者会让模式残留——
         // 真机现象：` 进临拼后点鼠标移光标，候选窗随 notify_ui_hide 消失但模式还在，
         // 再按 d 仍走 handle_temp_pinyin_key，组合区诡异地显示 `d。
-        // reset_exclusive_modes 内含 disarm_smart_symbol 与强制竖排布局恢复。
         // 此回调仅在 TSF 意外终止组合时触发（焦点切换、宿主强制 EndComposition 等）；
         // 我们自己的 CommitText 不触发（_pComposition 已提前置 nullptr，走"Already released"分支）。
         // 因此在此 disarm 是安全的：意外中断必然使 HoldComposition 失效，旧 held_text 不可再用。
@@ -3362,7 +3001,6 @@ impl MessageHandler for Coordinator {
         #[cfg(ext_presenter)]
         self.hide_menu_ui_unlocked();
         drop(state);
-        self.clear_pair_tracker(); // 组合意外终止：配对上下文失效，清栈防跳出键误判
         self.notify_ui_hide();
         // 同 handle_focus_lost：只收菜单不解除抑制会残留；此后无菜单命令派发，可立即解除。
         self.clear_tooltip_menu_flag();
@@ -3600,9 +3238,9 @@ impl MessageHandler for Coordinator {
             // 随之跟到新单元格。矩形每帧更新反而把前者的保护拆了——WPS 出现的正是这个回归。
             if b <= t || r - l <= INSERTION_POINT_MAX_WIDTH {
                 self.note_overlay_verdict(if b <= t || r <= l {
-                    aurora_ui_types::diag::RectVerdict::Degenerate
+                    aurora_ui_types::caret_overlay::RectVerdict::Degenerate
                 } else {
-                    aurora_ui_types::diag::RectVerdict::InsertionPoint
+                    aurora_ui_types::caret_overlay::RectVerdict::InsertionPoint
                 });
                 debug!(
                     "组合矩形不可信（是插入点不是范围）: rect=({l},{t},{r},{b}) w={} caret.x={}——回退既有锚点逻辑",
@@ -3615,7 +3253,7 @@ impl MessageHandler for Coordinator {
             // 大于 bottom，此时该矩形答的不是当前行的位置。
             if data.y > b {
                 self.note_overlay_verdict(
-                    aurora_ui_types::diag::RectVerdict::NotCoveringCaretLine,
+                    aurora_ui_types::caret_overlay::RectVerdict::NotCoveringCaretLine,
                 );
                 debug!(
                     "组合矩形不可信（不覆盖插入行）: rect=({l},{t},{r},{b}) caret=({},{})——疑该宿主只返回首行",
@@ -3623,7 +3261,7 @@ impl MessageHandler for Coordinator {
                 );
                 return None;
             }
-            self.note_overlay_verdict(aurora_ui_types::diag::RectVerdict::Trusted);
+            self.note_overlay_verdict(aurora_ui_types::caret_overlay::RectVerdict::Trusted);
             Some((l, b))
         });
         // 暂存本帧几何，锚点在 notify_ui_update 里补齐后一并推给浮窗。
@@ -4584,11 +4222,7 @@ impl MessageHandler for Coordinator {
     }
 
     fn handle_input_state_report(&self, pid: u32, disabled: bool, reason: u8, mask: u64) {
-        self.apply_input_diag(pid, disabled, reason, mask);
-    }
-
-    fn handle_diag_snapshot(&self, snap: &aurora_ipc::protocol::DiagSnapshotPayload) {
-        self.apply_diag_snapshot(snap);
+        self.apply_input_scope(pid, disabled, reason, mask);
     }
 
     // ── TSF UI-less（宿主自绘候选）三件套，实现见 handle_uielement.rs ──
@@ -4925,12 +4559,6 @@ impl Coordinator {
         self.record_app_mode(chinese);
         self.record_last_state();
         self.punct.lock().unwrap_or_else(|e| e.into_inner()).reset();
-        self.disarm_smart_symbol();
-        // 配对栈**刻意不清**：中英切换既不移动光标也不消除已插入的右符号，「光标紧贴右符号」
-        // 这个前提仍然成立，清掉只会让用户切走再切回后 Tab/Enter 跳不出去。真正让前提失效的
-        // 是失焦与组合被终止，那两处仍清（见 clear_pair_tracker 的其余调用点）。
-        // C++ 侧同源：模式切换路径调 ResetComposingState(TRUE) 保留 _pairPendingDepth，
-        // 否则中文模式下 Enter 会被会话门控挡在 DLL 里，根本到不了这里。
         self.push_state_update();
         self.show_status();
         self.notify_toolbar();

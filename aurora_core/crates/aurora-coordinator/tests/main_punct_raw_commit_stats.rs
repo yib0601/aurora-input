@@ -7,13 +7,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::stats::CommitSource;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_COMMA: u32 = 0xBC;
 
@@ -113,31 +113,6 @@ fn commit_policy_records_raw_then_punct() {
                 (CommitSource::Punctuation, punct.to_string()),
             ],
             "{schema}：原码同回车口径记一笔，标点另记"
-        );
-    }
-}
-
-/// 智能符号 hold 出口（`CommitAndHoldComposition`）同口径。
-#[test]
-fn commit_policy_hold_exit_records_raw_then_punct() {
-    skip_without_data!();
-    for (schema, code, punct) in cases() {
-        if schema == "english" {
-            continue; // 英文方案出英文标点，不参与中文智能符号集合
-        }
-        let coord = open(schema, "commit", |c| {
-            c.input.symbol.smart_mode = true;
-            c.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-        });
-        let (text, events) = comma_events(&coord, code);
-        assert_eq!(text, format!("{code}{punct}"), "{schema}：前提");
-        assert_eq!(
-            events,
-            vec![
-                (CommitSource::RawInput, code.to_string()),
-                (CommitSource::Punctuation, punct.to_string()),
-            ],
-            "{schema}：hold 出口同口径"
         );
     }
 }

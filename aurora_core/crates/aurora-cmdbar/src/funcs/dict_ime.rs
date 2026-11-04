@@ -22,7 +22,6 @@ pub fn specs() -> Vec<FuncSpec> {
         "ime.pair"        : Ime     (2, 2) effect => fn_ime_pair,   "上屏配对文本并激活配对状态, 光标落两段之间, 可用跳出键 (Tab/Enter) 越过右段", "ime.pair(\"《\", \"》\")"
             named(fn_ime_pair_named, "jump" = "跳出时光标右移的格数; 省略=按右段字符数");
         "setting.open"    : Setting (1, 2) effect => fn_setting_open,"打开设置窗口的指定页面 (schema/input/keys/ui/dict/advanced/about/import; 空串=默认页); args 可选, 原样直通给设置程序", "setting.open(\"dict\", \"--schema=wubi86 --type=shadow\")";
-        "setting.web"     : Setting (1, 2) effect => fn_setting_web, "打开设置页 (page 同 setting.open; --web 已废弃, 降级为原生设置页)", "setting.web(\"\")";
     }
 }
 
@@ -192,14 +191,6 @@ fn fn_setting_open(ctx: &dyn EvalContext, args: &[String]) -> Result<String> {
     Ok(String::new())
 }
 
-fn fn_setting_web(ctx: &dyn EvalContext, args: &[String]) -> Result<String> {
-    let ime = ime(ctx, "setting.web")?;
-    let extra = args.get(1).map(String::as_str).unwrap_or("");
-    ime.open_setting_web(&args[0], extra)
-        .map_err(|e| runtime_err("setting.web", e))?;
-    Ok(String::new())
-}
-
 /// `ime.theme(name)` 经 ConfigService 设置主题名（与 config.set 等价）。
 fn fn_ime_theme(ctx: &dyn EvalContext, args: &[String]) -> Result<String> {
     let s = services("ime.theme", ctx)?;
@@ -237,9 +228,6 @@ mod tests {
             Ok(())
         }
         fn open_setting(&self, _: &str, _: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn open_setting_web(&self, _: &str, _: &str) -> anyhow::Result<()> {
             Ok(())
         }
         fn set_schema(&self, _: &str) -> anyhow::Result<()> {

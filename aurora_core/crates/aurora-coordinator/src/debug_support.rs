@@ -143,9 +143,6 @@ impl Coordinator {
         match self.state.lock().unwrap_or_else(|e| e.into_inner()).active {
             Some(ModeKind::TempPinyin) => Some("temp_pinyin"),
             Some(ModeKind::TempEnglish) => Some("temp_english"),
-            Some(ModeKind::Url) => Some("url"),
-            Some(ModeKind::Email) => Some("email"),
-            Some(ModeKind::Unicode) => Some("unicode"),
             Some(ModeKind::Special(_)) => Some("special"),
             Some(ModeKind::RareChar) => Some("rare_char"),
             Some(ModeKind::Reverse) => Some("reverse"),
@@ -348,12 +345,6 @@ impl Coordinator {
             .iter()
             .map(|c| (c.text.clone(), c.code.clone(), c.comment.clone()))
             .collect()
-    }
-
-    /// 加载 emoji 扩展表（测试/诊断用）：headless 构造器不跑 [`Self::load_data_on_start`]，
-    /// 要 emoji 候选的集成测试经此补上。表从 `Config::data_dir()` 读，不认构造时注入的目录。
-    pub fn debug_sync_emoji_dict(&self) {
-        self.sync_emoji_dict();
     }
 
     /// 诊断：桌面构造器 `new` 在 `build` 之后的非 UI 装载与启动预热线程的主体，**同步**跑完。

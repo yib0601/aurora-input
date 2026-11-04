@@ -12,7 +12,7 @@
 //! # ★ 为什么是泛型适配器，而不是给每个枚举手写映射表
 //!
 //! 本仓 6 个面向用户的字符串枚举里，只有 `TextOrientation` 有 `as_str()`；其余 5 个
-//! （`LayoutIntent` / `PunctIntent` / `TopCommitMode` / `FreeInputMode` / `SmartMethod`）
+//! （`LayoutIntent` / `PunctIntent` / `TopCommitMode` / `FreeInputMode`）
 //! 的值域**只存在于 `#[serde(rename_all)]` 生成的实现里**。手写一张 `"normal" => Normal`
 //! 的映射表就等于给值域造第二个真相源——改了枚举忘了改表，症状是「配置写对了却不生效」，
 //! 比现在这个 bug 更难查。
@@ -112,7 +112,7 @@ where
 /// 用户改全局默认时这些应用不跟着变，且他从没配过、无从撤销。
 /// 见 `AppCompatRule::first_show_mode` 的字段文档。
 ///
-/// ⚠️ 与 [`tolerant`] 不同，本函数**连类型错也吞**（`smart_method = true` 回落 `None`
+/// ⚠️ 与 [`tolerant`] 不同，本函数**连类型错也吞**（`initial_mode = 3` 回落 `None`
 /// 并 WARN）：它只用在 `compat.toml` 上，那里没有段级降级可交，理由同 [`tolerant_opt_bool`]。
 pub fn tolerant_opt<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where

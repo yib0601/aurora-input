@@ -3326,7 +3326,7 @@ pub struct QuickInputConfig {
     pub decimal_places: i32,
     /// 快捷输入历史（成员 `quick_input.history`）的条数上限，默认 1000；`0` = 不限。
     ///
-    /// 超出时按「次数少、用得旧」裁掉，与网址历史 `input.url.history_max` 同一套裁剪。
+    /// 超出时按「次数少、用得旧」裁掉（与补全历史 `prune_completions` 同一套裁剪）。
     /// 不做按时间过期（维护者 2026-10-05 定）：按「用得旧」淘汰本身就会让过气项目的词
     /// 慢慢被挤出去。设置页：输入 → 快捷输入 → 历史条数上限。
     #[serde(default = "default_quick_history_max")]
@@ -4310,12 +4310,6 @@ pub struct InputConfig {
     /// 标点相关（随中英、智能标点、自定义映射）。
     #[serde(default)]
     pub punct: PunctConfig,
-    /// 智能符号模式。
-    #[serde(default)]
-    pub symbol: SymbolConfig,
-    /// 标点配对（输入左括号自动补右括号 + 输右括号智能跳过）。
-    #[serde(default)]
-    pub auto_pair: AutoPairConfig,
     /// 临时英文（Shift+字母 / 触发键进入临英缓冲）。
     #[serde(default)]
     pub temp_english: TempEnglishConfig,
@@ -4330,19 +4324,6 @@ pub struct InputConfig {
     /// 反查模式（用本方案编码 + 通配查字，只查主码表）。
     #[serde(default)]
     pub reverse: ReverseConfig,
-    /// Emoji 候选扩展（按候选文本查表追加，与编码域无关故所有方案通用）。
-    #[serde(default)]
-    pub emoji: EmojiConfig,
-    /// 网址输入模式。
-    #[serde(default)]
-    pub url: UrlConfig,
-    /// 邮箱输入模式（缓冲非空时按 `@` 触发，补全常用后缀）。与 [`Self::url`] 共用
-    /// 补全候选源与夺取回退骨架，但触发判据是**后缀**而非前缀。
-    #[serde(default)]
-    pub email: EmailConfig,
-    /// Unicode 码点输入模式（`u+4e00` → 一）。与 [`Self::url`] 同为前缀夺取式。
-    #[serde(default)]
-    pub unicode: UnicodeConfig,
     /// 快捷加词面板（目前只有候选布局一项；进入方式是 keys.add_word 热键）。
     #[serde(default)]
     pub add_word: AddWordConfig,
@@ -4443,17 +4424,11 @@ impl Default for InputConfig {
             numpad_half_width: false,
             default: InputDefaultConfig::default(),
             punct: PunctConfig::default(),
-            symbol: SymbolConfig::default(),
-            auto_pair: AutoPairConfig::default(),
             temp_english: TempEnglishConfig::default(),
             capslock: CapslockConfig::default(),
             temp_pinyin: TempPinyinConfig::default(),
             rare_char: RareCharConfig::default(),
             reverse: ReverseConfig::default(),
-            emoji: EmojiConfig::default(),
-            url: UrlConfig::default(),
-            email: EmailConfig::default(),
-            unicode: UnicodeConfig::default(),
             add_word: AddWordConfig::default(),
             s2t: S2TConfig::default(),
             t2s: T2SConfig::default(),
@@ -4502,23 +4477,6 @@ impl Default for PunctConfig {
     }
 }
 
-/// 智能符号替换方案。两者是「体感」与「兼容性」的取舍，故都保留：
-/// - `DeleteReplace`（**默认**）：press1 直接提交中文符号，press2 删掉重打成英文。
-///   所见即所得、无预览态中间状态，实际体感更好；代价是依赖对宿主做删改
-///   （早期的 Office 500ms 重复、SendInput 自重入、prevChar 读不到致完全不触发
-///   三处已修）。
-/// - `HoldComposition`：press1 开启 TSF 组合态展示中文符号，press2 替换组合提交英文；
-///   超时（smart_timeout_ms）后自动提交中文。全程不做删改，**兼容性更好**，
-///   适合对删改敏感、DeleteReplace 下表现异常的宿主。
-// Copy + Eq：本身是无字段枚举，且要按值放进 per-app 的 `ActiveCompat`（那是个 Copy 结构）。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SmartMethod {
-    #[default]
-    DeleteReplace,
-    HoldComposition,
-}
-
 /// 顶码/顶屏的宿主上屏策略。影响顶码上屏时「已确认文字」如何落到宿主：
 /// - PreConfirm：留在 TSF 组合态（_pendingCommitPrefix 聚合），延迟到最终 CommitText 才真提交。
 ///   diff 式宿主（终端/Chromium）不双写，但部分宿主整段画下划线、WPS 智能标点顶屏会清空。
@@ -4532,141 +4490,6 @@ pub enum TopCommitMode {
     PreConfirm,
     #[default]
     DirectCommit,
-}
-
-/// 智能符号配置（[input.symbol]）：同一标点在时限内连按两次，删前一字符替换为另一形态。
-///
-/// 三个总开关**互相独立**，各管一种上下文，都默认关：
-///   - `smart_mode`：中文标点状态 —— press1 中文 → press2 英文（数字后智能标点方向相反）。
-///   - `english_punct_mode`：中文输入 + 英文标点状态 —— press1 英文 → press2 中文。
-///   - `english_mode`：英文输入模式 —— 同上，但发生在整个输入法切英文时。
-///
-/// 后两者拆成两个开关而非一个，是因为它们是**不同场景**：前者是「用英文标点写中文、偶尔要个
-/// 中文句号」，后者是「正在打英文」。很多人只想要前者，英文态保持纯净。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SymbolConfig {
-    /// 智能符号模式总开关（默认 false）。
-    #[serde(default)]
-    pub smart_mode: bool,
-    /// 判定时限（毫秒，默认 500）。三种上下文共用。
-    #[serde(default = "default_smart_symbol_timeout_ms")]
-    pub smart_timeout_ms: i32,
-    /// 参与智能符号转换的中文标点集合（子串包含匹配，含成对/多字符标点）。
-    #[serde(default = "default_smart_symbol_chars")]
-    pub smart_chars: String,
-    /// 替换方案：`delete_replace`（删改，默认）或 `hold_composition`（保持组合态，兼容性更好）。
-    /// 三种上下文共用。
-    #[serde(default, deserialize_with = "crate::tolerant_de::tolerant")]
-    pub smart_method: SmartMethod,
-    /// 英文标点状态（中文输入模式 + 工具栏标点切英文）下的智能符号（默认 false）。
-    #[serde(default)]
-    pub english_punct_mode: bool,
-    /// 英文输入模式（整个输入法切英文）下的智能符号（默认 false）。
-    ///
-    /// 开启会让 core 把 `english_chars` 里的键推给 DLL 吃下转发——英文半角下这些键本来是直接
-    /// 透传给宿主的，不吃就永远到不了引擎。故此开关的影响面比另外两个大，默认关。
-    #[serde(default)]
-    pub english_mode: bool,
-    /// 参与英文智能符号的**源字符**集合（`english_punct_mode` 与 `english_mode` 共用）。
-    ///
-    /// 与 `smart_chars` 存中文产物不同，这里存的是**键本身的 ASCII 标点**（`.` 而非 `。`）：
-    /// 英文侧的产物通常就等于源字符，而推给 DLL 的吃键集必须是源字符——按源字符判定，
-    /// 两边同源、无需从产物反推。
-    ///
-    /// **不建议放配对符**（`([{"'` 等）：英文模式下这些键被吃走后，配对改由 core 处理，而
-    /// DLL 的跳出栈是空的，Tab 跳出会失效（见 `handle_english_custom_punct` 的已知限制）。
-    #[serde(default = "default_english_smart_chars")]
-    pub english_chars: String,
-}
-
-impl Default for SymbolConfig {
-    fn default() -> Self {
-        Self {
-            smart_mode: false,
-            smart_timeout_ms: default_smart_symbol_timeout_ms(),
-            smart_chars: default_smart_symbol_chars(),
-            smart_method: SmartMethod::default(),
-            english_punct_mode: false,
-            english_mode: false,
-            english_chars: default_english_smart_chars(),
-        }
-    }
-}
-
-/// 标点配对配置（[input.auto_pair]，对齐 Go AutoPairConfig）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AutoPairConfig {
-    /// 中文标点配对开关
-    #[serde(default)]
-    pub chinese: bool,
-    /// 英文标点配对开关
-    #[serde(default)]
-    pub english: bool,
-    /// 中文配对表（每项 2 字符："（）"）
-    #[serde(default = "default_chinese_pairs")]
-    pub chinese_pairs: Vec<String>,
-    /// 英文配对表（每项 2 字符："()"）
-    #[serde(default = "default_english_pairs")]
-    pub english_pairs: Vec<String>,
-    /// 跳出配对的按键：命中即光标越过右符号、弹出配对栈。可多选。
-    ///
-    /// 取值为键名（`"tab"`/`"enter"`/`"space"`/`"escape"`），外加一个特殊值
-    /// **`"right_symbol"` = 右符号键本身**（打 `）` 跳出已插入的 `（）`）。右符号跳出曾是
-    /// 无条件行为，现收敛为本列表的一项——**列表里没有它就是没有，不做隐式补偿**，故旧配置
-    /// 若只写了 `["tab"]`，右符号跳出即关闭（用户可在设置界面重新勾选）。
-    ///
-    /// 对称配对（引号）**永不参与右符号跳出**，与本项无关：按键不携带「开/闭」这一位，
-    /// 无从判断跳出还是嵌套，故一律开新的一对（见 `pin_quote_left_if_paired`）。
-    #[serde(default = "default_jump_out_keys")]
-    pub jump_out_keys: Vec<String>,
-    /// 配对状态时效，单位秒（内部项，设置界面不暴露）。`0` = 不过期。
-    ///
-    /// 管的是**同一个输入框内**的状态陈旧：用户中途用鼠标点过别处、滚过页、把括号退格删掉
-    /// ——这些输入法都感知不到，没有时效的话陈旧状态会一直存活到吃掉用户的 Tab。
-    /// 距**最后一次按键**超过本值即视为陈旧，跳出键不再生效；从最后一次按键算起而非从插入
-    /// 配对算起，因此持续输入会不断刷新，在括号里打多久都不会误过期。
-    ///
-    /// 跨焦点的陈旧不归它管——失焦一律清空配对状态（见 `handle_focus_lost`）。
-    #[serde(default = "default_pair_state_ttl_secs")]
-    pub state_ttl_secs: u32,
-}
-
-impl Default for AutoPairConfig {
-    fn default() -> Self {
-        Self {
-            chinese: false,
-            english: false,
-            chinese_pairs: default_chinese_pairs(),
-            english_pairs: default_english_pairs(),
-            jump_out_keys: default_jump_out_keys(),
-            state_ttl_secs: default_pair_state_ttl_secs(),
-        }
-    }
-}
-
-/// 默认 120 秒。够覆盖「在括号里停下来想一会儿」，又不会让状态在用户去干别的事之后
-/// 仍然存活到吃掉 Tab。
-fn default_pair_state_ttl_secs() -> u32 {
-    120
-}
-
-/// 默认只启用右符号跳出（保持「打 `）` 跳出」这一长期行为），Tab/Enter 需用户显式勾选。
-fn default_jump_out_keys() -> Vec<String> {
-    vec![JUMP_OUT_RIGHT_SYMBOL.to_string()]
-}
-
-/// `jump_out_keys` 里代表「右符号键本身」的特殊值（非键名，不参与 VK 解析）。
-pub const JUMP_OUT_RIGHT_SYMBOL: &str = "right_symbol";
-
-fn default_chinese_pairs() -> Vec<String> {
-    ["（）", "【】", "｛｝", "《》", "〈〉", "「」", "『』"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
-}
-
-fn default_english_pairs() -> Vec<String> {
-    ["()", "[]", "{}"].iter().map(|s| s.to_string()).collect()
 }
 
 /// 临英符号白名单出厂值：数字 + 标识符/代码里最常用的符号。
@@ -4718,7 +4541,7 @@ pub struct TempEnglishConfig {
     /// ★ 刻意**不**复用码元集 `input_chars` 的 `a-z` 范围语法：`-` 在符号集里是高频
     /// 字符（`e-mail`），那套语法下 `+-_` 会被解析成 `0x2B..=0x5F` 一整片（含全部大写
     /// 字母与 `:;<=>?@[\]^`），用户在设置页填一个减号就静默放行几十个字符。与同类的
-    /// `symbol.english_chars` / `symbol.smart_chars` 一致，字面即全部真相。
+    /// `input_chars` 的范围语法一致，字面即全部真相。
     #[serde(default = "default_temp_english_symbol_chars")]
     pub symbol_chars: String,
     /// 空格作为输入字符入缓冲（可打出带空格的英文短句）。上屏职责随之转给回车，
@@ -4875,206 +4698,6 @@ fn default_capslock_mode_after_cancel() -> String {
     "chinese".to_string()
 }
 
-/// 生僻字模式配置（[input.rare_char]）。
-///
-/// Emoji 候选扩展：打出词组后，按**候选文本**查表把对应 emoji 追加到候选里。
-///
-/// 与编码域无关（不查码、只查文本）⇒ 所有方案自动支持，不需要任何方案配置。设计与
-/// 六条硬约束见 `docs/design/emoji-suggestion.md`。
-///
-/// # 为什么每个非零默认值都有一个 `default_emoji_*` 函数
-///
-/// serde 的 `#[serde(default = "f")]` 管的是「配置文件里**缺这个键**」，而
-/// [`Default::default()`] 管的是「代码里造一个空配置」。两者若各写各的字面量，改默认值时
-/// 必然漏掉一边——于是「配置文件里没写」与「代码里 default()」给出不同结果，且只在
-/// 其中一条路径上表现出来。这里让两者共用同一组函数，从结构上消掉这种分叉。
-///
-/// ⚠️ `scope` / `show_as` 是**字符串枚举**（同 `input.filter_mode` 的既有风格），类型层
-/// 不做约束。值域见各字段注释；消费端遇到不认识的值必须**告警后回落默认**，不得静默
-/// ——设置页 options 与 core 值域脱节是本仓踩过的坑，静默降级会让它彻底无人发现。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EmojiConfig {
-    /// 总开关。**出厂关**（同 aux_code / short_code_yield 等新增可选功能）。
-    ///
-    /// 关闭时连数据文件都不打开——`load_or_build` 根本不会被调用，故未启用的用户为本功能
-    /// 付出的常驻内存与启动开销均为零。
-    #[serde(default)]
-    pub enabled: bool,
-    /// 触发范围：`off` 不扩展 / `exact` 仅对**精确整词命中**的候选扩展 / `all` 所有候选。
-    ///
-    /// 出厂 `exact`：`all` 会让前缀补全、子短语之类的候选也带出 emoji，而那些候选本身就是
-    /// 「猜」出来的，再挂一个 emoji 只会放大噪音。
-    #[serde(default = "default_emoji_scope")]
-    pub scope: String,
-    /// 呈现形态：`after` 紧随宿主候选 / `tail` 追加到列表末尾 / `comment` 只在注释段灰字
-    /// 显示（走 `${emoji}` 模板变量，不进候选列表）。
-    ///
-    /// 三档互斥，是「emoji 以什么形态出现」的**单一决策点**——`${emoji}` 变量因此也只在
-    /// `comment` 档求值，否则配了 `after` 又在模板里写 `${emoji}` 会两处都出。
-    #[serde(default = "default_emoji_show_as")]
-    pub show_as: String,
-    /// 一个词最多产出几个 emoji。
-    ///
-    /// 实测上游 `emoji_word.txt` 平均 1.09 个/键、最多 4 个 —— 本闸门对它**几乎不触发**；
-    /// 真正要拦的是分类表（`emoji_category.txt` 平均 9 个、最多 90 个「动物」）。
-    #[serde(default = "default_emoji_max_per_word")]
-    pub max_per_word: usize,
-    /// 对候选列表的前几个候选做扩展。
-    ///
-    /// 出厂 1（只扩首选）：这是把「候选序号漂移」控制住的主要手段——rime 那边的干扰感，
-    /// 根源正是它对每个候选都扩。
-    #[serde(default = "default_emoji_max_hosts")]
-    pub max_hosts: usize,
-    /// 宿主候选至少要有几个字才触发。出厂 2：单字词（「一」→ 1️⃣）噪音最大且最没用。
-    #[serde(default = "default_emoji_min_word_chars")]
-    pub min_word_chars: usize,
-    /// 是否加载分类表（`emoji_category.txt`：「动物」→ 90 个 emoji 那种）。
-    ///
-    /// 出厂关：干扰几乎全部集中在这 166 条上。但它也是「我想找个动物表情」时唯一好用的
-    /// 入口，故做成独立开关而不是不引入。
-    #[serde(default)]
-    pub categories: bool,
-    /// 候选里有追加出来的 emoji / 附加模块符号时，**不**做全码唯一自动上屏（码表与短语两侧）。
-    ///
-    /// 出厂关：追加候选不是这个码检索出的词条，默认不计入唯一性判据（见
-    /// `Candidate::is_emoji_suggestion`）。开了附加模块（如偏旁部首）的用户要的往往正是那条
-    /// 追加候选（`rrup` 提手旁 → 扌），自动上屏会让它来不及出现。
-    #[serde(default)]
-    pub block_auto_commit: bool,
-    /// 附加模块开关（`[input.emoji.modules]`，键 = [`EMOJI_MODULES`] 的 id）。缺的键按该模块
-    /// 的出厂值（[`EmojiConfig::module_enabled`]）；不认识的键忽略。
-    ///
-    /// 用表而不是 `[[tables]]` 数组：配置分层对**表按键合并**、对**数组整体覆盖**。写成数组的话
-    /// 用户在设置里翻一个开关，整份列表就落进用户配置固化下来，之后新增的出厂模块对他不可见。
-    #[serde(default = "default_emoji_modules")]
-    pub modules: BTreeMap<String, bool>,
-}
-
-/// emoji 追加的附加模块（rime-frost 的 OpenCC 表，`docs/design/opencc-conversions.md` T3）。
-///
-/// rime-emoji 主表（`emoji/emoji_word.txt`，随 [`EmojiConfig::enabled`]）与分类表
-/// （[`EmojiConfig::categories`]）不在此列：它们早于本机制，开关保持原样。
-pub struct EmojiModule {
-    /// 配置键 `input.emoji.modules.<id>`，也是缓存文件名。
-    pub id: &'static str,
-    /// 设置页显示名。
-    pub label: &'static str,
-    /// 设置页说明（举一个例子，让人知道打什么词会出什么）。
-    pub description: &'static str,
-    /// 相对数据根（`data/`）的源文件，OpenCC 文本词典。
-    pub file: &'static str,
-    /// 只取这些分组（`others.txt` 按分组拼成一份）；空 = 整表。
-    pub sections: &'static [&'static str],
-    /// 出厂是否开启。
-    pub default_on: bool,
-}
-
-/// 附加模块注册表。**顺序即查询合并顺序**（同一个词多个模块都有时，靠前的排前面）。
-///
-/// ⚠ 与 `data/config.toml` 的 `[input.emoji.modules]`、`config_schema` 的登记、设置端清单
-/// 的开关同步。`others.txt` 里「著名表演艺术家」一组（成人影星名）构建期就剔除、不在此列；
-/// 「emoji集合」一组的键带 `V` 前缀（`V动物`），正常打字打不出宿主词，也不收。
-pub const EMOJI_MODULES: &[EmojiModule] = &[
-    EmojiModule {
-        id: "frost_emoji",
-        label: "白霜 Emoji",
-        description: "补充更多词语的 emoji 与符号，如「右箭头」→ ➡️、「勾选」→ ☑️",
-        file: "emoji/frost_emoji.txt",
-        sections: &[],
-        default_on: true,
-    },
-    EmojiModule {
-        id: "frost_radicals",
-        label: "偏旁部首",
-        description: "如「提手旁」→ 扌",
-        file: "emoji/frost_others.txt",
-        sections: &["偏旁部首"],
-        default_on: false,
-    },
-    EmojiModule {
-        id: "frost_greek",
-        label: "希腊字母",
-        description: "如「阿尔法」→ alpha α Α",
-        file: "emoji/frost_others.txt",
-        sections: &["希腊字母"],
-        default_on: false,
-    },
-    EmojiModule {
-        id: "frost_misc",
-        label: "单位与杂项",
-        description: "如「平方米」→ m²",
-        file: "emoji/frost_others.txt",
-        sections: &["其他"],
-        default_on: false,
-    },
-    EmojiModule {
-        id: "frost_keys",
-        label: "键盘符号",
-        description: "如「command」→ ⌘",
-        file: "emoji/frost_others.txt",
-        sections: &["键盘符号"],
-        default_on: false,
-    },
-    EmojiModule {
-        id: "frost_diezi",
-        label: "叠字",
-        description: "如「两个火」→ 炎 炏",
-        file: "emoji/frost_others.txt",
-        sections: &["二叠字", "三叠字", "四叠字"],
-        default_on: false,
-    },
-    EmojiModule {
-        id: "frost_chem",
-        label: "化学式",
-        description: "如「高锰酸钾」→ KMnO₄",
-        file: "emoji/frost_others.txt",
-        sections: &["化学式"],
-        default_on: false,
-    },
-    EmojiModule {
-        id: "frost_month",
-        label: "月份星期英文",
-        description: "如「一月」→ Jan. January",
-        file: "emoji/frost_others.txt",
-        sections: &["月份星期"],
-        default_on: false,
-    },
-    EmojiModule {
-        id: "frost_sitcom",
-        label: "美剧人名",
-        description: "如「谢耳朵」→ Sheldon",
-        file: "emoji/frost_others.txt",
-        sections: &["生活大爆炸&老友记"],
-        default_on: false,
-    },
-];
-
-/// 用户放置 emoji / OpenCC 表的目录（相对数据根，各资源层合并扫描）。
-pub const EMOJI_USER_DIR: &str = "emoji";
-
-/// 数据根 `emoji/` 下属于内置表源文件的文件名，不当作用户模块（它们由主表 / 分类表 /
-/// [`EMOJI_MODULES`] 读取；用户层放同名文件是**覆盖**那张内置表，不是新增模块）。
-const EMOJI_BUILTIN_FILES: &[&str] = &[
-    "emoji_word.txt",
-    "emoji_category.txt",
-    "frost_emoji.txt",
-    "frost_others.txt",
-];
-
-/// 一个可开关的 emoji 附加模块：内置（[`EMOJI_MODULES`]）或用户放进 `emoji/` 的文件。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EmojiModuleEntry {
-    pub id: String,
-    pub label: String,
-    pub description: String,
-    /// 相对数据根的源文件。
-    pub file: String,
-    pub sections: Vec<String>,
-    /// 用户放置的文件（`false` = 内置模块）。
-    pub user: bool,
-    pub default_on: bool,
-}
-
 // 跨 crate 的序列化 / 反序列化一律走下面这几个入口，别在下游直接 `value.try_into::<Config>()`
 // 或 `serde_json::to_value(cfg)`：release 不共享泛型，每个调用的 crate 都会把整棵配置类型树的
 // serde 代码单态化一份（一份 ~0.2 MiB）。`inline(never)` 防 LTO 把它们又内联回各调用方。
@@ -5110,97 +4733,6 @@ impl Config {
             };
         }
         p
-    }
-
-    /// 全部 emoji 附加模块：内置在前（注册表序），其后是 `emoji/` 目录里用户放置的
-    /// OpenCC 表（`*.txt`，按文件名序；id = 文件名去掉 `.txt`，出厂关）。
-    ///
-    /// 用户文件与内置模块 id 撞名时跳过并告警：同一个开关管两张表，用户分不清。
-    pub fn emoji_modules(data_dir: Option<&Path>) -> Vec<EmojiModuleEntry> {
-        let mut out: Vec<EmojiModuleEntry> = EMOJI_MODULES
-            .iter()
-            .map(|m| EmojiModuleEntry {
-                id: m.id.to_string(),
-                label: m.label.to_string(),
-                description: m.description.to_string(),
-                file: m.file.to_string(),
-                sections: m.sections.iter().map(|s| s.to_string()).collect(),
-                user: false,
-                default_on: m.default_on,
-            })
-            .collect();
-        for (rel, _abs) in Self::list_data_dir(data_dir, EMOJI_USER_DIR, ".txt") {
-            let name = rel.rsplit('/').next().unwrap_or(&rel);
-            if EMOJI_BUILTIN_FILES.contains(&name) {
-                continue;
-            }
-            let id = name.trim_end_matches(".txt").to_string();
-            if out.iter().any(|m| m.id == id) {
-                warn!("emoji 模块文件 {rel} 与内置模块同名，已跳过（请改个文件名）");
-                continue;
-            }
-            out.push(EmojiModuleEntry {
-                label: id.clone(),
-                description: String::new(),
-                id,
-                file: rel,
-                sections: Vec::new(),
-                user: true,
-                default_on: false,
-            });
-        }
-        out
-    }
-}
-
-fn default_emoji_modules() -> BTreeMap<String, bool> {
-    EMOJI_MODULES
-        .iter()
-        .map(|m| (m.id.to_string(), m.default_on))
-        .collect()
-}
-
-impl EmojiConfig {
-    /// 模块是否开启：配置里写了按配置，没写按出厂值；不认识的 id（含用户放置的文件）为 false。
-    pub fn module_enabled(&self, id: &str) -> bool {
-        self.modules.get(id).copied().unwrap_or_else(|| {
-            EMOJI_MODULES
-                .iter()
-                .find(|m| m.id == id)
-                .is_some_and(|m| m.default_on)
-        })
-    }
-}
-
-fn default_emoji_scope() -> String {
-    "exact".to_string()
-}
-fn default_emoji_show_as() -> String {
-    "after".to_string()
-}
-fn default_emoji_max_per_word() -> usize {
-    3
-}
-fn default_emoji_max_hosts() -> usize {
-    1
-}
-fn default_emoji_min_word_chars() -> usize {
-    2
-}
-
-impl Default for EmojiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            scope: default_emoji_scope(),
-            show_as: default_emoji_show_as(),
-            max_per_word: default_emoji_max_per_word(),
-            max_hosts: default_emoji_max_hosts(),
-            min_word_chars: default_emoji_min_word_chars(),
-            categories: false,
-            block_auto_commit: false,
-            modules: default_emoji_modules(),
-        }
     }
 }
 
@@ -5312,215 +4844,6 @@ impl Default for TempPinyinConfig {
     }
 }
 
-/// 网址模式配置（[input.url]，原 input.url_input）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UrlConfig {
-    /// 总开关（默认关闭）
-    #[serde(default)]
-    pub enabled: bool,
-    /// 触发前缀（恰好匹配；如 "www." / "http" / "https" / "ftp."）
-    #[serde(default = "default_url_prefixes")]
-    pub prefixes: Vec<String>,
-    /// 是否把上屏过的网址记进历史，供下次补全（默认**关闭**）。
-    ///
-    /// # 为什么它独立于 [`Self::enabled`]
-    ///
-    /// 网址模式本身只是「让我自由打字不被转成中文」，不产生任何持久数据；开了历史才
-    /// 开始**把用户打过的网址原文落盘**。这两件事的隐私量级不同，合成一个开关等于让
-    /// 想要前者的人被动接受后者。邮箱后缀学习则没有这道分界——它只记后缀（`qq.com`
-    /// 这类域名），不记用户名，故跟随 [`EmailConfig::enabled`] 即可。
-    #[serde(default)]
-    pub history_enabled: bool,
-    /// 历史条数上限，超出时按「次数少、用得旧」的顺序裁掉（0 = 不限）。
-    ///
-    /// 历史是**无界增长**的——用户打过的每个网址都是一条。没有这道闸，库会一直长，
-    /// 而补全候选窗从来只显示前几条，长出来的部分纯属负担。
-    ///
-    /// ⚠️ **`0` 的代价**：补全每按一键查一次库，而那次查询是「命中前缀的行全取出来
-    /// 排序再分页」。设上限时 n 有顶，代价可控；设 0 之后 n 随使用无限增长，逐键
-    /// 开销跟着涨。给高级用户留这个口子，但它不是免费的。
-    #[serde(default = "default_url_history_max")]
-    pub history_max: u32,
-    /// 进入网址模式期间的候选布局（默认跟随全局）。
-    #[serde(default, deserialize_with = "crate::tolerant_de::tolerant")]
-    pub candidate_layout: LayoutIntent,
-    /// 网址模式期间的注释模板覆盖（竖排），见 [`CommentTemplateOverride`]。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub comment_template_vertical: CommentTemplateOverride,
-    /// 网址模式期间的注释模板覆盖（横排），见 [`CommentTemplateOverride`]。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub comment_template_horizontal: CommentTemplateOverride,
-}
-
-fn default_url_history_max() -> u32 {
-    200
-}
-
-fn default_url_prefixes() -> Vec<String> {
-    vec![
-        "www.".to_string(),
-        "http".to_string(),
-        "https".to_string(),
-        "ftp.".to_string(),
-        "bbs.".to_string(),
-    ]
-}
-
-impl Default for UrlConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            prefixes: default_url_prefixes(),
-            history_enabled: false,
-            history_max: default_url_history_max(),
-            candidate_layout: LayoutIntent::default(),
-            comment_template_vertical: None,
-            comment_template_horizontal: None,
-        }
-    }
-}
-
-/// 邮箱输入配置（[input.email]）。
-///
-/// # 它不是前缀夺取式，是**后缀触发**
-///
-/// [`UrlConfig`] 那类的判据是「缓冲 + 本键 == 某个前缀」（全等）；邮箱的判据是
-/// 「本键是 `@` 且缓冲非空」，缓冲整体作为用户名被带进模式。`abc@` 里缓冲是 `abc`，
-/// 与任何前缀都不相等——照抄前缀夺取会撞墙（`docs/design/prefix-hijack-modes.md` §5.2）。
-///
-/// 两者共用 `try_prefix_hijack` 那道闸门与 `Rewind` 回退骨架，只是闸门里多一条判据。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmailConfig {
-    /// 总开关（默认关闭，与 [`UrlConfig`] 同口径）。
-    #[serde(default)]
-    pub enabled: bool,
-    /// 预置后缀表，存 `@` **之后**的部分（`qq.com` 而不是 `@qq.com`）。
-    ///
-    /// 不带 `@` 是为了与学习数据（`aurora_store::completion::CompletionKind::EmailSuffix`）
-    /// 同域——两者要按同一把尺子去重与比对，一边带一边不带就永远对不上，表现是用户
-    /// 常用的那个后缀在候选里出现两次。
-    ///
-    /// 用户自己打出的后缀不必在表内：模式内可自由输入，上屏后会被学进补全数据，
-    /// 下次自动出现在候选里（且因为带频次，很快就会排到预置项前面）。
-    #[serde(default = "default_email_suffixes")]
-    pub suffixes: Vec<String>,
-    /// 进入邮箱模式期间的候选布局（默认跟随全局）。
-    #[serde(default, deserialize_with = "crate::tolerant_de::tolerant")]
-    pub candidate_layout: LayoutIntent,
-    /// 邮箱模式期间的注释模板覆盖（竖排），见 [`CommentTemplateOverride`]。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub comment_template_vertical: CommentTemplateOverride,
-    /// 邮箱模式期间的注释模板覆盖（横排），见 [`CommentTemplateOverride`]。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub comment_template_horizontal: CommentTemplateOverride,
-}
-
-/// 出厂预置的邮箱后缀。
-///
-/// 国内常用在前、国际常用在后——补全候选没有频次数据时就按这个顺序排，而本输入法的
-/// 用户绝大多数在国内。学过几次之后频次接管排序，这份顺序只影响冷启动那几次。
-///
-/// ⚠️ 这是**数组字段**（不是 map），所以用户在设置里删干净就是真的空表，不会被逐键
-/// 深合并把出厂值合回来——见 AGENTS.md「出厂预置的绑定/开关，落点必须是用户能清空的
-/// 载体」。空表时邮箱模式仍可用，只是没有预置候选，全靠学习数据。
-fn default_email_suffixes() -> Vec<String> {
-    [
-        // 国内
-        "qq.com",
-        "163.com",
-        "126.com",
-        "foxmail.com",
-        "sina.com",
-        "sina.cn",
-        "sohu.com",
-        "139.com",
-        "189.cn",
-        "aliyun.com",
-        "yeah.net",
-        "21cn.com",
-        "tom.com",
-        // 国际
-        "gmail.com",
-        "outlook.com",
-        "hotmail.com",
-        "yahoo.com",
-        "icloud.com",
-        "live.com",
-        "me.com",
-        "proton.me",
-        "protonmail.com",
-        "aol.com",
-        "gmx.com",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-impl Default for EmailConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            suffixes: default_email_suffixes(),
-            candidate_layout: LayoutIntent::default(),
-            comment_template_vertical: None,
-            comment_template_horizontal: None,
-        }
-    }
-}
-
-/// Unicode 码点输入配置（[input.unicode]）。
-///
-/// 与 [`UrlConfig`] 同为**前缀夺取式**模式（正常输入累积到某前缀即夺取），共用
-/// `Coordinator::try_prefix_hijack` 那道闸门与 `Rewind` 回退骨架。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnicodeConfig {
-    /// 总开关（默认关闭，与 [`UrlConfig`] 同口径）。
-    #[serde(default)]
-    pub enabled: bool,
-    /// 触发前缀（恰好匹配）。
-    ///
-    /// ⚠️ **按字面匹配，不做大小写归一** —— 这是与 [`UrlConfig::prefixes`] 的刻意差异。
-    /// `U+` 是 Unicode 的标准书写形式，大小写在这里携带真实信息；若照 url 那样把探针
-    /// `to_ascii_lowercase()` 之后再比，配置里就再也表达不出「只认大写」这个意图。
-    ///
-    /// 出厂两条各对应一个入口，两者共用本表（配置是单一真相源）：
-    /// - `u+` —— 小写 u 进码表 `input_buffer`，`+` 在 `try_prefix_hijack` 触发夺取；
-    /// - `U+` —— Shift+U 先被 `try_activate_mode` 截进临时英文（缓冲为 `U`），
-    ///   由 `handle_temp.rs` 的转交分支交给本模式。
-    ///
-    /// ⛔ 不要配单字符前缀：小写 `"u"` 会夺取一切 u 起手，废掉码表的 `u` 码元与拼音的
-    /// `u`；大写 `"U"` 则在空缓冲时被临英先截走，根本够不着夺取点（临英若被用户关掉，
-    /// 大写字母落普通输入、`input_buffer` 里是小写 `u`，仍由 `u+` 那条命中）。
-    #[serde(default = "default_unicode_prefixes")]
-    pub prefixes: Vec<String>,
-    /// 进入 Unicode 模式期间的候选布局（默认跟随全局）。
-    #[serde(default, deserialize_with = "crate::tolerant_de::tolerant")]
-    pub candidate_layout: LayoutIntent,
-    /// Unicode 模式期间的注释模板覆盖（竖排），见 [`CommentTemplateOverride`]。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub comment_template_vertical: CommentTemplateOverride,
-    /// Unicode 模式期间的注释模板覆盖（横排），见 [`CommentTemplateOverride`]。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub comment_template_horizontal: CommentTemplateOverride,
-}
-
-fn default_unicode_prefixes() -> Vec<String> {
-    vec!["u+".to_string(), "U+".to_string()]
-}
-
-impl Default for UnicodeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            prefixes: default_unicode_prefixes(),
-            candidate_layout: LayoutIntent::default(),
-            comment_template_vertical: None,
-            comment_template_horizontal: None,
-        }
-    }
-}
-
 /// 快捷加词配置（[input.add_word]）。加词面板是覆盖在任意输入态之上的临时面板，
 /// 故其布局意图优先于底层模式（见 `Coordinator::layout_intent`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -5577,8 +4900,6 @@ pub struct T2SConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CmdbarConfig {
-    #[serde(default)]
-    pub enabled: bool,
     /// 副作用命令候选（含 ActionEffect）在候选框渲染时的前缀标注（对齐 Go,默认 "⚡"）。
     #[serde(default = "default_candidate_prefix")]
     pub candidate_prefix: String,
@@ -5591,7 +4912,6 @@ fn default_candidate_prefix() -> String {
 impl Default for CmdbarConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
             candidate_prefix: default_candidate_prefix(),
         }
     }
@@ -5629,7 +4949,7 @@ pub struct KeysConfig {
     pub toggle_toolbar: String,
     #[serde(default = "default_open_settings")]
     pub open_settings: String,
-    /// 打开词库管理页快捷键。**出厂不绑**——与 `toggle_t2s` 同理：这是个小众直达入口，
+    /// 打开词库管理页快捷键。**出厂不绑**——这是个小众直达入口，
     /// 常规路径（菜单「词库管理…」/设置页内导航）已经够用，任何默认组合都在抢用户键位。
     /// 落点见 `Coordinator::open_dictionary`：直接跳设置端 `dict` 页并带上当前方案 id。
     #[serde(default = "default_open_dictionary")]
@@ -5640,15 +4960,9 @@ pub struct KeysConfig {
     pub open_add_word_dialog: String,
     #[serde(default = "default_toggle_s2t")]
     pub toggle_s2t: String,
-    /// 繁入简出开关键。**出厂不绑**——功能小众，而任何默认值都在抢用户键位；
-    /// `ctrl+shift+j` 旁边好记的组合（`k`）已经是软键盘的。设置页可配。
-    ///
-    /// ★ 「不绑」写 `"none"` 而**不是空串**。core 侧两者等价（`parse_hotkey` 都返回
-    /// `None`），但设置页的 hotkey 控件只认 `"none"` 这一种：它的 writer 在禁用态恒写
-    /// `"none"`，出厂值若是空串，用户**什么都没动**打开一次设置页就会被判「有未保存的
-    /// 更改」，每次关窗都被拦一次（`untouched_settings_produce_no_diff` 钉的正是这条）。
-    #[serde(default = "default_toggle_t2s")]
-    pub toggle_t2s: String,
+    /// 繁入简出的开关键**已移除**（`keys.toggle_t2s`）：它只是 `toggle_s2t` 的方向镜像，
+    /// 出厂恒为 `"none"`、没有任何用户绑得上。反向仍可用设置页的「启用繁入简出」开关、
+    /// 主菜单命令或 `keys.key_actions` 里绑 `toggle_t2s` 动词进入。
     #[serde(default = "default_activate_ime")]
     pub activate_ime: String,
     #[serde(default = "default_pin_candidate")]
@@ -5817,10 +5131,6 @@ fn default_open_add_word_dialog() -> String {
 }
 fn default_toggle_s2t() -> String {
     "ctrl+shift+j".to_string()
-}
-/// 见 [`KeysConfig::toggle_t2s`]：「不绑」的规范表示是 `"none"`，不是空串。
-fn default_toggle_t2s() -> String {
-    "none".to_string()
 }
 fn default_take_screenshot() -> String {
     "ctrl+shift+f11".to_string()
@@ -6017,7 +5327,6 @@ impl Default for KeysConfig {
             add_word: default_add_word(),
             open_add_word_dialog: default_open_add_word_dialog(),
             toggle_s2t: default_toggle_s2t(),
-            toggle_t2s: default_toggle_t2s(),
             activate_ime: default_activate_ime(),
             pin_candidate: default_pin_candidate(),
             delete_candidate: default_delete_candidate(),
@@ -6092,23 +5401,6 @@ impl Default for OverflowConfig {
 fn default_per_page() -> usize {
     7
 }
-fn default_grid_rows() -> usize {
-    5
-}
-fn default_grid_cell_max_chars() -> usize {
-    6
-}
-fn default_grid_index_fill() -> String {
-    "rows".to_string()
-}
-fn default_grid_categories() -> Vec<String> {
-    ["all", "single", "phrase", "rare"]
-        .into_iter()
-        .map(String::from)
-        .collect()
-}
-/// 展开态可见行数的合法范围（[`UiCandidateConfig::grid_rows`]）。
-pub const GRID_ROWS_RANGE: std::ops::RangeInclusive<usize> = 2..=10;
 fn default_first_show_settle_ratio() -> f32 {
     0.8
 }
@@ -6989,36 +6281,6 @@ pub struct UiCandidateConfig {
     /// 要连这些一并罩住用 [`Self::min_window_height_vertical`]（两项可同时配，取较大者）。
     #[serde(default)]
     pub min_rows: usize,
-    /// 候选展开（卷轴，出厂关）：候选多于一页时按翻页键，候选窗原地展开成多行网格，
-    /// 一行就是原来的一页。设计见 `docs/design/candidate-grid-expand.md`。
-    ///
-    /// 只对横排生效：竖排 / 旋转态的自然形态是「多列并排」，不在本项范围内。
-    #[serde(default)]
-    pub grid_expand: bool,
-    /// 展开态的可见行数（出厂 5）。生效值夹在 [`GRID_ROWS_RANGE`] 内。
-    #[serde(default = "default_grid_rows")]
-    pub grid_rows: usize,
-    /// 展开态每格最多显示几个字（出厂 6，0 = 只受 [`Self::max_chars`] 约束）。
-    ///
-    /// 网格按列对齐，一个长词会把整列撑宽，故比单行的 `max_chars` 收得更紧。被截掉的
-    /// 部分由悬停提示的 `${full_text}` 段补齐。
-    #[serde(default = "default_grid_cell_max_chars")]
-    pub grid_cell_max_chars: usize,
-    /// 展开态下序号（与数字键）从高亮行起怎么往下顺延（1–0 共 10 个）：
-    /// - `"rows"`（出厂）：只补整行——每页 5 个时高亮行 1–5、下一行 6–0；每页 7 个时只编高亮行。
-    /// - `"cells"`：逐格编到 0 为止，可以停在半行。
-    /// - `"off"`：只编高亮行。
-    #[serde(default = "default_grid_index_fill")]
-    pub grid_index_fill: String,
-    /// 展开态下 PageUp/PageDown 是否翻一整屏（出厂开）；其余翻页键（如 `-` `=`）恒逐行移动。
-    /// 关掉后 PageUp/PageDown 也逐行。
-    #[serde(default = "default_true")]
-    pub grid_pageupdown_screen: bool,
-    /// 展开态的分类标签：`all` 全部 / `single` 单字 / `phrase` 词组 / `rare` 生僻 / `symbol` 符号。
-    /// 只决定**有哪些**，顺序固定按上面这个次序（「全部」恒在首位）。少于两个时不显示标签栏。
-    /// 未知名字忽略。
-    #[serde(default = "default_grid_categories")]
-    pub grid_categories: Vec<String>,
     /// 候选注释总开关（默认开）。关掉后不渲染注释段（含上方注释条与 `${code_hint}`），
     /// 注释模板也不再计入按需加载的需求（反查索引、用户层编码索引、拆字表随之可卸）。
     ///
@@ -7098,12 +6360,6 @@ pub struct UiCandidateConfig {
     /// 横排下翻页栏本就落在行尾，此项无影响；蒙文旋转态维持底部独立行（并入会让箭头跟着转 90°）。
     #[serde(default)]
     pub pager_in_preedit: bool,
-    /// 双击候选窗空白处（编码栏 / 内边距）把候选窗当前画面截图复制到剪贴板（默认关，论坛 t109）。
-    ///
-    /// 只认**空白处**：候选项在按下那一刻就选词上屏、候选窗随之消失，双击落不到第二下；
-    /// 翻页键同理会换页。空白处单击本来只起拖动，双击不会误伤选词。
-    #[serde(default)]
-    pub double_click_screenshot: bool,
     /// 候选窗定位方式："follow_caret"（默认，跟随光标）/ "fixed"（固定屏幕坐标）。
     /// fixed 下窗口不再随光标移动，也不再上翻（flip/swap_when_above 随之失去意义）。
     #[serde(default = "default_candidate_position_mode")]
@@ -7240,12 +6496,6 @@ impl Default for UiCandidateConfig {
             min_window_height_horizontal: 0,
             min_window_height_vertical: 0,
             min_rows: 0,
-            grid_expand: false,
-            grid_rows: default_grid_rows(),
-            grid_cell_max_chars: default_grid_cell_max_chars(),
-            grid_index_fill: default_grid_index_fill(),
-            grid_pageupdown_screen: true,
-            grid_categories: default_grid_categories(),
             comment_enabled: true,
             comment_template_vertical: default_comment_template(),
             comment_template_horizontal: default_comment_template(),
@@ -7257,7 +6507,6 @@ impl Default for UiCandidateConfig {
             flip_when_above: false,
             swap_preedit_when_above: false,
             pager_in_preedit: false,
-            double_click_screenshot: false,
             position_mode: default_candidate_position_mode(),
             offset_x: 0,
             offset_y: 0,
@@ -7332,23 +6581,6 @@ impl UiCandidateConfig {
     pub fn truncate_display(&self, text: &str) -> String {
         truncate_graphemes(text, self.max_chars)
     }
-
-    /// 展开态网格单格的显示截断：取 `max_chars` 与 `grid_cell_max_chars` 中更紧的那个
-    /// （0 表示该项不限）。
-    pub fn truncate_grid_cell(&self, text: &str) -> String {
-        let limit = match (self.max_chars, self.grid_cell_max_chars) {
-            (0, g) => g,
-            (m, 0) => m,
-            (m, g) => m.min(g),
-        };
-        truncate_graphemes(text, limit)
-    }
-
-    /// 展开态的生效可见行数（夹进 [`GRID_ROWS_RANGE`]）。
-    pub fn grid_rows(&self) -> usize {
-        self.grid_rows
-            .clamp(*GRID_ROWS_RANGE.start(), *GRID_ROWS_RANGE.end())
-    }
 }
 
 /// 按字素簇截断到 `limit` 个（0 = 不截），超出时追加 [`TRUNCATION_MARK`]。
@@ -7369,10 +6601,6 @@ pub const TRUNCATION_MARK: char = '…';
 pub struct UiFontConfig {
     #[serde(default)]
     pub family: String,
-    #[serde(default)]
-    pub path: String,
-    #[serde(default)]
-    pub render_mode: String,
     /// 主字体的**回退链**：`family` 里没有这个字时，按本表顺序找下一个。
     ///
     /// ★ 刻意保持 `family: String` 不变、把链尾单独放一个数组，而不是把 `family` 改成数组：
@@ -8180,25 +7408,11 @@ fn default_open_settings() -> String {
     "ctrl+shift+]".to_string()
 }
 
-/// 出厂不绑——写 `"none"` 而不是空串，理由同 `default_toggle_t2s`：设置页的 hotkey
+/// 出厂不绑——写 `"none"` 而不是空串：设置页的 hotkey
 /// 控件在禁用态恒写 `"none"`，出厂值若是空串，用户什么都没动打开一次设置页就会被判
 /// 「有未保存的更改」。
 fn default_open_dictionary() -> String {
     "none".to_string()
-}
-
-fn default_smart_symbol_timeout_ms() -> i32 {
-    500
-}
-
-fn default_smart_symbol_chars() -> String {
-    "。，？！：；、～￥·……——".to_string()
-}
-
-/// 参与英文智能符号的源字符默认集：`smart_chars` 那批中文标点对应的 ASCII 键，去掉配对符
-/// （配对符在英文模式下被吃走会让 DLL 的 Tab 跳出失效，见 `SymbolConfig::english_chars`）。
-fn default_english_smart_chars() -> String {
-    ".,?!:;".to_string()
 }
 
 fn default_filter_mode() -> String {
@@ -10920,36 +10134,6 @@ mod tests {
         );
     }
 
-    /// ★ `EmojiConfig` 的两条默认值来源必须给出**同一个结果**。
-    ///
-    /// serde 的 `#[serde(default = "f")]` 管「配置文件里缺这个键」，`Default::default()`
-    /// 管「代码里造一个空配置」。两者若各写各的字面量，改默认值时必然漏掉一边，于是
-    /// 「用户没写这一段」与「代码里 default()」行为不同——而这种分叉只在其中一条路径上
-    /// 表现出来，是最难对上账的那种。本测试是那条不变量的守门人。
-    ///
-    /// ⚠️ 判据取**整个结构相等**而非逐字段列举：逐字段写的话，将来新增字段忘了加断言，
-    /// 测试照样绿。
-    #[test]
-    fn emoji_config_default_matches_empty_toml() {
-        let from_empty: EmojiConfig = toml::from_str("").expect("空表应能反序列化");
-        assert_eq!(
-            from_empty,
-            EmojiConfig::default(),
-            "缺键时的 serde 默认值与 Default::default() 分叉了"
-        );
-    }
-
-    /// 出厂必须是「什么都不发生」：功能关、分类表不加载、不学词频。
-    ///
-    /// 与上一条互补——上一条只保证两条路径一致，一致地错了它也发现不了。
-    #[test]
-    fn emoji_config_ships_disabled() {
-        let d = EmojiConfig::default();
-        assert!(!d.enabled, "出厂必须关闭");
-        assert!(!d.categories, "分类表干扰最大，出厂不加载");
-        assert_eq!(d.max_hosts, 1, "只扩首选是控制候选序号漂移的主要手段");
-    }
-
     /// ★ 语法模型的默认值必须是「什么都不发生」：`weight = 0` **且** `model` 为空。
     ///
     /// 守的是一个真实发生过的隐患：`model` 的默认值一度是 `zh-hans-bgw.gram`，
@@ -12656,10 +11840,9 @@ active = "x"
 
     #[test]
     fn test_merge_input_subtable_fields() {
-        // 旧合并漏掉的 input 子表字段（如 auto_pair）现应合并
-        let cfg = merged_with("[input.auto_pair]\nchinese = false\nenglish = false\n");
-        assert!(!cfg.input.auto_pair.chinese);
-        assert!(!cfg.input.auto_pair.english);
+        // 旧合并漏掉的 input 子表字段现应合并
+        let cfg = merged_with("[input.default]\nchinese_mode = false\n");
+        assert!(!cfg.input.default.chinese_mode);
     }
 
     #[test]
@@ -13572,7 +12755,7 @@ scripts = { latin = 42 }
             "整表写 keys 时 keys.key_actions 降级必须拦下"
         );
         // 对照：同段的**兄弟**子路径不受牵连，否则一个坏键会把整段的写盘全堵死
-        assert!(!deg.taints("input.symbol"));
+        assert!(!deg.taints("input.emoji"));
         assert!(!deg.taints("keys.session_actions"));
         assert!(!deg.taints("ui"));
         // 前缀相同但不是路径祖先：`keys.key_actions_materialized` 不该被
@@ -14153,31 +13336,6 @@ scripts = { latin = 42 }
     }
 
     #[test]
-    fn grid_expand_defaults_off_and_cell_truncation_takes_the_tighter_limit() {
-        let cfg = Config::default();
-        assert!(
-            !cfg.ui.candidate.grid_expand,
-            "出厂关：只有设置里打开的用户才会展开"
-        );
-        assert_eq!(cfg.ui.candidate.grid_rows(), 5);
-        assert!(cfg.ui.candidate.grid_pageupdown_screen);
-        let mut c = cfg.ui.candidate.clone();
-        c.max_chars = 16;
-        c.grid_cell_max_chars = 3;
-        assert_eq!(c.truncate_grid_cell("一二三四"), "一二三…");
-        assert_eq!(c.truncate_grid_cell("一二三"), "一二三");
-        c.grid_cell_max_chars = 0;
-        c.max_chars = 2;
-        assert_eq!(
-            c.truncate_grid_cell("一二三"),
-            "一二…",
-            "0 = 只受 max_chars 约束"
-        );
-        c.grid_rows = 99;
-        assert_eq!(c.grid_rows(), 10, "可见行数夹进合法范围");
-    }
-
-    #[test]
     fn comment_above_defaults_off_and_round_trips() {
         let cfg = Config::default();
         assert!(!cfg.ui.candidate.comment_above);
@@ -14396,20 +13554,7 @@ scripts = { latin = 42 }
             c.input.punct.smart_after_digit,
             "punct.smart_after_digit 默认开"
         );
-        assert_eq!(c.input.symbol.smart_timeout_ms, 500);
         assert!(c.input.temp_english.enabled && c.input.temp_english.show_candidates);
-        assert_eq!(c.input.url.prefixes.len(), 5);
-        // 网址历史是独立于 url.enabled 的第二道开关，且出厂关闭：网址模式本身不落盘，
-        // 开了历史才开始记用户打过的网址原文。
-        assert!(!c.input.url.history_enabled, "网址历史出厂关闭");
-        assert_eq!(c.input.url.history_max, 200);
-        assert!(!c.input.email.enabled, "邮箱模式出厂关闭");
-        assert!(!c.input.unicode.enabled, "Unicode 码点输入出厂关闭");
-        assert_eq!(
-            c.input.unicode.prefixes,
-            vec!["u+".to_string(), "U+".to_string()],
-            "两条前缀各对应一个入口（码表缓冲 / 临英转交），少一条就有一个入口进不去"
-        );
         // input.phrase / stats
         assert_eq!(c.input.phrase.min_prefix, 2);
         assert!(c.stats.enabled && c.stats.track_english);
@@ -14428,30 +13573,6 @@ scripts = { latin = 42 }
         let cfg: Config = preset.try_into().unwrap();
         // config.toml 作为 L2 预置覆盖了空的 code default
         assert_eq!(cfg.schema.active, "wubi86");
-    }
-
-    #[test]
-    fn test_smart_method_default() {
-        let cfg = SymbolConfig::default();
-        assert_eq!(cfg.smart_method, SmartMethod::DeleteReplace);
-    }
-
-    #[test]
-    fn test_smart_method_serde_round_trip() {
-        let toml = r#"
-smart_mode = true
-smart_method = "delete_replace"
-"#;
-        let cfg: SymbolConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.smart_method, SmartMethod::DeleteReplace);
-        assert!(cfg.smart_mode);
-    }
-
-    #[test]
-    fn test_smart_method_default_when_absent() {
-        let toml = r#"smart_mode = true"#;
-        let cfg: SymbolConfig = toml::from_str(toml).unwrap();
-        assert_eq!(cfg.smart_method, SmartMethod::DeleteReplace);
     }
 
     /// 混输简拼**出厂关**。它决定超码长顶码上屏可不可用（简拼候选「消费整串」会让归属恒判给
@@ -14806,14 +13927,6 @@ smart_method = "delete_replace"
         assert_eq!(cfg.top_commit_mode, TopCommitMode::DirectCommit);
     }
 
-    /// 双击候选窗截图：出厂关，空表反序列化与 Default 一致。
-    #[test]
-    fn candidate_double_click_screenshot_defaults_off() {
-        let c: UiCandidateConfig = toml::from_str("").unwrap();
-        assert!(!c.double_click_screenshot);
-        assert!(!UiCandidateConfig::default().double_click_screenshot);
-    }
-
     /// 工具栏自动隐藏：默认关、超时 5 秒；空表反序列化与 Default 一致。
     #[test]
     fn toolbar_auto_hide_defaults() {
@@ -14847,70 +13960,6 @@ smart_method = "delete_replace"
         assert_eq!(BoundAction::parse("rare_charx"), BoundAction::None);
         assert_eq!(BoundAction::parse("rare"), BoundAction::None);
         assert_eq!(BoundAction::parse(""), BoundAction::None);
-    }
-}
-
-#[cfg(test)]
-mod email_config_tests {
-    use super::*;
-
-    /// 预置后缀与学习数据必须**同域**：两边都存 `@` 之后的部分。
-    ///
-    /// 一边带 `@` 一边不带，去重就永远对不上，表现是用户最常用的那个后缀在候选里
-    /// 出现两次（一条来自预置表、一条来自学习数据），且怎么用都消不掉。
-    #[test]
-    fn preset_suffixes_carry_no_at_sign() {
-        let c = EmailConfig::default();
-        assert!(!c.suffixes.is_empty(), "出厂应带预置后缀");
-        for s in &c.suffixes {
-            assert!(!s.contains('@'), "预置后缀存 @ 之后的部分，{s:?} 不该带 @");
-            assert!(s.contains('.'), "后缀应是域名形态，{s:?} 不像");
-        }
-    }
-
-    /// 预置表不得有重复项——重复项会在候选里变成两条一模一样的邮箱。
-    #[test]
-    fn preset_suffixes_are_unique() {
-        let c = EmailConfig::default();
-        let mut seen = std::collections::HashSet::new();
-        for s in &c.suffixes {
-            assert!(seen.insert(s.as_str()), "预置后缀重复：{s}");
-        }
-    }
-
-    /// 国内常用在前：冷启动（还没有任何学习数据）时排序完全由这份顺序决定。
-    #[test]
-    fn domestic_suffixes_come_first() {
-        let c = EmailConfig::default();
-        let pos = |needle: &str| c.suffixes.iter().position(|s| s == needle);
-        let qq = pos("qq.com").expect("应含 qq.com");
-        let gmail = pos("gmail.com").expect("应含 gmail.com");
-        assert!(qq < gmail, "国内常用后缀应排在国际之前");
-    }
-
-    /// 用户清空后缀表 = 真的空表。
-    ///
-    /// 这是 AGENTS.md「出厂预置的落点必须是用户能清空的载体」那条的守护：`suffixes`
-    /// 是**数组字段**，上层整体覆盖，不像 map 字段那样被逐键深合并把出厂值合回来。
-    /// 空表时邮箱模式仍可用，只是没有预置候选。
-    #[test]
-    fn empty_suffix_list_survives_deserialization() {
-        let c: EmailConfig = toml::from_str("enabled = true\nsuffixes = []\n").unwrap();
-        assert!(c.enabled);
-        assert!(c.suffixes.is_empty(), "用户清空后不该被出厂值合回来");
-    }
-
-    /// 缺字段时逐个落到默认值（老配置文件升级上来不会炸）。
-    #[test]
-    fn missing_fields_fall_back_to_defaults() {
-        let c: EmailConfig = toml::from_str("").unwrap();
-        assert!(!c.enabled);
-        assert_eq!(c.suffixes, default_email_suffixes());
-
-        let u: UrlConfig = toml::from_str("enabled = true\n").unwrap();
-        assert!(u.enabled);
-        assert!(!u.history_enabled, "老配置没有 history_enabled ⇒ 关闭");
-        assert_eq!(u.history_max, 200);
     }
 }
 

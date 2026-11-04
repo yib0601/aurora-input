@@ -338,7 +338,7 @@ pub(crate) fn dedup_by_text(cands: &mut Vec<Candidate>) {
 }
 
 /// 这条候选是不是**英文头部候选**（所打原文 / 它的大小写变形）：无来源、无码、非短语 /
-/// 命令 / emoji，且文本是缓冲 `buf` 的某种大小写形态。
+/// 命令，且文本是缓冲 `buf` 的某种大小写形态。
 ///
 /// 头部候选由 [`english_head_candidates`] 生成，候选身上没有「我是头部」的标记，只能按
 /// 这组特征认；[`crate::coordinator::Coordinator::english_head_dict_word`] 与英文方案主路的
@@ -348,7 +348,6 @@ pub(crate) fn is_english_head_candidate(cand: &Candidate, buf: &str) -> bool {
         && cand.code.is_empty()
         && !cand.is_phrase
         && !cand.is_command
-        && !cand.is_emoji_suggestion
         && !buf.is_empty()
         && cand.freq_text().eq_ignore_ascii_case(buf)
 }
@@ -379,7 +378,7 @@ impl crate::coordinator::Coordinator {
     /// 维度**，不是词条来源——记下来就是读端永远查不中的孤儿键
     /// （`temp_english_literal_text_is_not_recorded` 钉着）。想让自造词参与排序，该走加词。
     ///
-    /// `cand` 不是头部候选（有来源 / 有码 / 短语 / emoji，或文本不是缓冲的大小写形态）、
+    /// `cand` 不是头部候选（有来源 / 有码 / 短语，或文本不是缓冲的大小写形态）、
     /// 或 `engine_schema` 不记词频（调频关且未开 `record_always`）时直接 `None`，不查词库。
     pub(crate) fn english_head_dict_word(
         &self,

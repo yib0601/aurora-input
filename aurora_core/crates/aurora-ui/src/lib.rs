@@ -22,7 +22,6 @@ pub mod candidate_window;
 /// macOS 全局热键（Carbon RegisterEventHotKey）。对位 Windows 的 RegisterHotKey 分支。
 pub mod caret_overlay;
 pub mod debounce;
-pub mod double_click;
 pub mod dpi;
 /// Linux 外部宿主的悬浮工具栏 / 软键盘窗口壳：`LayeredWindow` 的位图走 overlay 帧，指针由 addon 报来。
 #[cfg(all(target_os = "linux", ext_presenter))]
@@ -30,7 +29,6 @@ pub mod ext_panel;
 #[cfg(target_os = "macos")]
 pub mod global_hotkey_macos;
 pub mod image_cache;
-pub mod input_diag_hud;
 /// macOS 输入源切换（TISSelectInputSource）。对位 Windows 的 DirectSwitchHotkeys 注册表。
 #[cfg(target_os = "macos")]
 pub mod input_source_macos;

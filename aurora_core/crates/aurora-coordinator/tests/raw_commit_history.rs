@@ -14,19 +14,18 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_BACKTICK: u32 = 0xC0;
 const VK_SEMICOLON: u32 = 0xBA;
 const VK_RETURN: u32 = 0x0D;
 const VK_NEXT: u32 = 0x22;
 const VK_COMMA: u32 = 0xBC;
-const VK_PERIOD: u32 = 0xBE;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -274,25 +273,6 @@ fn main_punct_raw_commit_enters_history() {
     match coord.handle_key_event(&key(VK_COMMA, 0)) {
         KeyAction::InsertText { text, .. } => assert_eq!(text, "你vvvvvvvv，", "前提"),
         other => panic!("前提：应上屏，实际: {other:?}"),
-    }
-    assert_repeat(&coord, "你vvvvvvvv");
-}
-
-/// 智能符号 hold 出口（`CommitAndHoldComposition`）同样。
-#[test]
-fn main_punct_hold_raw_commit_enters_history() {
-    skip_without_data!();
-    let coord = open_with("pinyin", |c| {
-        c.input.punct_on_empty_behavior = "commit".into();
-        c.input.symbol.smart_mode = true;
-        c.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-    });
-    main_ni_then_no_candidates(&coord);
-    match coord.handle_key_event(&key(VK_PERIOD, 0)) {
-        KeyAction::CommitAndHoldComposition { commit_text, .. } => {
-            assert_eq!(commit_text, "你vvvvvvvv", "前提")
-        }
-        other => panic!("前提：应 hold 上屏，实际: {other:?}"),
     }
     assert_repeat(&coord, "你vvvvvvvv");
 }

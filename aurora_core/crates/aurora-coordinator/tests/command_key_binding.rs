@@ -14,13 +14,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, EVENT_KEY_UP, MOD_ALT, MOD_CTRL, MOD_SHIFT};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const PROBE: &str = r#"command:ime.toggle("candwin")"#;
 
@@ -28,7 +28,6 @@ const VK_TAB: u32 = 0x09;
 const VK_J: u32 = 0x4A;
 const VK_RSHIFT: u32 = 0xA1;
 const VK_BACKSLASH: u32 = 0xDC;
-const VK_PERIOD: u32 = 0xBE;
 
 /// 出厂 `ctrl+shift+j` 被 `keys.toggle_s2t` 占着（固定字段先注册者赢），故用三修饰键。
 const CTRL_ALT_SHIFT: u32 = MOD_CTRL | MOD_ALT | MOD_SHIFT;
@@ -246,24 +245,6 @@ fn session_key_runs_command_and_keeps_composition() {
     assert_probe_ran(&coord);
     assert_eq!(coord.debug_preedit(), preedit, "组合区不应变");
     assert_eq!(coord.debug_page_texts(), texts, "候选不应变");
-}
-
-/// 会话态命令**不要候选**：打了码没候选时也能按（网址模式是「有会话、无候选」的天然样本）。
-#[test]
-fn session_key_runs_command_without_candidates() {
-    skip_without_data!();
-    let coord = open_with(|c| {
-        bind_session("tab", PROBE)(c);
-        c.input.url.enabled = true;
-    });
-    type_str(&coord, "www");
-    coord.handle_key_event(&key(VK_PERIOD, 0));
-    assert_eq!(coord.debug_active_mode(), Some("url"), "前提：应进网址模式");
-    assert!(coord.debug_page_texts().is_empty(), "前提：网址模式无候选");
-
-    coord.handle_key_event(&key(VK_TAB, 0));
-    assert_probe_ran(&coord);
-    assert_eq!(coord.debug_active_mode(), Some("url"), "不应退出网址模式");
 }
 
 /// 无会话：Tab 归宿主（制表符），命令不执行。

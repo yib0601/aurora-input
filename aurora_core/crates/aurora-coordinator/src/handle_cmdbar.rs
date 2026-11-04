@@ -15,15 +15,15 @@
 //! 自锁的 coordinator 方法是安全的（此刻按键处理已释放 state 锁）。
 
 use crate::coordinator::Coordinator;
-use chrono::{DateTime, Local};
-use std::process::Command;
-use std::sync::{Arc, Weak};
-use tracing::warn;
 use aurora_cmdbar::{
     CliSpawn, ClipboardService, ConfigService, DictService, EvalContext, ImeController,
     NotifyService, ProcSpawn, ProcessRunner, Services, ToastSpec, UrlOpener,
 };
 use aurora_ui_types::{ToastKind, ToastPosition};
+use chrono::{DateTime, Local};
+use std::process::Command;
+use std::sync::{Arc, Weak};
+use tracing::warn;
 
 /// 告诉被 `wind.cli` 拉起的 CLI 子进程：输出走管道，别去附着父控制台。
 ///
@@ -309,8 +309,8 @@ struct CoordIme(Weak<Coordinator>);
 impl ImeController for CoordIme {
     fn toggle(&self, target: &str) -> anyhow::Result<()> {
         if let Some(c) = self.0.upgrade() {
-            // 数据类开关（emoji / 附加模块 / 注释词库）要报错给调用方：id 写错时静默无反应，
-            // 写短语的人无从排查。其余 target 维持原样。
+            // 数据类开关（注释词库）要报错给调用方：id 写错时静默无反应，写短语的人
+            // 无从排查。其余 target 维持原样。
             if is_feature_target(target) {
                 return c.cmd_set_feature(target, None);
             }
@@ -329,13 +329,6 @@ impl ImeController for CoordIme {
         }
     }
     fn open_setting(&self, page: &str, args: &str) -> anyhow::Result<()> {
-        if let Some(c) = self.0.upgrade() {
-            c.open_settings_with(if page.is_empty() { None } else { Some(page) }, args);
-        }
-        Ok(())
-    }
-    fn open_setting_web(&self, page: &str, args: &str) -> anyhow::Result<()> {
-        // web 配置已废弃，降级到 native 设置
         if let Some(c) = self.0.upgrade() {
             c.open_settings_with(if page.is_empty() { None } else { Some(page) }, args);
         }
@@ -611,9 +604,9 @@ pub(crate) fn parse_hex_rgba(s: &str) -> Option<[u8; 4]> {
     ])
 }
 
-/// `ime.toggle` 的数据类开关 target：`emoji`、`emoji:<模块id>`、`dict:<注释库id>`。
+/// `ime.toggle` 的数据类开关 target：`dict:<注释库id>`。
 pub(crate) fn is_feature_target(target: &str) -> bool {
-    target == "emoji" || target.starts_with("emoji:") || target.starts_with("dict:")
+    target.starts_with("dict:")
 }
 
 /// `ime.set` 输入状态已是目标时的提示。措辞按各开关在菜单 / 工具栏上的叫法：中英、全半角
@@ -1238,7 +1231,7 @@ mod feature_toggle_tests {
 
     #[test]
     fn feature_targets_are_recognized() {
-        for t in ["emoji", "emoji:frost_greek", "emoji:猫猫", "dict:en"] {
+        for t in ["dict:en", "dict:chaifen"] {
             assert!(is_feature_target(t), "{t}");
         }
         for t in ["s2t", "cn-en", "emojis", "dictx"] {

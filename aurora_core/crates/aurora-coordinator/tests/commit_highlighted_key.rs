@@ -14,12 +14,12 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const VK_TAB: u32 = 0x09;
 const VK_SPACE: u32 = 0x20;
@@ -417,7 +417,6 @@ fn open_assoc(space_commits: bool, tab: Option<&str>) -> Arc<Coordinator> {
     c.schema.available = vec!["wubi86_pinyin".into()];
     c.schema.active = "wubi86_pinyin".into();
     c.input.default.chinese_mode = true;
-    c.input.symbol.smart_mode = false;
     c.input.association.kind = "word".into();
     c.input.association.space_commits = space_commits;
     if let Some(verb) = tab {
@@ -506,25 +505,41 @@ fn idle_tab_is_not_taken() {
     );
 }
 
-/// ★ 有会话**无候选**：本动词无事可做，键回落原语义，不得清掉或上屏正在打的内容。
+/// ★ 有会话**无候选**：本动词无事可做，键必须回落原语义，不得清掉或上屏正在打的内容。
 ///
-/// 网址模式是「有会话、从不产候选」的天然样本（出厂开关关闭，须显式拨开）。
+/// 刚进临时拼音（缓冲还空着）是「有会话、永无候选」的天然样本：`active` 已置位，
+/// 而空拼音串查不出任何候选。
+///
+/// ⚠️ 断言写成**对拍「绑了 == 没绑」**而不是「模式不变」：空缓冲按 Tab 在临拼里本就退出，
+/// 那是模式自己的语义、与本动词无关；原用例（网址模式）恰好是「无候选且键不退出」的格子，
+/// 那个模式已随本批改动删除，故这里换成能表达同一契约的形状。
 #[test]
 fn session_without_candidates_falls_back() {
     skip_without_data!();
-    let coord = open_with(|c| {
+    let bound = open_with(|c| {
         bind_tab(c);
-        c.input.url.enabled = true;
+        c.input.temp_pinyin.enabled = true;
     });
-    type_str(&coord, "www");
-    coord.handle_key_event(&key(0xBE, 0)); // .
-    assert_eq!(coord.debug_active_mode(), Some("url"), "前提：应进网址模式");
-    assert!(coord.debug_page_texts().is_empty(), "前提：网址模式无候选");
+    let unbound = open_with(|c| c.input.temp_pinyin.enabled = true);
+    for coord in [&bound, &unbound] {
+        coord.handle_key_event(&key(VK_BACKTICK, 0)); // ` 进入临时拼音（缓冲仍空）
+        assert_eq!(
+            coord.debug_active_mode(),
+            Some("temp_pinyin"),
+            "前提：应进临时拼音"
+        );
+        assert!(coord.debug_page_texts().is_empty(), "前提：空缓冲无候选");
+    }
 
-    let act = coord.handle_key_event(&key(VK_TAB, 0));
+    let act = bound.handle_key_event(&key(VK_TAB, 0));
+    let dbg = format!("{act:?}");
     assert!(
         !matches!(act, KeyAction::InsertText { .. }),
-        "无候选时不得上屏，实际 {act:?}"
+        "无候选时不得凭空空上屏，实际 {act:?}"
     );
-    assert_eq!(coord.debug_active_mode(), Some("url"), "不得退出网址模式");
+    assert_eq!(
+        dbg,
+        format!("{:?}", unbound.handle_key_event(&key(VK_TAB, 0))),
+        "无候选时本动词应完全让位：绑了与没绑必须同结果"
+    );
 }

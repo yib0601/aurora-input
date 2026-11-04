@@ -43,12 +43,12 @@
 //!
 //! ⚠️ 词库缺失时整族**静默跳过而计数照绿**，判据是耗时（真跑约 1s 量级 vs 跳过 0.0x s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -185,7 +185,7 @@ fn pin_in_pinyin_bucket_takes_effect_in_temp_pinyin() {
     // 是同一个桶、同一个码。
     //
     // ⚠️ 刻意**不断言两条列表逐项相同**。主路径在 `apply_filter` 之后还有临拼没有的加工：
-    // 方案级短语合并、`apply_emoji_suggestions`、英文头部候选、空码补全收口、出简让全。
+    // 方案级短语合并、英文头部候选、空码补全收口、出简让全。
     // 今天 `ni` + 空 store + 默认档位下它们恰好都不动前 10 条，但那是**巧合不是不变量**
     // ——出厂短语哪天多一条码为 `ni` 的，逐项断言就会红，而消息会把人引到临拼上，
     // 真正的原因却在主路径多了一步临拼本就不该有的加工。

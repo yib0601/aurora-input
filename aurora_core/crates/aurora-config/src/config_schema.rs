@@ -191,14 +191,6 @@ const LAYOUT_INTENT_VALUES: &[&str] = &["follow", "vertical", "horizontal"];
 /// ——两侧都认 bool 的话，写回一次就把用户的档位悄悄降级成两档。
 const RAW_CANDIDATE_VALUES: &[&str] = &["always", "in_dict", "off"];
 
-/// emoji 扩展的触发范围（`input.emoji.scope`）。
-///
-/// ★ 值域登记在这里而不是只写进注释：core 与设置页 options 各写一份的话，两者脱节了
-/// 无人会报——本仓已经踩过这个坑。登记后设置页从同一个数组取值，改一处即两处同步。
-const EMOJI_SCOPE_VALUES: &[&str] = &["off", "exact", "all"];
-/// emoji 扩展的呈现形态（`input.emoji.show_as`）。理由同 [`EMOJI_SCOPE_VALUES`]。
-const EMOJI_SHOW_AS_VALUES: &[&str] = &["after", "tail", "comment"];
-
 /// 全部配置字段声明（单一真相源）。与 [`Config`] 经测试反向对照，保证零漂移。
 /// 域划分见 `docs/config-key-migration.md`（不做向后兼容，旧键已弃）。
 ///
@@ -460,22 +452,6 @@ static REGISTRY: &[ConfigField] = &[
     f("input.punct.smart_list", Str),
     f("input.punct.custom_enabled", Bool),
     f("input.punct.custom_mappings", Map(&[])),
-    f("input.symbol.smart_mode", Bool),
-    f("input.symbol.smart_timeout_ms", Int),
-    f("input.symbol.smart_chars", Str),
-    f(
-        "input.symbol.smart_method",
-        Enum(&["delete_replace", "hold_composition"]),
-    ),
-    f("input.symbol.english_punct_mode", Bool),
-    f("input.symbol.english_mode", Bool),
-    f("input.symbol.english_chars", Str),
-    f("input.auto_pair.chinese", Bool),
-    f("input.auto_pair.english", Bool),
-    f("input.auto_pair.chinese_pairs", StrList),
-    f("input.auto_pair.english_pairs", StrList),
-    f("input.auto_pair.jump_out_keys", StrList),
-    f("input.auto_pair.state_ttl_secs", Int),
     f("input.temp_english.enabled", Bool),
     f("input.temp_english.show_candidates", Bool),
     f(
@@ -524,18 +500,6 @@ static REGISTRY: &[ConfigField] = &[
         "input.temp_pinyin.code_hint_source",
         Enum(CODE_HINT_SOURCE_VALUES),
     ),
-    f("input.url.enabled", Bool),
-    f("input.url.prefixes", StrList),
-    // 网址历史：独立于 url.enabled 的第二道开关（前者只改输入行为，后者开始落盘用户
-    // 打过的网址原文）。理由见 `UrlConfig::history_enabled`。
-    f("input.url.history_enabled", Bool),
-    f("input.url.history_max", Int),
-    // 邮箱模式。与 url 共用补全候选源，但触发判据是**后缀**（`@`）而非前缀。
-    f("input.email.enabled", Bool),
-    f("input.email.suffixes", StrList),
-    // Unicode 码点输入（`u+4e00` → 一）。与 url 同为前缀夺取式模式，故字段形态一致。
-    f("input.unicode.enabled", Bool),
-    f("input.unicode.prefixes", StrList),
     // 生僻字模式。刻意没有 enabled——不绑键即进不去，见 `RareCharConfig`。
     // trigger_keys 与其余五处同：normalize 折算进 keys.key_actions 后清空，
     // 留在此处是**出厂声明处** + 设置端 key_action 控件的标识符。
@@ -544,21 +508,6 @@ static REGISTRY: &[ConfigField] = &[
     // 反查模式。进入方式只走 key_actions（动词 reverse），出厂不绑键；没有总开关（绑键即可用）。
     f("input.reverse.candidate_layout", Enum(LAYOUT_INTENT_VALUES)),
     f("input.reverse.lookup_disabled_dicts", Bool),
-    // Emoji 候选扩展（按候选文本查表追加，与编码域无关 ⇒ 全方案通用，故在 input 而非 schema）。
-    f("input.emoji.enabled", Bool),
-    f("input.emoji.scope", Enum(EMOJI_SCOPE_VALUES)),
-    f("input.emoji.show_as", Enum(EMOJI_SHOW_AS_VALUES)),
-    f("input.emoji.max_per_word", Int),
-    f("input.emoji.max_hosts", Int),
-    f("input.emoji.min_word_chars", Int),
-    f("input.emoji.categories", Bool),
-    f("input.emoji.block_auto_commit", Bool),
-    // 附加模块开关（id → bool）。键由内置注册表与用户放进 `emoji/` 的文件共同决定，不是
-    // 固定集合，故整体登记为 Map；设置端由对话框整体读写。
-    f("input.emoji.modules", Map(&[])),
-    f("input.url.candidate_layout", Enum(LAYOUT_INTENT_VALUES)),
-    f("input.email.candidate_layout", Enum(LAYOUT_INTENT_VALUES)),
-    f("input.unicode.candidate_layout", Enum(LAYOUT_INTENT_VALUES)),
     f(
         "input.add_word.candidate_layout",
         Enum(LAYOUT_INTENT_VALUES),
@@ -566,7 +515,6 @@ static REGISTRY: &[ConfigField] = &[
     f("input.s2t.enabled", Bool),
     f("input.s2t.variant", Str),
     f("input.t2s.enabled", Bool),
-    f("input.cmdbar.enabled", Bool),
     f("input.cmdbar.candidate_prefix", Str),
     // 短语前缀列举（原 dict.phrase）
     f("input.phrase.min_prefix", Int),
@@ -608,7 +556,6 @@ static REGISTRY: &[ConfigField] = &[
     f("keys.add_word", Str),
     f("keys.open_add_word_dialog", Str),
     f("keys.toggle_s2t", Str),
-    f("keys.toggle_t2s", Str),
     f("keys.activate_ime", Str),
     f("keys.pin_candidate", Str),
     f("keys.delete_candidate", Str),
@@ -673,15 +620,6 @@ static REGISTRY: &[ConfigField] = &[
     f("ui.candidate.min_window_height_horizontal", Int),
     f("ui.candidate.min_window_height_vertical", Int),
     f("ui.candidate.min_rows", Int),
-    f("ui.candidate.grid_expand", Bool),
-    f("ui.candidate.grid_rows", Int),
-    f("ui.candidate.grid_cell_max_chars", Int),
-    f(
-        "ui.candidate.grid_index_fill",
-        Enum(&["rows", "cells", "off"]),
-    ),
-    f("ui.candidate.grid_pageupdown_screen", Bool),
-    f("ui.candidate.grid_categories", StrList),
     f("ui.candidate.comment_enabled", Bool),
     f("ui.candidate.comment_template_vertical", Str),
     f("ui.candidate.comment_template_horizontal", Str),
@@ -694,7 +632,6 @@ static REGISTRY: &[ConfigField] = &[
     f("ui.candidate.flip_when_above", Bool),
     f("ui.candidate.swap_preedit_when_above", Bool),
     f("ui.candidate.pager_in_preedit", Bool),
-    f("ui.candidate.double_click_screenshot", Bool),
     f(
         "ui.candidate.position_mode",
         Enum(&["follow_caret", "fixed"]),
@@ -705,8 +642,6 @@ static REGISTRY: &[ConfigField] = &[
     f("ui.candidate.custom_x", Int),
     f("ui.candidate.custom_y", Int),
     f("ui.font.family", Str),
-    f("ui.font.path", Str),
-    f("ui.font.render_mode", Enum(&["directwrite", "gdi"])),
     f("ui.font.fallback", StrList),
     f("ui.font.weight", Int),
     // 脚本类名 → 该类的字体链。登记为 Map（叶子、不下钻）：`latin`/`cjk` 这些是**数据**
@@ -1659,7 +1594,7 @@ mod tests {
     #[test]
     fn leaf_entries_flattens_table_to_key_value_pairs() {
         let v: toml::Value = toml::from_str(
-            "[ui.candidate]\nper_page = 9\nlayout = \"vertical\"\n[input.auto_pair]\nchinese = false\n",
+            "[ui.candidate]\nper_page = 9\nlayout = \"vertical\"\n[input.s2t]\nenabled = false\n",
         )
         .unwrap();
         let entries = leaf_entries(&v);
@@ -1676,7 +1611,7 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|(k, val)| k == "input.auto_pair.chinese" && val.as_bool() == Some(false))
+                .any(|(k, val)| k == "input.s2t.enabled" && val.as_bool() == Some(false))
         );
         // 不应出现中间表键
         assert!(!entries.iter().any(|(k, _)| k == "ui.candidate"));

@@ -209,7 +209,7 @@ pub(crate) fn punct_source_vk(ch: char) -> Option<u32> {
 }
 
 /// VK + shift → 可打印 ASCII 字符（字母按 shift 决定大小写、数字/符号复用 punct_char）。
-/// 用于网址模式原样累积与前缀探测。非可打印键返回 None。
+/// 文本型 overlay（临英 / 快捷输入的字符入缓冲）与标点判定共用。非可打印键返回 None。
 pub(crate) fn printable_char(key_code: u32, shift: bool) -> Option<char> {
     match key_code {
         keymap::VK_A..=keymap::VK_Z => {

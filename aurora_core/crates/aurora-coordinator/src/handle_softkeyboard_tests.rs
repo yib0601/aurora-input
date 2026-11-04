@@ -4,9 +4,9 @@
 //! 照常访问 `pub(crate)` 项。
 
 use super::*;
-use std::sync::Arc;
 use aurora_config::Config;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::sync::Arc;
 
 /// `data_dir = None` ⇒ 软键盘表回落内置兜底（一面「标点」）。
 fn coord() -> Arc<Coordinator> {
@@ -275,7 +275,9 @@ fn coord_with_ui() -> (
 }
 
 /// 排空通道，返回最后一次 `UpdateToolbar` 里的 `soft_keyboard_on`（没推过则 None）。
-fn last_toolbar_soft_kb(rx: &std::sync::mpsc::Receiver<aurora_ui_types::UiCommand>) -> Option<bool> {
+fn last_toolbar_soft_kb(
+    rx: &std::sync::mpsc::Receiver<aurora_ui_types::UiCommand>,
+) -> Option<bool> {
     let mut last = None;
     while let Ok(cmd) = rx.try_recv() {
         if let aurora_ui_types::UiCommand::UpdateToolbar(st) = cmd {

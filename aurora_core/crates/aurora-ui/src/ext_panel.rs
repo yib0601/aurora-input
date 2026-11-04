@@ -386,10 +386,10 @@ mod tests {
     use super::*;
     use crate::sys::*;
     use crate::window::{LayeredWindow, WindowMouse};
+    use aurora_ipc::protocol::overlay::{OVERLAY_KIND_SOFTKEYBOARD, OVERLAY_KIND_TOOLBAR};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
-    use aurora_ipc::protocol::overlay::{OVERLAY_KIND_SOFTKEYBOARD, OVERLAY_KIND_TOOLBAR};
 
     struct Cap(Mutex<Vec<Vec<u8>>>);
     impl aurora_bridge::HostRenderSink for Cap {

@@ -14,14 +14,14 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::FreeInputMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_BACKTICK: u32 = 0xC0;
 const VK_SEMICOLON: u32 = 0xBA;
@@ -29,7 +29,6 @@ const VK_COMMA: u32 = 0xBC;
 const VK_NUMPAD0: u32 = 0x60;
 const VK_NEXT: u32 = 0x22;
 const VK_DOWN: u32 = 0x28;
-const VK_PERIOD: u32 = 0xBE;
 const VK_QUOTE: u32 = 0xDE;
 
 fn data_dir() -> PathBuf {
@@ -274,37 +273,6 @@ fn switch_off_main_punct_top_commit_does_not_bump() {
     type_str(&coord, "nihao");
     top_commit(&coord, VK_COMMA);
     assert_eq!(nihao(&store), Some(1), "开关关时顶屏不推 6b");
-    let _ = std::fs::remove_file(&db);
-}
-
-/// 智能符号 hold 分支（`CommitAndHoldComposition`）是标点顶屏的另一条独立出口：同样造词。
-#[test]
-fn smart_symbol_hold_top_commit_learns() {
-    skip_without_data!();
-    let (coord, store, db) = open("hold_learn", "pinyin", |c| {
-        c.input.symbol.smart_mode = true;
-        c.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-    });
-    step_ni(&coord);
-    top_commit(&coord, VK_PERIOD);
-    assert_eq!(nihao(&store), Some(1), "拼音桶: {:?}", temp_rows(&store));
-    let _ = std::fs::remove_file(&db);
-}
-
-/// 智能符号 hold 分支同样推 6b。
-#[test]
-fn smart_symbol_hold_top_commit_bumps_temp_word() {
-    skip_without_data!();
-    let (coord, store, db) = open("hold_6b", "pinyin", |c| {
-        c.input.symbol.smart_mode = true;
-        c.input.symbol.smart_method = aurora_config::config::SmartMethod::HoldComposition;
-    });
-    store
-        .learn_temp_word("pinyin", "nihao", "你好", 800, 0)
-        .unwrap();
-    type_str(&coord, "nihao");
-    top_commit(&coord, VK_PERIOD);
-    assert_eq!(nihao(&store), Some(2), "hold 顶屏应推进同一条临时词");
     let _ = std::fs::remove_file(&db);
 }
 

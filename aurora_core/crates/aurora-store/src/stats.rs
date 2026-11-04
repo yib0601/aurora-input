@@ -32,7 +32,12 @@ use std::collections::HashMap;
 /// 旧 META 表中存放统计全局元数据的键（P4a 起只供迁移读）。
 const STATS_META_KEY: &str = "stats_meta";
 
-/// 上屏来源分类（对齐 Go `CommitSource`，末尾追加 Rust 特有的 Url/Mix）。
+/// 上屏来源分类（对齐 Go `CommitSource`，末尾追加 Rust 特有的 Url/Mix/Email）。
+///
+/// ⚠️ `Url` / `Email` 两个来源的**模式已删除**，判别值仍然保留：它们是 `#[repr(u8)]`
+/// 的落盘判别值，`by_source` 数组按 [`CommitSource::COUNT`] 定长持久化。删掉中间两个
+/// 变体会让 `Mix`(11) 的数组下标越过新长度（或整体位移），存量每日统计直接读错位——
+/// 这与 `FullWidth` / `TsfDirect` 保留为空档是同一条理由：**枚举值即磁盘格式**。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum CommitSource {
@@ -47,9 +52,9 @@ pub enum CommitSource {
     ModeSwitch = 7,  // 模式切换上屏
     TsfDirect = 8,   // TSF 直接输入（保留枚举值，Rust 暂无该路径）
     SpecialMode = 9, // 引导键特殊模式
-    Url = 10,        // 网址模式（Rust 特有）
+    Url = 10,        // 网址模式（Rust 特有；模式已删，仅保留判别值）
     Mix = 11,        // 混合模式（Rust 特有）
-    Email = 12,      // 邮箱模式（Rust 特有）
+    Email = 12,      // 邮箱模式（Rust 特有；模式已删，仅保留判别值）
 }
 
 impl CommitSource {

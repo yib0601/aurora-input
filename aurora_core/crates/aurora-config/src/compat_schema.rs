@@ -78,7 +78,6 @@ pub const GROUPS: &[(&str, &str)] = &[
 
 const FIRST_SHOW_MODES: &[&str] = &["wait", "fast", "instant"];
 const INITIAL_MODES: &[&str] = &["english", "chinese"];
-const SMART_METHODS: &[&str] = &["delete_replace", "hold_composition"];
 const CANDIDATE_POSITION_MODES: &[&str] = &["follow_caret", "fixed"];
 const NEWLINE_STYLES: &[&str] = &["keep", "cr", "lf", "crlf"];
 const PLACEHOLDER_CHARS: &[&str] = &["space", "zwsp", "blank"];
@@ -310,21 +309,6 @@ pub static COMPAT_FIELDS: &[FieldMeta] = &[
     // ── 输入行为 ──────────────────────────────────────────────────
     FieldMeta {
         section: "apps",
-        key: "auto_pair",
-        kind: Kind::TriBool,
-        group: "behavior",
-        label: "符号自动配对",
-        summary: "输入左括号 / 引号时是否自动补全右半边。",
-        problem: "表格类软件（Excel、WPS 表格）在输入状态下把方向键当作「确认单元格并移动」，配对后无法把光标退回两个符号之间，\
-                  目前只能对它们关掉自动配对。不设置则沿用全局设置。",
-        hosts: &["EXCEL.EXE", "et.exe"],
-        options: &[],
-        depends_on: None,
-        protocol: false,
-        advanced: false,
-    },
-    FieldMeta {
-        section: "apps",
         key: "password_force_english",
         kind: Kind::TriBool,
         group: "behavior",
@@ -334,21 +318,6 @@ pub static COMPAT_FIELDS: &[FieldMeta] = &[
                   反过来也可以全局关闭、只对某个软件开启。",
         hosts: &[],
         options: &[],
-        depends_on: None,
-        protocol: false,
-        advanced: false,
-    },
-    FieldMeta {
-        section: "apps",
-        key: "smart_method",
-        kind: Kind::Enum,
-        group: "behavior",
-        label: "智能符号替换方式",
-        summary: "delete_replace 会删改已输入的内容来替换符号；hold_composition 全程不删改。",
-        problem: "在 Tabby 这类终端里，删改已输入内容会出现严重错误，改用 hold_composition 兼容性更好。\
-                  不设置则沿用全局设置。",
-        hosts: &["Tabby.exe"],
-        options: SMART_METHODS,
         depends_on: None,
         protocol: false,
         advanced: false,
@@ -571,10 +540,8 @@ const FIELD_OPTION_LABELS: &[(&str, &str, &str)] =
 
 /// 三态开关三档（跟随 / 真 / 假）的显示名，默认「跟随全局 / 开 / 关」；个别字段的菜单用词不同
 /// （例如「宿主关闭输入法」是「忽略 / 采纳」，与字段的 true/false 语义方向一致但说法不同）。
-const TRI_LABELS: &[(&str, [&str; 3])] = &[
-    ("auto_pair", ["跟随全局", "启用", "禁用"]),
-    ("ignore_host_ime_close", ["跟随内置规则", "忽略", "采纳"]),
-];
+const TRI_LABELS: &[(&str, [&str; 3])] =
+    &[("ignore_host_ime_close", ["跟随内置规则", "忽略", "采纳"])];
 
 /// 三态开关的三档显示名（下标 0 = 跟随，1 = true，2 = false）。
 pub fn tri_labels(key: &str) -> [&'static str; 3] {

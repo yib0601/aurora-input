@@ -16,9 +16,9 @@ use super::{
     MAX_DEPTH, Pairs, Template, VarRef, VarValue, arg_color, color_bounds, role_of, utf8_len,
     var_ref_ranges,
 };
-use std::sync::Arc;
 use aurora_theme::InlineColor;
 use aurora_ui_types::StyledText;
+use std::sync::Arc;
 
 /// 样例候选。两个字都是 ≥ U+3400 的汉字，逐字段（`han` / `char`）各出一行。
 pub const SAMPLE_TEXT: &str = "你好";
@@ -167,7 +167,6 @@ fn sample_value(name: &str, arg: Option<&str>, ch: Option<char>) -> Option<VarVa
             ));
         }
         "code_hint" => "hao".into(),
-        "emoji" => "👋".into(),
         "code_rev" => "wqvb".into(),
         // 全部码位默认以 `/` 连接（同 `word_codes_in`），参数换掉它。
         "code_rev_all" => return joined(&["wq", "wqvb"], "/"),
@@ -559,7 +558,7 @@ mod tests {
         ));
         // 注释里 eval_var 的变量照常可用。
         assert!(!unavailable(
-            "${code_hint}${emoji}${dict}${dict_all}${code}",
+            "${code_hint}${dict}${dict_all}${code}",
             &TemplateScene::Comment
         ));
         // 未知变量仍按「未知」报，不混进「不可用」。

@@ -136,13 +136,7 @@ impl Coordinator {
             return false;
         }
 
-        // ── 4. 配对跳出（跨模式统一闸门）──
-        // 栈非空本身就蕴含「开过配对、尚未跳出」，没配对时一个 Tab/Enter 都不会被吃。
-        if self.has_pending_pair() && is_jump_out_key(probe.vk) {
-            return true;
-        }
-
-        // ── 5. 英文模式 ──
+        // ── 4. 英文模式 ──
         // 字母/数字/标点全部放行给宿主直出。这条是「切到英文打不出字」的修复点：
         // 此前照送进核心，核心返回 Consumed 而无文本，宿主两头落空。
         if !chinese {
@@ -209,20 +203,6 @@ impl Coordinator {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         Self::has_input_session(&s)
     }
-
-    /// 配对栈是否有待跳出的右半（`(` 已插入、`)` 尚未跳过）。
-    pub fn has_pending_pair(&self) -> bool {
-        !self
-            .pair_tracker
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_empty()
-    }
-}
-
-/// 配对跳出键：把光标移出已插入的右半。
-fn is_jump_out_key(vk: u32) -> bool {
-    matches!(vk, keymap::VK_TAB | keymap::VK_RETURN | keymap::VK_RIGHT)
 }
 
 #[cfg(test)]
@@ -233,7 +213,6 @@ mod tests {
     fn coord() -> std::sync::Arc<Coordinator> {
         let mut cfg = Config::default();
         cfg.input.default.chinese_mode = true;
-        cfg.input.symbol.smart_mode = false;
         Coordinator::new_headless(cfg, None)
     }
 

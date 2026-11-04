@@ -9,12 +9,12 @@
 //!
 //! 词典缺失时自动跳过（`build_dev/data` 不存在时整族静默跳过而计数照绿，判据是耗时）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -93,7 +93,6 @@ fn coord_with(
     cfg.schema.available = vec!["wubi86".into()];
     cfg.schema.active = "wubi86".into();
     cfg.input.default.chinese_mode = true;
-    cfg.input.symbol.smart_mode = false;
     cfg.input.association.kind = kind.to_string();
     cfg.input.association.mode = "continuous".to_string();
     cfg.schema.codetable.auto_commit_at_full = at_full;
@@ -513,7 +512,6 @@ fn pinyin_freq_reranks_assoc() {
     cfg.schema.active = "pinyin".into();
     cfg.schema.pinyin.frequency.enabled = true;
     cfg.input.default.chinese_mode = true;
-    cfg.input.symbol.smart_mode = false;
     cfg.input.association.kind = "word".into();
     cfg.input.association.mode = "continuous".into();
     let c = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), store);

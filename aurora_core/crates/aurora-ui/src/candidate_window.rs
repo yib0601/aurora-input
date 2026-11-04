@@ -535,19 +535,6 @@ pub struct CandidateWindow {
     min_window_height_vertical: u32,
     /// 竖排最小行数，不足补透明占位行（0=不补）。来自 ui.candidate.min_rows。
     min_rows: u32,
-    /// 展开态（多行网格）的版式；`None` = 普通单行 / 单列。每次 UpdateCandidates 同步。
-    /// 设计见 `docs/design/candidate-grid-expand.md`。
-    grid: Option<aurora_ui_types::CandidateGrid>,
-    /// 本次展开期间窗口内容出现过的最大宽度（设备 px），收起即清零。
-    ///
-    /// 网格按列对齐，列宽随可见区里的候选变：不压住的话每滚一屏窗口就宽一下窄一下。
-    /// 下一帧以它为根容器的宽度下限，于是一次展开期间宽度只增不减（设计 §6.3）。
-    /// `Cell`：在 `&self` 的测量路径里回写。第二项是记下它时的缩放：设备像素跨了 DPI
-    /// 就不可比，换屏后作废重新起算。
-    grid_peak_w: Cell<(f32, f32)>,
-    /// 展开态这一帧内容区的 `(左, 右, 顶)`（窗口内坐标，与命中矩形同一坐标系）。
-    /// 悬停气泡据此停靠在整个窗口外侧的顶端，见 [`Self::tip_anchor`]。
-    grid_box: Cell<(f32, f32, f32)>,
 }
 
 impl CandidateWindow {
@@ -573,7 +560,6 @@ impl CandidateWindow {
             drag_origin: (0, 0),
             drag_pin: None,
             margin: (0, 0, 0, 0),
-            double_click: crate::double_click::DoubleClick::new(),
             tip_hold: TipHold::Off,
             tip_released: false,
             tip_for: tip_for.clone(),
@@ -646,9 +632,6 @@ impl CandidateWindow {
             min_window_height_horizontal: 0,
             min_window_height_vertical: 0,
             min_rows: 0,
-            grid: None,
-            grid_peak_w: Cell::new((0.0, 0.0)),
-            grid_box: Cell::new((0.0, 0.0, 0.0)),
         })
     }
 
@@ -1493,47 +1476,8 @@ impl CandidateWindow {
         self.total_pages = total_pages.max(1);
     }
 
-    /// 展开态版式（`None` = 收起）。收起时清掉宽度峰值，下次展开从内容实宽重新起算。
-    pub fn set_grid(&mut self, grid: Option<aurora_ui_types::CandidateGrid>) {
-        if grid.is_none() {
-            self.grid_peak_w.set((0.0, 0.0));
-        }
-        // 刚展开：窗口原地往下长，新长出来的格子可能正好落在静止不动的鼠标底下，系统随之补发
-        // 一次移动消息 ⇒ 用户什么都没做，悬停高亮与提示就冒出来了。与窗口刚显示同理
-        // （`mark_visible`），从这一刻重新起算「鼠标动过没有」。
-        if self.grid.is_none() && grid.is_some() && self.visible {
-            self.mouse.borrow_mut().reset_hover();
-        }
-        self.grid = grid;
-    }
-
-    /// 记下展开态这一帧的内容区：宽度供下一帧当宽度下限（见 [`Self::grid_peak_w`]），
-    /// 内容盒供悬停气泡停靠（见 [`Self::grid_box`]）。`(left, top)` 是内容区在窗口里的
-    /// 左上（软阴影扩边）。
-    fn note_grid_width(&self, (left, top): (f32, f32), w: f32) {
-        if self.grid.is_some() {
-            self.grid_peak_w
-                .set((self.grid_peak_px().max(w), self.scale));
-            // 气泡贴的是**窗口实际的**右缘：渲染入口随后会按屏幕安全宽度收窄窗口，超宽的网格
-            // 按测得宽度记会让气泡离窗口右缘空出一截。与入口那道钳制同一个上限。
-            let shown = w.min(self.screen_safety_max_width_px() as f32);
-            self.grid_box.set((left, left + shown, top));
-        }
-    }
-
-    /// 此刻是否按展开态（网格）画。判据与 `build_tree` 里的 `grid` 同源。
-    fn grid_shown(&self) -> bool {
-        self.grid.is_some_and(|g| g.cols > 0)
-            && !self.vertical
-            && !self.rotated
-            && !self.candidates.is_empty()
-    }
-
     /// 悬停气泡的锚点：`(放侧边?, 左缘, 右缘, 顶, 底)`，窗口内坐标。
     ///
-    /// - 展开态：**停靠**在整个窗口外侧的顶端（右侧优先、放不下改左），不随悬停行上下移动，
-    ///   只换内容。按单格放的话，横排的「下方」与竖排的「侧边」都会盖住相邻的格子；跟着行
-    ///   上下走则是「半跟随」——位置在变却够不着，鼠标斜着过去一路擦过别的格子。
     /// - 竖排 / 旋转态：候选项侧边（旋转态的候选项是又高又窄的一列，放上下会离得很远）。
     /// - 横排：候选项下方（不足时上翻）。
     ///
@@ -1541,10 +1485,6 @@ impl CandidateWindow {
     /// `render_tooltip_overlay`）都从这里取，一处放侧边、一处放上下的话，同一个悬停在
     /// 「实时显示」与「重推帧」之间会跳位置。
     fn tip_anchor(&self, r: &Rect) -> (bool, f32, f32, f32, f32) {
-        if self.grid_shown() {
-            let (l, rr, top) = self.grid_box.get();
-            return (true, l, rr, top, top + r.h);
-        }
         (
             self.vertical || self.rotated,
             r.x,
@@ -1552,14 +1492,6 @@ impl CandidateWindow {
             r.y,
             r.y + r.h,
         )
-    }
-
-    /// 本次展开见过的最大宽度（当前缩放下有效；缩放变了视为 0）。
-    fn grid_peak_px(&self) -> f32 {
-        match self.grid_peak_w.get() {
-            (w, s) if s == self.scale => w,
-            _ => 0.0,
-        }
     }
 
     pub fn set_position(&mut self, x: i32, y: i32, caret_height: i32, caret_valid: bool) {
@@ -1680,7 +1612,6 @@ impl CandidateWindow {
         let t_layout0 = Instant::now();
         root.layout(ml as f32, mt as f32, &self.text_renderer);
         let (w_f, h_f) = root.measured_size();
-        self.note_grid_width((ml as f32, mt as f32), w_f);
         let mut content_w = (w_f.ceil() as u32).max(40);
         // 竖排最大宽度（behavior.vertical_max_width，单位 dp，默认 0=不限）：仅在用户/主题
         // 显式配置正值时生效。本 View 引擎不支持文本折行，超宽候选在窗口右缘裁切（draw_text
@@ -1852,7 +1783,6 @@ impl CandidateWindow {
         };
         root.layout(ml as f32, mt as f32, &self.text_renderer);
         let (w_f, h_f) = root.measured_size();
-        self.note_grid_width((ml as f32, mt as f32), w_f);
         let mut content_w = (w_f.ceil() as u32).max(40);
         if self.vertical && !self.candidates.is_empty() {
             let vmax = self.theme.behavior.vertical_max_width;
@@ -2028,7 +1958,6 @@ impl CandidateWindow {
         };
         root.layout(ml as f32, mt as f32, &self.text_renderer);
         let (w_f, h_f) = root.measured_size();
-        self.note_grid_width((ml as f32, mt as f32), w_f);
         let mut content_w = (w_f.ceil() as u32).max(40);
         if self.vertical && !self.candidates.is_empty() {
             let vmax = self.theme.behavior.vertical_max_width;
@@ -2258,7 +2187,9 @@ impl CandidateWindow {
     /// 当前悬停 tooltip 的目标：`(气泡内容, 候选行命中矩形, 悬停下标)`；无悬停 / 无内容为 None。
     /// 顺带记下 `tip_for`（气泡归属哪个候选）。host-render 两条渲染路径共用。
     #[cfg(any(windows, ext_presenter))]
-    fn tooltip_target(&mut self) -> Option<(std::sync::Arc<aurora_ui_types::TooltipDoc>, Rect, i32)> {
+    fn tooltip_target(
+        &mut self,
+    ) -> Option<(std::sync::Arc<aurora_ui_types::TooltipDoc>, Rect, i32)> {
         let hover = self.tooltip_hover();
         let info = if (0..TAG_PAGE_PREV).contains(&hover) {
             let code = self
@@ -2677,7 +2608,10 @@ impl CandidateWindow {
     }
 
     /// RvGradient → 渲染用 ViewGradient（委托共享 theme_assets，弹窗类同一份）。
-    fn rv_gradient(&self, g: Option<&aurora_theme::RvGradient>) -> Option<crate::view::ViewGradient> {
+    fn rv_gradient(
+        &self,
+        g: Option<&aurora_theme::RvGradient>,
+    ) -> Option<crate::view::ViewGradient> {
         crate::theme_assets::rv_gradient(g)
     }
 
@@ -3134,12 +3068,7 @@ impl CandidateWindow {
             // 之后的产物，调大它不会回头改 root 的 mw/mh ⇒ 窗口缓冲变大而 root 背景/边框仍按
             // 旧尺寸画，边上露一条透明带，竖排 `fill_cross` 的高亮也不跟着撑。上限（主题
             // `vertical_max_width`）能那么写是因为它是裁切语义，下限不是。
-            // 展开态再叠一层「本次展开见过的最大宽度」：滚一屏列宽就变，不压住窗口会忽宽忽窄。
-            .min_w(if self.grid.is_some() {
-                min_win_w.max(self.grid_peak_px())
-            } else {
-                min_win_w
-            })
+            .min_w(min_win_w)
             .min_h(min_win_h)
             // 高度富余落在**顶部**（仅上翻时）：窗口在光标上方时底边贴光标，空白压在下面
             // 会把候选整体顶离光标，位置反而随内容抖动——正是本功能要消除的东西。
@@ -3284,12 +3213,6 @@ impl CandidateWindow {
         // 才成为并列的列。于是行距、宽度预算、文字截断、分隔方向全部沿用竖排的既有实现，
         // 一行都不用改——这正是把旋转做成「两位」而不是「第四种排列」的收益所在。
         let list_vertical = (self.vertical || self.rotated) && !self.candidates.is_empty();
-        // 展开态（多行网格）：只在横排出现（协调器那边已按方向把关，这里再判一次是因为
-        // 方向与网格是两条命令下发的，中间可能隔着一帧）。`cols == 0` 是无意义的版式，按收起处理。
-        let grid = self.grid.filter(|g| {
-            g.cols > 0 && !list_vertical && !self.rotated && !self.candidates.is_empty()
-        });
-        let grid_cols = grid.map_or(1, |g| g.cols as usize);
         let list_pad = edges_or(&v.candidate_list.padding, [0.0; 4]);
         // candidate_list 此前只贡献 gap/row_gap/band_gap 三个间距，背景与边框从不接线，
         // 「候选区与编码栏用不同底色分区」这类设计表达不出来。装饰全 Option，未配零回归。
@@ -3298,9 +3221,6 @@ impl CandidateWindow {
                 // fill_cross 让候选列撑满 root 宽度（= max(最宽候选, 翻页栏)），
                 // 再配合各候选 item 的 fill_cross，所有候选高亮宽度统一。
                 View::container(Layout::Column).gap(row_gap_v).fill_cross()
-            } else if grid.is_some() {
-                // 网格：一列行，每行是一页候选（行在装配段由 `grid_cells` 切出来）。
-                View::container(Layout::Column).gap(row_gap_v)
             } else {
                 View::container(Layout::Row)
                     .gap(box_gap)
@@ -3425,8 +3345,7 @@ impl CandidateWindow {
             (content_budget_px - window_pad.l - window_pad.r - list_pad.l - list_pad.r).max(0.0);
         // 横排下内联编码也在同一行里跟候选抢宽度，故作为分配参与者一并纳入；竖排它自成一行，
         // 走独立预算不参与竞争。
-        let preedit_competes =
-            !list_vertical && grid.is_none() && self.preedit_embedded && !self.preedit.is_empty();
+        let preedit_competes = !list_vertical && self.preedit_embedded && !self.preedit.is_empty();
         let preedit_natural = if self.preedit.is_empty() {
             0.0
         } else {
@@ -3476,7 +3395,7 @@ impl CandidateWindow {
         //   · 横排未并入编码栏 → 翻页栏落在候选行尾，与候选抢宽度（原行为）
         //   · 竖排内联编码并入 → 翻页栏在编码那一行右端，与编码抢宽度
         let pager_row_w = if self.pager_visible()
-            && ((!list_vertical && grid.is_none() && !pager_will_inline) || pager_in_inline_row)
+            && ((!list_vertical && !pager_will_inline) || pager_in_inline_row)
         {
             // `box_gap` 是**候选行这个 Row 的 gap**，只有这条落点吃得到；独立编码栏那条
             // 挂在 spacer 右侧、没有容器间隙，故它只取节点自身宽（见 `pager_node_w` 上方）。
@@ -3489,33 +3408,6 @@ impl CandidateWindow {
             preedit_pad.l + 16.0 * s + box_gap // 左缩进 + 装配段右留白 + 间隙
         } else {
             0.0
-        };
-        // ══ 网格列宽（展开态）══
-        // 列宽 = 可见区里这一列各格自然宽的最大值，各列对齐成表格；表格总宽超出行预算时，
-        // 各列宽按 water-filling 公平缩减（与单行按候选分配是同一个算法，只是参与者从
-        // 「每个候选」换成「每一列」）。格子再按所在列的宽度截文字、并以它为宽度下限。
-        // 格宽要扣掉 item 外边距与格间距：它们在格子外面，不归任何一列。
-        let grid_col_w: Vec<f32> = if grid.is_some() {
-            let item_margin = edges_or(&v.item.margin, [0.0; 4]);
-            let mut demand = vec![0.0f32; grid_cols];
-            // 各列的固定开销上限（序号、内边距、注释——都不截）：列宽再缩也不能小于它加
-            // 一截文字保底，否则格子按内容撑开、比列宽宽，这一行就和别的行错开了。
-            let mut floor = vec![0.0f32; grid_cols];
-            for (k, (fixed, natural)) in cand_metrics.iter().enumerate() {
-                let c = k % grid_cols;
-                demand[c] = demand[c].max(fixed - gap_w + natural);
-                floor[c] = floor[c].max(fixed - gap_w + min_text_w);
-            }
-            let avail = row_budget
-                - box_gap * (grid_cols - 1) as f32
-                - (item_margin.l + item_margin.r) * grid_cols as f32;
-            Self::water_fill(&demand, avail, min_text_w)
-                .into_iter()
-                .zip(floor)
-                .map(|(w, f)| w.max(f))
-                .collect()
-        } else {
-            Vec::new()
         };
         // 分配：参与者 = [内联编码(仅横排下与候选同行)] + 候选们。
         // 竖排的注释文字预算（与 `order` 同序；`None` = 不截，横排与直立态恒为 `None`）。
@@ -3558,16 +3450,6 @@ impl CandidateWindow {
                 (row_budget - preedit_pad.l - pager_row_w).max(min_text_w),
                 text_budgets,
             )
-        } else if grid.is_some() {
-            // 网格：每格的文字拿「所在列宽 − 本格固定开销」。内联编码独占一行，用满整行。
-            let budgets = cand_metrics
-                .iter()
-                .enumerate()
-                .map(|(k, (fixed, _))| {
-                    (grid_col_w[k % grid_cols] - (fixed - gap_w)).max(min_text_w)
-                })
-                .collect();
-            ((row_budget - preedit_pad.l).max(min_text_w), budgets)
         } else {
             let fixed_sum: f32 = cand_metrics.iter().map(|(f, _)| *f).sum();
             let avail = row_budget - mode_label_row_w - pager_row_w - fixed_sum - preedit_fixed;
@@ -3671,12 +3553,6 @@ impl CandidateWindow {
                 per.iter()
                     .map(|&(indent, over, _, _)| (indent, row_budget - over))
                     .collect()
-            } else if grid.is_some() {
-                // 网格：上段与主行同在一格里，宽度上限就是所在列宽。
-                per.iter()
-                    .enumerate()
-                    .map(|(k, &(indent, over, _, _))| (indent, grid_col_w[k % grid_cols] - over))
-                    .collect()
             } else {
                 let used: f32 = cand_metrics
                     .iter()
@@ -3718,7 +3594,7 @@ impl CandidateWindow {
         // 横排 list 是 Row.cross(Center)：它们原本相对两行高的 item 居中，会比主行高出半个上方条；
         // 补上这一截后，其外框与 item 等高位移、内容恰好落在主行中线上。竖排它们各占一行，不受影响。
         // 度量与 `above_ghost` 同源（字号 / 字重 / 字族 + 上下内外边距；边框不占布局尺寸）。
-        let above_lift = if has_above && !list_vertical && grid.is_none() {
+        let above_lift = if has_above && !list_vertical {
             self.text_renderer
                 .measure(
                     " ",
@@ -3884,7 +3760,7 @@ impl CandidateWindow {
         if self.preedit_embedded && !self.preedit.is_empty() {
             // 左缩进与独立条模式一致：取 preedit_bar.padding.left，避免编码贴窗口左缘。
             let pe_left = preedit_pad.l;
-            let sep = if list_vertical || grid.is_some() {
+            let sep = if list_vertical {
                 let gap = 6.0 * s;
                 Edges {
                     l: pe_left,
@@ -4056,8 +3932,6 @@ impl CandidateWindow {
             }
         }
 
-        // 展开态的格子先收集起来，装配完再按列数切成行（见循环后）。
-        let mut grid_cells: Vec<View> = Vec::new();
         // `order` 与每候选的文字预算 `cand_text_budgets` 已在上方预扫阶段算好（k 与之同序）。
         for (k, (i, cand)) in order.into_iter().enumerate() {
             let is_sel = i == self.selected;
@@ -4078,10 +3952,6 @@ impl CandidateWindow {
             if list_vertical {
                 item = item.fill_cross();
             }
-            // 网格：格宽不小于所在列宽，各行的格子上下对齐，高亮底色也一样宽。
-            if grid.is_some() {
-                item = item.min_w(grid_col_w[i % grid_cols]);
-            }
             // 序号节点：no_index 项（如快捷加词提示行）完全跳过，避免空圆圈占位。
             if !cand.no_index {
                 let marker = if cand.label.is_empty() {
@@ -4091,18 +3961,7 @@ impl CandidateWindow {
                 };
                 let idx_pad = edges_or(&v.index.padding, [0.0; 4]);
                 let idx_margin = edges_or(&v.index.margin, [0.0; 4]);
-                // 展开态只有数字键选得到的那几格显示序号（从高亮行起往下顺延，范围由协调器
-                // 给出）。其余格子照样摆一个**透明**序号占住同样的宽度——直接不画的话，各行
-                // 文字的起点就对不齐了。
-                let idx_ghost = grid.is_some_and(|g| {
-                    let s = g.index_start as usize;
-                    !(s..s + g.index_count as usize).contains(&i)
-                });
-                let idx_color = if idx_ghost {
-                    [0, 0, 0, 0]
-                } else {
-                    eff_text(&v.index, index_color, is_sel, is_hover)
-                };
+                let idx_color = eff_text(&v.index, index_color, is_sel, is_hover);
                 // 圆圈样式 → 方形节点 + 真圆背景 + 居中数字。
                 let mut idx_leaf = View::leaf(marker, idx_color)
                     .font_size(index_fs)
@@ -4113,18 +3972,12 @@ impl CandidateWindow {
                 if index_circle {
                     let d = (index_fs * 1.5).round();
                     idx_leaf = idx_leaf
-                        .circle_bg(if idx_ghost {
-                            [0, 0, 0, 0]
-                        } else {
-                            index_circle_bg
-                        })
+                        .circle_bg(index_circle_bg)
                         .fixed_w(d)
                         .fixed_h(d)
                         .text_align(Align::Center);
                 }
-                if let Some((bc, bw, br)) = eff_border(&v.index, is_sel, is_hover)
-                    && !idx_ghost
-                {
+                if let Some((bc, bw, br)) = eff_border(&v.index, is_sel, is_hover) {
                     idx_leaf = idx_leaf.border(bc, bw).radius(br);
                 }
                 // 直立态：序号**整块**扶正，不逐字切——「10」于是横着读、位于列首，
@@ -4375,64 +4228,7 @@ impl CandidateWindow {
             if let Some((bc, bw, _)) = eff_border(&v.item, is_sel, is_hover) {
                 item = item.border(bc, bw);
             }
-            if grid.is_some() {
-                grid_cells.push(item);
-            } else {
-                list = list.child(item);
-            }
-        }
-        // 网格装配：每 `cols` 格成一行。末屏行数不足时补与真实行同构的占位行（同竖排
-        // `min_rows` 那套），滚到末尾窗口也不变矮——窗口高度一变，上翻定位时整个窗口就跳。
-        // 展开态的分类标签栏，挂到表格**下方**与翻页栏同一行（见装配段）。放在上方会把首行
-        // 往下推，展开就不像「原地往下长出来」了。
-        let mut grid_tab_bar: Option<View> = None;
-        if let Some(g) = grid {
-            // 分类标签栏（P3）：当前分类画选中底色。命中 tag 落在 `GRID_TAB_TAG_BASE` 段，
-            // 点击经候选点选那条路回到协调器（宿主原样回传正数下标）。展开期间它恒在，
-            // 窗口高度不因切分类而变。
-            if g.tabs != 0 {
-                let dim_c = t.color("text_dim", [140, 140, 145, 255]);
-                let mut bar = View::container(Layout::Row)
-                    .gap(4.0 * s)
-                    .cross(Align::Center);
-                for tab in aurora_ui_types::GridTab::ALL {
-                    if g.tabs & tab.bit() == 0 {
-                        continue;
-                    }
-                    let active = tab as u8 == g.active_tab;
-                    let color = if active {
-                        eff_text(&v.text, text_color, true, false)
-                    } else {
-                        dim_c
-                    };
-                    let mut chip = View::leaf(tab.label().to_string(), color)
-                        .font_size(comment_fs)
-                        .font_family(text_family.clone())
-                        .pad(Edges::xy(8.0 * s, 2.0 * s))
-                        .radius(item_radius)
-                        .tag(aurora_ui_types::GRID_TAB_TAG_BASE + tab as i32);
-                    if active {
-                        chip = chip.bg(sel_bg);
-                    }
-                    bar = bar.child(chip);
-                }
-                grid_tab_bar = Some(bar);
-            }
-            let mut cells = grid_cells.into_iter().peekable();
-            let mut shown = 0usize;
-            while cells.peek().is_some() {
-                let mut row = View::container(Layout::Row)
-                    .gap(box_gap)
-                    .cross(Align::Center);
-                for cell in cells.by_ref().take(grid_cols) {
-                    row = row.child(cell);
-                }
-                list = list.child(row);
-                shown += 1;
-            }
-            for _ in shown..g.rows as usize {
-                list = list.child(placeholder_row());
-            }
+            list = list.child(item);
         }
         // 正常顺序：占位行补在候选之后（窗口下方留白，候选 1 恒在顶部）。
         if !reversed {
@@ -4455,10 +4251,7 @@ impl CandidateWindow {
             if let (Some(band), Some(p)) = (preedit_band.take(), pager.take()) {
                 preedit_band = Some(band.child(p));
             }
-        } else if !list_vertical
-            && grid.is_none()
-            && let Some(mut p) = pager.take()
-        {
+        } else if !list_vertical && let Some(mut p) = pager.take() {
             if has_above {
                 p.margin.t += above_lift; // 与主行对齐，见 `above_lift`
             }
@@ -4469,26 +4262,7 @@ impl CandidateWindow {
         // fill_cross 的 Row 用 spacer 顶位。inline 情形已在编码栏内右对齐，不经此。
         // ⚠️ 判据是 `list_vertical` 不是 `self.vertical`：旋转态的列表在局部空间里也是竖排，
         // 翻页栏同样该独立成行（它加在 `root` 上、在旋转包裹之外，故屏幕上仍是横的一条）。
-        // 网格同样走这一支：翻页栏挂在表格下方独立成行，不去抢某一行的宽度。
-        let vertical_bottom_pager = if grid.is_some() {
-            // 展开态：分类标签与翻页箭头同一行、整体居中（`[标签栏]  ‹ ›`）。不跟主题的
-            // `pager_align` 走：这一行在表格正下方，居中才与上面对称的格子对得上。
-            let pager = pager.take();
-            (grid_tab_bar.is_some() || pager.is_some()).then(|| {
-                let mut row = View::container(Layout::Row)
-                    .fill_cross()
-                    .cross(Align::Center)
-                    .gap(12.0 * s)
-                    .child(View::spacer());
-                if let Some(bar) = grid_tab_bar.take() {
-                    row = row.child(bar);
-                }
-                if let Some(p) = pager {
-                    row = row.child(p);
-                }
-                row.child(View::spacer())
-            })
-        } else if list_vertical {
+        let vertical_bottom_pager = if list_vertical {
             pager.take().map(|p| {
                 let row = View::container(Layout::Row)
                     .fill_cross()
@@ -4722,8 +4496,6 @@ pub struct CandidateMouse {
     /// 窗口左上 + (left, top) = **内容**左上，即落盘用的坐标系；四个分量一起用于
     /// 按内容矩形做拖动钳制。
     margin: (i32, i32, i32, i32),
-    /// 空白处双击判定（截图用，见 `UiEvent::CandidateDoubleClick`）。
-    double_click: crate::double_click::DoubleClick,
     /// 候选窗右键对悬停气泡的压制阶段，见 [`TipHold`]。
     tip_hold: TipHold,
     /// 压制刚解除且 UI 画着的悬停正是光标下的目标：待 [`CandidateWindow::tick`] 取走并
@@ -5084,7 +4856,6 @@ impl WindowMouse for CandidateMouse {
                     // 候选 / 翻页键：按下只记命中，松开仍在同一项上才动作（见 WM_LBUTTONUP）。
                     // SetCapture：移出窗口后松开也要收到，才能判「放弃」并放掉按下态。
                     i if i >= 0 || i == TAG_PAGE_PREV || i == TAG_PAGE_NEXT => {
-                        self.double_click.reset();
                         self.pressed = Some(i);
                         unsafe {
                             SetCapture(self.hwnd);
@@ -5112,21 +4883,6 @@ impl WindowMouse for CandidateMouse {
                     self.dragging = false;
                     unsafe {
                         let _ = ReleaseCapture();
-                    }
-                    // 双击判定：只收「按下到松开窗口没挪」的空白处单击——拖过一下的不算，
-                    // 否则拖完紧跟一次点击也会截图。候选项 / 翻页键走下面的 else，不经这里。
-                    let (interval, slop) = crate::double_click::system_thresholds();
-                    if self.window_origin() == Some(self.drag_origin) {
-                        let mut p = POINT::default();
-                        unsafe {
-                            let _ = GetCursorPos(&mut p);
-                        }
-                        let now = Instant::now();
-                        if self.double_click.on_click(now, p.x, p.y, interval, slop) {
-                            let _ = self.events.send(UiEvent::CandidateDoubleClick);
-                        }
-                    } else {
-                        self.double_click.reset();
                     }
                     // 以真实窗口位置落定，避免累积误差
                     if let Some(pos) = self.window_origin() {
@@ -5356,254 +5112,6 @@ mod pixel_release_tests {
         w.show();
         assert!(!w.release_idle_pixels_at(Instant::now() + HIDDEN_RELEASE_AFTER * 2));
         assert!(!w.window.buffer().is_empty(), "期间又显示过 ⇒ 不放");
-    }
-}
-
-/// 展开态（多行网格）的版式：一行一页、列对齐、只有高亮行显示序号、末屏补行、宽度只增不减。
-///
-/// 依赖 mock 文本测量，gate 同 `min_size_tests`。
-#[cfg(all(test, mock_text))]
-mod grid_tests {
-    use super::*;
-    use crate::view::Rect;
-    use aurora_ui_types::CandidateGrid;
-
-    fn cand(text: &str) -> CandidateItem {
-        CandidateItem {
-            text_styled: Default::default(),
-            text: text.to_string(),
-            code: String::new(),
-            label: String::new(),
-            tooltip: Default::default(),
-            comment: Default::default(),
-            comment_above: Default::default(),
-            no_index: false,
-        }
-    }
-
-    /// 造一个展开态候选窗：`texts` 逐行平铺，每行 `cols` 个，可见 `rows` 行，高亮第 `hl` 行。
-    fn grid_win(cols: u16, rows: u16, hl: u16, texts: &[&str]) -> CandidateWindow {
-        let (tx, _rx) = std::sync::mpsc::channel();
-        let mut w = CandidateWindow::new(CandidateWindowConfig::default(), tx).unwrap();
-        w.scale = 1.0;
-        w.set_orientation(false, false, false);
-        refill(&mut w, cols, rows, hl, texts);
-        w
-    }
-
-    fn refill(w: &mut CandidateWindow, cols: u16, rows: u16, hl: u16, texts: &[&str]) {
-        w.set_grid(Some(CandidateGrid {
-            cols,
-            rows,
-            highlight_row: hl,
-            index_start: hl * cols,
-            index_count: cols,
-            tabs: 0,
-            active_tab: 0,
-        }));
-        // 序号与协调器一致：每行都是 1..cols。
-        let items = texts
-            .iter()
-            .enumerate()
-            .map(|(i, t)| CandidateItem {
-                text_styled: Default::default(),
-                label: (i % cols as usize + 1).to_string(),
-                ..cand(t)
-            })
-            .collect();
-        w.update("", 0, "", items, hl as usize * cols as usize, -1, 1, 3);
-    }
-
-    fn laid(w: &CandidateWindow) -> View {
-        let mut root = w.build_tree(false);
-        root.layout(0.0, 0.0, &w.text_renderer);
-        root
-    }
-
-    fn hit(root: &View, tag: i32) -> Rect {
-        let mut hits = Vec::new();
-        root.collect_hits(&mut hits);
-        hits.iter()
-            .find(|(t, _)| *t == tag)
-            .unwrap_or_else(|| panic!("未找到 tag={tag} 的格子"))
-            .1
-    }
-
-    /// 序号叶子：(文字, 不透明度)。按树序收集。
-    fn index_leaves(v: &View, out: &mut Vec<(String, u8)>) {
-        if let Some(t) = &v.text
-            && t.chars().all(|c| c.is_ascii_digit())
-            && !t.is_empty()
-        {
-            out.push((t.clone(), v.text_color[3]));
-        }
-        for c in &v.children {
-            index_leaves(c, out);
-        }
-    }
-
-    const SIX: &[&str] = &["一", "一二三", "一", "一二", "一", "一二"];
-
-    /// 第二行落在第一行下方，同列的格子左缘与宽度都对齐。
-    #[test]
-    fn cells_align_by_column() {
-        let w = grid_win(3, 2, 0, SIX);
-        let root = laid(&w);
-        for c in 0..3 {
-            let (a, b) = (hit(&root, c), hit(&root, c + 3));
-            assert!(b.y > a.y, "第 {c} 列：第二行在下方");
-            assert_eq!((a.x, a.w), (b.x, b.w), "第 {c} 列：上下对齐");
-        }
-        // 列宽取该列最宽的格子：第 1 列的「一二三」比第 0 列的「一二」宽。
-        assert!(hit(&root, 1).w > hit(&root, 0).w);
-    }
-
-    /// 只有高亮行显示序号，其余行的序号是透明的占位（宽度照占，文字才对得齐）。
-    #[test]
-    fn only_the_highlighted_row_shows_indices() {
-        let w = grid_win(3, 2, 1, SIX);
-        let mut leaves = Vec::new();
-        index_leaves(&laid(&w), &mut leaves);
-        let alphas: Vec<u8> = leaves.iter().map(|(_, a)| *a).collect();
-        assert_eq!(leaves.len(), 6, "每格都有序号节点");
-        assert!(
-            alphas[..3].iter().all(|a| *a == 0),
-            "非高亮行透明: {alphas:?}"
-        );
-        assert!(alphas[3..].iter().all(|a| *a > 0), "高亮行可见: {alphas:?}");
-    }
-
-    /// 悬停气泡的锚点：展开态贴整个内容区外侧（不是单格侧边），收起态横排放候选下方。
-    #[test]
-    fn tooltip_anchor_hugs_the_window_when_expanded() {
-        let w = grid_win(3, 2, 0, SIX);
-        let root = laid(&w);
-        let width = root.measured_size().0;
-        w.note_grid_width((6.0, 5.0), width);
-        let cell = hit(&root, 4);
-        assert_eq!(
-            w.tip_anchor(&cell),
-            (true, 6.0, 6.0 + width, 5.0, 5.0 + cell.h),
-            "展开态：停靠在窗口外侧顶端，不随行走"
-        );
-        let mut flat = grid_win(3, 2, 0, SIX);
-        flat.set_grid(None);
-        let cell = hit(&laid(&flat), 1);
-        assert_eq!(
-            flat.tip_anchor(&cell),
-            (false, cell.x, cell.x + cell.w, cell.y, cell.y + cell.h),
-            "收起态横排：放下方"
-        );
-    }
-
-    /// 刚展开时重新起算「鼠标动过没有」：窗口往下长到静止的鼠标底下，不该凭空冒出悬停。
-    /// 已在展开态时（滚屏、切分类）不动闸门，否则鼠标停在格子上每滚一下悬停就掉一次。
-    #[test]
-    fn expanding_resets_the_hover_gate_once() {
-        let mut w = grid_win(3, 2, 0, SIX);
-        w.set_grid(None);
-        w.visible = true;
-        w.mouse.borrow_mut().engaged = true;
-        refill(&mut w, 3, 2, 0, SIX);
-        assert!(!w.mouse.borrow().engaged, "收起 → 展开：闸门重新起算");
-        w.mouse.borrow_mut().engaged = true;
-        refill(&mut w, 3, 2, 1, SIX);
-        assert!(w.mouse.borrow().engaged, "展开态里再收到网格帧：不动闸门");
-    }
-
-    /// 分类标签栏：只画位集里的标签，各带 `GRID_TAB_TAG_BASE + 编号` 的命中 tag，当前分类画
-    /// 选中底色；标签栏在表格下方、与翻页箭头同一行，首行位置与收起态一致。
-    #[test]
-    fn tab_bar_lists_the_offered_tabs() {
-        use aurora_ui_types::{GRID_TAB_TAG_BASE as B, GridTab};
-        let mut w = grid_win(3, 2, 0, SIX);
-        w.set_grid(Some(CandidateGrid {
-            cols: 3,
-            rows: 2,
-            highlight_row: 0,
-            index_start: 0,
-            index_count: 3,
-            tabs: GridTab::All.bit() | GridTab::Single.bit() | GridTab::Rare.bit(),
-            active_tab: GridTab::Single as u8,
-        }));
-        let root = laid(&w);
-        let mut hits = Vec::new();
-        root.collect_hits(&mut hits);
-        let tab_tags: Vec<i32> = hits
-            .iter()
-            .map(|(t, _)| *t)
-            .filter(|t| (B..B + 8).contains(t))
-            .collect();
-        assert_eq!(tab_tags, vec![B, B + 1, B + 3], "只有给出的三个标签");
-        let last_row = hit(&root, 3);
-        let tab = hit(&root, B);
-        assert!(tab.y >= last_row.y + last_row.h, "标签栏在表格下方");
-        // 与翻页箭头同一行：两者纵向区间有重叠。
-        let next = hit(&root, TAG_PAGE_NEXT);
-        assert!(
-            tab.y < next.y + next.h && next.y < tab.y + tab.h,
-            "标签与翻页箭头同一行：tab={tab:?} next={next:?}"
-        );
-        assert!(next.x > tab.x, "翻页箭头在标签右边");
-        // 首行的位置与收起态的单行一致：展开是原地往下长出来。
-        let mut flat = grid_win(3, 2, 0, SIX);
-        flat.set_grid(None);
-        assert_eq!(
-            hit(&laid(&flat), 0).y,
-            hit(&root, 0).y,
-            "首行不被标签栏推下去"
-        );
-        let sel = Some(aurora_theme::fallback::SELECTED_BG);
-        assert_eq!(bg_of(&root, B + 1).unwrap(), sel, "当前分类画选中底色");
-        assert_ne!(bg_of(&root, B).unwrap(), sel);
-    }
-
-    /// 末屏只有两行时补占位行，窗口与满屏等高；占位行不是命中目标。
-    #[test]
-    fn short_screen_is_padded_to_full_height() {
-        let full = grid_win(3, 3, 0, &["一"; 9]);
-        let short = grid_win(3, 3, 0, &["一"; 6]);
-        let (h_full, h_short) = (
-            laid(&full).measured_size().1,
-            laid(&short).measured_size().1,
-        );
-        assert_eq!(h_full, h_short);
-        let mut hits = Vec::new();
-        laid(&short).collect_hits(&mut hits);
-        assert_eq!(hits.iter().filter(|(t, _)| *t >= 0 && *t < 100).count(), 6);
-    }
-
-    /// 一次展开期间宽度只增不减：滚到窄的一屏，窗口仍是之前的宽度；收起后复位。
-    #[test]
-    fn width_never_shrinks_while_expanded() {
-        let mut w = grid_win(3, 2, 0, &["一二三四五", "一", "一", "一", "一", "一"]);
-        let wide = laid(&w).measured_size().0;
-        w.note_grid_width((0.0, 0.0), wide);
-        refill(&mut w, 3, 2, 0, &["一"; 6]);
-        assert_eq!(laid(&w).measured_size().0, wide, "滚到窄的一屏宽度不回缩");
-        w.set_grid(None);
-        w.update("", 0, "", vec![cand("一")], 0, -1, 1, 1);
-        assert!(laid(&w).measured_size().0 < wide, "收起后按内容");
-    }
-
-    fn bg_of(v: &View, tag: i32) -> Option<Option<[u8; 4]>> {
-        if v.tag == tag {
-            return Some(v.bg);
-        }
-        v.children.iter().find_map(|c| bg_of(c, tag))
-    }
-
-    /// 选中项是平铺下标：`selected = 3` ⇒ 第二行第一格画选中底色，其余格都不画。
-    #[test]
-    fn selected_cell_is_addressed_by_flat_index() {
-        let w = grid_win(3, 2, 1, SIX);
-        let root = laid(&w);
-        let sel_bg = Some(aurora_theme::fallback::SELECTED_BG);
-        assert!(hit(&root, 3).y > hit(&root, 0).y, "第 3 格在第二行");
-        for tag in 0..6 {
-            let bg = bg_of(&root, tag).expect("每格都在树里");
-            assert_eq!(bg == sel_bg, tag == 3, "格 {tag} 的底色 {bg:?}");
-        }
     }
 }
 
@@ -8326,7 +7834,6 @@ mod tip_hold_tests {
             drag_origin: (0, 0),
             drag_pin: None,
             margin: (0, 0, 0, 0),
-            double_click: crate::double_click::DoubleClick::new(),
             tip_hold: TipHold::Off,
             tip_released: false,
             tip_for: Rc::new(Cell::new(-1)),

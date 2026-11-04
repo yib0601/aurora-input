@@ -79,7 +79,7 @@ pub fn generate(data_dir: Option<&Path>) -> anyhow::Result<serde_json::Value> {
             );
         }
         // `map` 键整表就是一个值：出厂表非空时 `leaf_entries` 会下钻到 `<key>.<id>`，按键名
-        // 查叶子就落空（`input.emoji.modules` 即此例），故直接按路径取子表。
+        // 查叶子就落空（`keys.key_actions` 即此例），故直接按路径取子表。
         let value = match f.ty {
             FieldType::Map(_) => lookup_path(&preset, f.key),
             _ => leaves.get(f.key),
@@ -207,11 +207,6 @@ mod tests {
         assert_eq!(
             find("schema.active")["default"],
             serde_json::json!("wubi86")
-        );
-        // 配对跳出键默认只含右符号：设置界面的默认勾选态直接取自这里，漂了就会与内核不一致。
-        assert_eq!(
-            find("input.auto_pair.jump_out_keys")["default"],
-            serde_json::json!(["right_symbol"])
         );
         // 普通默认值
         assert_eq!(
