@@ -1163,7 +1163,7 @@ async def overlay_interaction_cases(bus, im):
         check("气泡交互：指针离开后按时长自动消失", gone is not None and not gone[5],
               f"window={gone}")
 
-    # d) 右键气泡 → 气泡菜单（常驻显示 / 焦点切换时显示 / 固定位置 / 恢复默认位置 / 截图）；
+    # d) 右键气泡 → 气泡菜单（常驻显示 / 焦点切换时显示 / 固定位置 / 恢复默认位置）；
     #    菜单开着时气泡不消失；点「固定位置」→ 以气泡当前位置落盘（经 pos.status_tip.query）。
     st = await pop_status(c)
     menu = None
@@ -1257,7 +1257,7 @@ async def overlay_interaction_cases(bus, im):
     await c.key("Escape")
     c.take()
 
-    # i) 右键提示 → 提示菜单（复制「段」/ 上屏「段」/ … / 复制全部 / 截图此窗口）；菜单开着时
+    # i) 右键提示 → 提示菜单（复制「段」/ 上屏「段」/ … / 复制全部）；菜单开着时
     #    提示不消失；点第一项（复制类）→ 剪贴板里是提示内容，并弹「提示内容已复制」。
     menu, tip = await open_tooltip_menu(c)
     ok = menu is not None and menu[5]

@@ -2,7 +2,7 @@
 //!
 //! 与 macOS 的 `pbcopy` / `open` 同一路数——服务进程不链接任何桌面库，全部经外部命令：
 //! Wayland 会话用 `wl-clipboard`，X11 会话用 `xclip`（其次 `xsel`），打开走 `xdg-open`。
-//! 工具缺失时**如实报错**，不返回假成功（同 `screenshot::copy_bgra_to_clipboard` 的既有约定）。
+//! 工具缺失时**如实报错**，不返回假成功。
 //!
 //! ⚠ 服务进程由 systemd 用户单元拉起时可能没有 `WAYLAND_DISPLAY` / `DISPLAY`，此时选不到
 //! 后端；安装单元须 `import-environment`，或由 addon 拉起服务以继承会话环境。
@@ -196,23 +196,6 @@ pub fn get_text() -> String {
             tracing::debug!("读剪贴板失败: {e}");
             String::new()
         }
-    }
-}
-
-/// 把 PNG 字节写入图片剪贴板。
-pub fn set_png(png: &[u8]) -> anyhow::Result<()> {
-    match pick_backend().ok_or_else(no_backend)? {
-        Backend::WlClipboard => {
-            let mut c = Command::new("wl-copy");
-            c.args(["--type", "image/png"]);
-            pipe_into(c, png)
-        }
-        Backend::Xclip => {
-            let mut c = Command::new("xclip");
-            c.args(["-selection", "clipboard", "-t", "image/png"]);
-            pipe_into(c, png)
-        }
-        Backend::Xsel => anyhow::bail!("xsel 不支持图片剪贴板，请安装 xclip 或 wl-clipboard"),
     }
 }
 

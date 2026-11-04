@@ -54,7 +54,6 @@ mod menu_host;
 #[cfg(ext_presenter)]
 mod overlay_host;
 pub mod popup_menu;
-pub mod screenshot;
 pub mod soft_keyboard;
 /// macOS 软键盘面板的主线程宿主（AppKit 只能在主线程碰，forwarder 是工作线程）。
 #[cfg(target_os = "macos")]

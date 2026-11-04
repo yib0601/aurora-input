@@ -1683,7 +1683,7 @@ pub enum BoundAction {
     /// 的 `bool` 契约。混进那份白名单的症状是「按了没反应」。
     /// 判据：**开启后是否需要接管后续按键**——`toggle_toolbar` 不接管，本动作接管。
     SoftKeyboard(Option<String>),
-    /// A 类状态切换（`toggle_punct` / `take_screenshot` 那类）。
+    /// A 类状态切换（`toggle_punct` / `toggle_toolbar` 那类）。
     ///
     /// 携带动词原文，由协调器转交 `dispatch_hotkey` ——那里是这批动作的既有单点，
     /// 复制一份实现只会让两处慢慢漂移。值域见 [`Self::DISPATCH_ACTIONS`]。
@@ -1737,7 +1737,6 @@ impl BoundAction {
         "toggle_toolbar",
         "open_settings",
         "open_dictionary",
-        "take_screenshot",
     ];
 
     /// 该动作是否**只能绑无字符键**（修饰键）。
@@ -1749,7 +1748,7 @@ impl BoundAction {
     /// | 动作 | 限修饰键 | why |
     /// |---|---|---|
     /// | `toggle_mode` / `switch_engine` / `toggle_schema:*` / `switch_schema:*` | 是 | 正是用来离开/返回英文态的 |
-    /// | `toggle_punct` / `toggle_s2t` / `toggle_t2s` / `take_screenshot` … | 否 | 本就只在中文态有意义（全局那份也带 `CHINESE_ONLY`） |
+    /// | `toggle_punct` / `toggle_s2t` / `toggle_t2s` … | 否 | 本就只在中文态有意义（全局那份也带 `CHINESE_ONLY`） |
     ///
     /// 这与「键有没有字符」是**正交的两问**，合起来才定得了插入点，见
     /// docs/design/schema-key-actions.md §4.1。
@@ -1812,7 +1811,7 @@ impl BoundAction {
             | Self::SwitchSchema(_)
             | Self::Command(_) => false,
             // A 类：只有这三个是「中文态才有意义」，其余（`toggle_mode` / `switch_engine` /
-            // `toggle_full_width` / `toggle_toolbar` / `open_settings` / `take_screenshot`）
+            // `toggle_full_width` / `toggle_toolbar` / `open_settings`）
             // 两模式都吃。分组与 `hotkey.rs` 里固定字段那两段逐条一致。
             //
             // ⚠️ 载荷是 `String`，**编译期穷举不了**，新增的 A 类动词会静默落进 `false`
@@ -4985,8 +4984,6 @@ pub struct KeysConfig {
     /// 不单独登记的理由：登记进 SESSION 表会让主输入路也吃掉它，而主输入路对它没有出口。
     #[serde(default = "default_quick_input_select")]
     pub quick_input_select: String,
-    #[serde(default = "default_take_screenshot")]
-    pub take_screenshot: String,
     /// 软键盘面板开关热键。
     ///
     /// ★ 出厂绑定住在**本字段**而不是 [`Self::key_actions`]。那张表是 `BTreeMap`，
@@ -5131,9 +5128,6 @@ fn default_open_add_word_dialog() -> String {
 }
 fn default_toggle_s2t() -> String {
     "ctrl+shift+j".to_string()
-}
-fn default_take_screenshot() -> String {
-    "ctrl+shift+f11".to_string()
 }
 fn default_softkeyboard() -> String {
     "ctrl+shift+k".to_string()
@@ -5331,7 +5325,6 @@ impl Default for KeysConfig {
             pin_candidate: default_pin_candidate(),
             delete_candidate: default_delete_candidate(),
             quick_input_select: default_quick_input_select(),
-            take_screenshot: default_take_screenshot(),
             softkeyboard: default_softkeyboard(),
             global_hotkeys: Vec::new(),
             legacy_schema_hotkeys: HashMap::new(),
@@ -7185,7 +7178,6 @@ mod bound_action_chinese_only_tests {
             ("toggle_toolbar", false),
             ("open_settings", false),
             ("open_dictionary", false),
-            ("take_screenshot", false),
             // 只在中文态有意义。
             ("toggle_punct", true),
             ("toggle_s2t", true),

@@ -171,7 +171,6 @@
   "session_actions": {},
   "softkeyboard": "ctrl+shift+k",
   "switch_engine": "ctrl+shift+e",
-  "take_screenshot": "ctrl+shift+f11",
   "toggle_full_width": "shift+space",
   "toggle_mode_keys": [
    "lshift",

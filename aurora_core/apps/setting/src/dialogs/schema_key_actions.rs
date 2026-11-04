@@ -688,7 +688,6 @@ mod tests {
             "toggle_full_width",
             "toggle_toolbar",
             "open_settings",
-            "take_screenshot",
             "temp_pinyin",
             "aux_code",
             "mix:quick_mix",

@@ -1928,7 +1928,6 @@ impl SchemaManagerState {
             ("toggle_t2s", "繁体/简体切换"),
             ("toggle_toolbar", "显示/隐藏工具栏"),
             ("open_settings", "打开设置"),
-            ("take_screenshot", "截图"),
         ] {
             out.push(Verb {
                 value: value.into(),

@@ -537,16 +537,6 @@ impl StatusTip {
         }
     }
 
-    /// 将当前渲染帧保存为 PNG 文件（截图用）。
-    pub fn capture_to_file(&self, path: &std::path::Path) -> Result<(), String> {
-        self.window.capture_to_file(path)
-    }
-
-    /// 将当前渲染帧复制到剪贴板（截图用）。
-    pub fn capture_to_clipboard(&self) -> Result<(), String> {
-        self.window.capture_to_clipboard()
-    }
-
     /// 用户是否正在与气泡交互（拖动 / 悬停 / 右键菜单打开）。
     /// 临时模式的自动隐藏须在此期间顺延——否则用户正拖着它、或菜单还开着，气泡就消失了。
     pub fn interacting(&self) -> bool {
@@ -578,7 +568,7 @@ impl StatusTip {
         }
     }
 
-    /// 返回状态提示窗口句柄（截图用）。
+    /// 返回状态提示窗口句柄。
     #[cfg(windows)]
     pub fn hwnd(&self) -> windows::Win32::Foundation::HWND {
         self.window.hwnd()

@@ -41,11 +41,6 @@ resvg = { version = "0.44", default-features = false, features = ["raster-images
 # 主题内嵌图片（`data:image/...;base64,` 形态）的载荷解码，见 image_cache。
 # 版本跟随 aurora-cmdbar 里既有的那一份。
 base64 = "0.22"
-# 截图文件名的本地时间戳（非 Windows 分支；Windows 用 GetLocalTime）
-chrono = "0.4"
-# 外部宿主 forwarder（macOS / Linux）的扩展信封的 JSON body（`shot.panel` 等）。手拼字符串在这里不安全：路径里可能有
-# 引号或反斜杠，转义漏一处就是对端解不出的坏包。
-serde_json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # 局部追加 StationsAndDesktops：诊断浮层归属的桌面/窗口站（见 window.rs 的

@@ -29,7 +29,7 @@ Fcitx5 的 `InputContext`。引擎/词库/候选逻辑全在服务里，这里**
 | HiDPI（帧 `scale>1`） | 按物理像素原样贴 | X11 没有逻辑坐标，服务端在 Linux 上目前恒发 scale=1 |
 | 候选窗拖动 / 固定位置回报（`pos.candidate` / `pos.candidate.query`） | 未接 | 服务端问位置时不答 = 保留旧值（macOS 不可见时也不答，语义安全） |
 | 候选右键菜单 / 功能主菜单 | 已接（X11） | 见「自绘菜单」。缺：Wayland；多显示器（工作区取整块根窗口）；点菜单外那一下被菜单吃掉（同 X11 原生菜单，Windows 会透传）；菜单开着时在候选上再右键只关菜单、不接着弹新菜单（Windows 会） |
-| tooltip / 状态气泡 / toast | 已接（X11），含鼠标交互 | 见「光栅浮层」：悬停保持、气泡拖动与右键菜单、提示右键菜单（复制 / 上屏 / 截图）、Toast 点击关闭，e2e 逐项覆盖。缺：Wayland；多显示器（拖动夹回按整块根窗口）；「截图所有窗口到文件」（`TakeScreenshot` 的 `shot.panel`）仍只截候选窗（气泡 / 提示菜单里的「截图此窗口」已可用）；提示菜单开着时点在提示上只关菜单、不接着弹新菜单（Windows 会重新请求） |
+| tooltip / 状态气泡 / toast | 已接（X11），含鼠标交互 | 见「光栅浮层」：悬停保持、气泡拖动与右键菜单、提示右键菜单（复制 / 上屏）、Toast 点击关闭，e2e 逐项覆盖。缺：Wayland；多显示器（拖动夹回按整块根窗口）；提示菜单开着时点在提示上只关菜单、不接着弹新菜单（Windows 会重新请求） |
 | 多显示器下的浮层锚点 | 未做 | 工作区取整个根窗口（同候选窗）：Toast / 锚点气泡落在整块虚拟屏的角上，而不是光标所在显示器 |
 | 命令直通车按键合成（`CMD_KEY_TAP/SEQ/HOLD/RELEASE`） | 已接（`forwardKey`） | 见「命令直通车按键合成」。与 Windows（`SendInput`，系统级）/ macOS（CGEvent 发到会话）不同：**只打进当前输入上下文所在的应用**，窗口管理器级的全局快捷键（如 Super+E）不会触发；`hold` 不改变 X 服务器的真实修饰态；`capslock` 只是把键交给应用，不切换大写锁定。e2e（DBus 前端）逐条覆盖，XIM 手工探针验过；GTK / Qt 模块、Wayland 前端、真实应用里的行为未验 |
 | 出厂命令短语（`system.phrases.toml` 的 `$CC`） | 按平台取舍 | `cono` / `coca` 在 Linux 上是 `proc.any` 多候选（装了哪个编辑器 / 计算器就开哪个），`cohm` 走 `xdg-open`；`codl`（删行，`key.seq("Home", "Shift+End", "Backspace")`）经上一行的按键合成生效，e2e 断言了它的 ForwardKey 序列。审计清单与取舍见设计文档 §5e。e2e 仅在 `linux-host` 形态下验证（假程序放进 PATH）；各真实桌面上的程序名没有逐个验过 |
@@ -37,7 +37,6 @@ Fcitx5 的 `InputContext`。引擎/词库/候选逻辑全在服务里，这里**
 | 系统输入法配置里的「配置」按钮 | ExternalOption → 设置程序 | e2e 验了 `Controller1.GetConfig` 的描述与命令可启动；fcitx5-configtool 5.1.6+ 直接启动，22.04（5.0.x）显示一页一个按钮；真机点按钮与 Deepin 配置界面未验 |
 | 非嵌入模式的占位组合 | 不写进应用（addon 过滤） | 见设计文档 §5d |
 | 工具栏 / 软键盘 | 已接（0.127，X11 与 Wayland） | addon 自绘、服务端出像素 |
-| 截图所有窗口到文件（主菜单「高级」） | 已接 | 候选窗与各浮层的像素都在服务进程，就地编码存盘（`manager_macos.rs` 的 `TakeScreenshot`，macOS 同一份）；不含菜单。此前因流程按「像素在宿主」写（`shot.panel`）而摘掉，现已不需要宿主回应 |
 | 按应用独立配置（compat） | 机制可用，真机验过（2026-10-09：两个应用分别默认中文 / 英文，切换焦点时正确切换）；**打包时不带 Windows 内置规则**（`scripts/lib/gen-compat.sh linux` 生成「字段说明 + 零规则」的 Linux 版系统层，各平台兼容策略不共用） | 服务按 `FOCUS_GAINED` 的 bundleId（= `InputContext::program()`）匹配规则，同 macOS；设置端的应用兼容性窗口保留 |
 | 打开设置（`settings.open` 扩展信封） | 已接 | `WindEngine::onExt` → `spawnDetached`（与拉起服务同一个：双 fork 不留僵尸、新会话、继承 fcitx5 的会话环境，但不继承它的 fd 与信号处置；`fcitx::startProcess` 只做前两样）。设置程序已开着时由它自己的单实例转发参数；但**转来的切页要等设置窗口下一次输入事件才显示**（auroraui Linux 后端，冷启动深链正常） |
 | 系统关联（`aurora-input://` 协议、`.wpkg` / `.wtheme`） | 已接（deb 声明 + 设置程序可按用户注册） | deb 装 `scripts/linux/pkg/` 下两个 `.desktop` 与 `windinput.xml`，类型图标在 `data/icons/hicolor/*/mimetypes/`（`scripts/linux/gen-mime-icons.py`）；便携 / tarball 在设置「高级 → 系统集成」按用户注册（写 `$XDG_DATA_HOME`）。`scripts/linux/e2e-assoc.sh` 覆盖类型识别、默认处理者、`xdg-open` / `gio open` 拉起设置程序进导入确认、首实例已开时转参、注册/取消一圈。未验：真桌面文件管理器双击（Nautilus / Dolphin / Deepin）、KDE 的 ktraderclient 查询分支、snap / flatpak 浏览器点链接；用户级注册不装图标 |
@@ -205,7 +204,7 @@ addon 在主线程（经 EventDispatcher）按名只读打开 SHM、拷出一帧
     **作废、不上报**——X 在窗口不可见时自动放掉隐式抓取，不会有松开事件。典型是拖动中失焦：服务端
     失焦即收状态提示（同 Windows），这次拖动随之作废（Windows 的气泡窗口隐藏后仍持有鼠标捕获，
     松手照报落点；Linux 不跟：用户没松手，谈不上摆到了哪）。气泡菜单请求 2 秒内菜单没来（服务
-    没了）就放开保持。截图（菜单里的「截图此窗口」）在服务端就地从该层 SHM 读回。
+    没了）就放开保持。
 - **落位归 addon**：服务拿不到屏幕几何，帧里只给规则（坐标都指**内容盒**，窗口 = 内容 − 阴影扩边）：
   `ABSOLUTE`（状态气泡固定位置）、`FLIP`（首选点 + 右溢/下溢时的备选点：状态气泡跟随光标）、
   `FOLLOW_CANDIDATE`（tooltip：坐标按候选窗**建议**落点算，addon 先平移「候选窗实际落点 −

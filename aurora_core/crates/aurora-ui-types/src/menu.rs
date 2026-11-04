@@ -106,10 +106,6 @@ pub enum MenuCmd {
     OpenSettings,
     /// 关于（暂兜底）
     OpenAbout,
-    /// 截图所有可见 UI 窗口到文件（高级菜单）
-    TakeScreenshot,
-    /// 截图候选窗口到剪贴板（高级菜单）
-    ScreenshotCandidateToClipboard,
     /// 切换密码框强制英文（高级菜单，临时测试入口）
     TogglePasswordSuppress,
     /// 状态提示气泡：切换常驻显示（display_mode always/temp）
@@ -118,8 +114,6 @@ pub enum MenuCmd {
     StatusToggleShowOnFocus,
     /// 状态提示气泡：恢复默认位置（position_mode=follow_caret）
     StatusResetPosition,
-    /// 状态提示气泡：截图此窗口
-    StatusScreenshot,
     /// 悬停提示：复制全部（取原始行，未截断、未折行）
     TooltipCopy,
     /// 悬停提示：复制右键点中的那一段（原始行，不含段名）
@@ -130,8 +124,6 @@ pub enum MenuCmd {
     TooltipCopyLine,
     /// 悬停提示：上屏右键点中的那一行（仅逐字段）
     TooltipCommitLine,
-    /// 悬停提示（编码反查气泡）：截图此窗口
-    TooltipScreenshot,
     /// 状态提示气泡：切换固定位置（position_mode fixed/follow_caret）
     StatusTogglePinned,
     /// 为当前焦点应用设置候选窗首显策略（compat.toml 的 first_show_mode）。
@@ -225,6 +217,10 @@ impl MenuKind {
     /// id 区间：1 复制｜10-19 词条操作｜100-199 固定命令｜1000+ 方案｜2000+ 主题｜3000+ 过滤｜
     /// 4000+ 明暗｜5000+ 候选窗首显｜6000+ 初始中英｜7000+ 初始标点｜8000+ 诊断 HUD 分区｜
     /// 9000+ 自动配对｜10000+ 语言栏图标角标形状｜11000+ 软键盘面｜12000+ 候选窗定位｜
+    ///
+    /// ⚠ 111/112/117/119 是**空号**（截图族功能已整块删除）：删变体时没有重排其它 id，
+    /// 因为 id 会经 `NSMenuItem.tag` 跨进程回传，挪号会让旧前端点到的项错位。这几个号
+    /// 也不要复用——同一个号在旧前端眼里仍是「截图」，新语义会张冠李戴。
     /// 13000+ 忽略宿主关闭输入法｜14000+ 密码框强制英文｜15000+ 按应用方案｜
     /// 16000+ 按应用状态气泡定位｜17000+ 按应用状态气泡兜底位置｜18000+ 按应用整条规则启用 / 禁用。
     pub fn to_menu_id(self) -> i32 {
@@ -251,15 +247,11 @@ impl MenuKind {
                 MenuCmd::OpenDictionary => 108,
                 MenuCmd::OpenSettings => 109,
                 MenuCmd::OpenAbout => 110,
-                MenuCmd::TakeScreenshot => 111,
-                MenuCmd::ScreenshotCandidateToClipboard => 112,
                 MenuCmd::OpenAppDir => 113,
                 MenuCmd::OpenLogDir => 114,
                 MenuCmd::StatusToggleAlways => 115,
                 MenuCmd::StatusResetPosition => 116,
-                MenuCmd::StatusScreenshot => 117,
                 MenuCmd::TooltipCopy => 118,
-                MenuCmd::TooltipScreenshot => 119,
                 MenuCmd::StatusTogglePinned => 122,
                 MenuCmd::StatusToggleShowOnFocus => 123,
                 MenuCmd::TogglePasswordSuppress => 121,
@@ -314,15 +306,11 @@ impl MenuKind {
             108 => MenuCmd::OpenDictionary,
             109 => MenuCmd::OpenSettings,
             110 => MenuCmd::OpenAbout,
-            111 => MenuCmd::TakeScreenshot,
-            112 => MenuCmd::ScreenshotCandidateToClipboard,
             113 => MenuCmd::OpenAppDir,
             114 => MenuCmd::OpenLogDir,
             115 => MenuCmd::StatusToggleAlways,
             116 => MenuCmd::StatusResetPosition,
-            117 => MenuCmd::StatusScreenshot,
             118 => MenuCmd::TooltipCopy,
-            119 => MenuCmd::TooltipScreenshot,
             122 => MenuCmd::StatusTogglePinned,
             123 => MenuCmd::StatusToggleShowOnFocus,
 

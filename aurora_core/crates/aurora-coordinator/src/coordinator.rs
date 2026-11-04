@@ -5065,14 +5065,6 @@ impl Coordinator {
         true
     }
 
-    /// 触发截图所有可见 UI 窗口，保存到用户配置目录下的 screenshots/ 子目录。
-    pub(crate) fn trigger_screenshot(&self) {
-        if let Some(dir) = aurora_config::Config::user_config_dir() {
-            let dir = dir.join("screenshots").display().to_string();
-            let _ = self.ui_tx.send(UiCommand::TakeScreenshot { dir });
-        }
-    }
-
     /// 按当前配置（bundle）重新下发外观相关 UI 指令并同步运行时态。
     /// 热重载用：候选排列方向 / 编码显示方式 / 候选窗显隐 改动即时生效（无需重启）。
     /// 与命令栏 ime.toggle 共写同一组运行时 Mutex；以 config 为准重置（config 为持久化真相源）。
@@ -8355,10 +8347,6 @@ impl Coordinator {
                 self.open_dictionary();
                 true
             }
-            "take_screenshot" => {
-                self.trigger_screenshot();
-                true
-            }
             // macOS 桌面专属：Windows 上该动作由 ctfmon 原生处理，本进程收不到、也不该处理；
             // headless（无 desktop-ui）落 `_` 臂 debug 忽略。
             #[cfg(all(feature = "desktop-ui", target_os = "macos"))]
@@ -8388,14 +8376,13 @@ impl Coordinator {
     fn build_global_hotkey_entries(&self) -> Vec<GlobalHotkeyEntry> {
         let rt = self.rt();
         let k = &rt.config.keys;
-        let supported: [(&str, &str); 8] = [
+        let supported: [(&str, &str); 7] = [
             ("switch_engine", k.switch_engine.as_str()),
             ("toggle_full_width", k.toggle_full_width.as_str()),
             ("toggle_punct", k.toggle_punct.as_str()),
             ("toggle_toolbar", k.toggle_toolbar.as_str()),
             ("open_settings", k.open_settings.as_str()),
             ("open_dictionary", k.open_dictionary.as_str()),
-            ("take_screenshot", k.take_screenshot.as_str()),
             ("toggle_s2t", k.toggle_s2t.as_str()),
         ];
         let mut entries: Vec<GlobalHotkeyEntry> = Vec::new();

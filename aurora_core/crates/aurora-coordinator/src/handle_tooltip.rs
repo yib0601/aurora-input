@@ -1,4 +1,4 @@
-//! 悬停提示（候选气泡）的右键菜单：按段 / 按行复制、上屏，复制全部，截图此窗口。
+//! 悬停提示（候选气泡）的右键菜单：按段 / 按行复制、上屏，复制全部。
 //!
 //! 气泡的显示结构（`TooltipDoc`）下发给 UI，原始行（复制 / 上屏的取值）留在协调器——
 //! 候选页组装时把本页每个候选的 [`RenderedTooltip`] 连同候选文本缓存进
@@ -10,7 +10,7 @@
 //! 一个 `[编码]` 段……）。段下标一错位，「上屏此行」就会取到别的段的内容。故：
 //!
 //! 1. **弹菜单时**核对 UI 所画与缓存一致：`RequestTooltipMenu` 带上 UI 所画 `TooltipDoc` 的
-//!    指纹，与缓存条目的指纹不等就不给任何取值类菜单项（只剩「截图此窗口」）。命中是按 UI
+//!    指纹，与缓存条目的指纹不等就不给任何取值类菜单项（此时连菜单都不弹）。命中是按 UI
 //!    所见换算的，缓存换了结构，那个 `(段, 行)` 在缓存里指的就不是用户点的那一行。
 //!    「复制全部」此时也不给：协调器手里只有缓存那一份，复制它等于复制一份用户没看见的内容。
 //! 2. **执行动作时**一律从弹菜单那一刻的**整份快照**（`TooltipMenuTarget::entry`）取值，
@@ -69,11 +69,11 @@ fn section_label(title: Option<&str>, section: usize) -> String {
 /// 按命中位置构建菜单（设计 §7.2）：
 /// - 命中某段 ⇒ 复制「段名」· 上屏「段名」；
 /// - 命中逐字段的某一行 ⇒ 另加 复制此行 · 上屏此行；
-/// - 有可信快照 ⇒ 复制全部；
-/// - 恒有 ⇒ 截图此窗口。
+/// - 有可信快照 ⇒ 复制全部。
 ///
 /// `entry` 为 `None` 表示没有可信快照（缓存里没有这个候选，或与 UI 所画不一致），此时
-/// 只剩「截图此窗口」；命中越界时退化为「复制全部 · 截图此窗口」。
+/// 没有任何可执行项，返回空表——调用方据此不弹菜单（见 [`Self::show_tooltip_menu`]）；
+/// 命中越界时退化为「复制全部」。
 pub(crate) fn tooltip_menu_items(
     entry: Option<&TooltipPageEntry>,
     hit: Option<TooltipHit>,
@@ -123,12 +123,6 @@ pub(crate) fn tooltip_menu_items(
     if entry.is_some() {
         items.push(M::leaf("复制全部", cmd(MenuCmd::TooltipCopy), true, false));
     }
-    items.push(M::leaf(
-        "截图此窗口",
-        cmd(MenuCmd::TooltipScreenshot),
-        true,
-        false,
-    ));
     items
 }
 
@@ -157,9 +151,11 @@ fn tooltip_value(
 impl Coordinator {
     /// 右键悬停提示：核对 UI 所画与缓存一致、记下快照、弹出菜单。
     ///
-    /// **先**发 SetTooltipMenuOpen(true) 抑制 tooltip 的 WM_MOUSELEAVE 自动隐藏——
+    /// 弹菜单**之前**发 SetTooltipMenuOpen(true) 抑制 tooltip 的 WM_MOUSELEAVE 自动隐藏——
     /// 右键弹出菜单后鼠标会移到菜单窗口上，若不抑制 tooltip 会当场消失，菜单就指向一个
-    /// 已不存在的窗口，「截图此窗口」会截空。抑制标志在菜单关闭时由 menu_close 统一清除。
+    /// 已不存在的窗口。抑制标志在菜单关闭时由 menu_close 统一清除。
+    ///
+    /// 没有任何可执行项时不弹菜单（见 `tooltip_menu_items`）。
     pub(crate) fn show_tooltip_menu(
         &self,
         x: i32,
@@ -168,14 +164,13 @@ impl Coordinator {
         hit: Option<TooltipHit>,
         doc_fingerprint: u64,
     ) {
-        let _ = self.ui_tx.send(UiCommand::SetTooltipMenuOpen(true));
         let target = {
             let page = self.tooltip_page.lock().unwrap_or_else(|e| e.into_inner());
             let idx = usize::try_from(candidate).ok();
             let entry = idx.and_then(|i| page.get(i));
             let consistent = entry.filter(|e| e.rendered.doc.fingerprint() == doc_fingerprint);
             if entry.is_some() && consistent.is_none() {
-                debug!("悬停提示菜单：候选 #{candidate} 的气泡与 UI 所画不一致，只给截图");
+                debug!("悬停提示菜单：候选 #{candidate} 的气泡与 UI 所画不一致，无可用项");
             }
             consistent.zip(idx).map(|(e, i)| TooltipMenuTarget {
                 candidate: i,
@@ -184,10 +179,18 @@ impl Coordinator {
             })
         };
         let items = tooltip_menu_items(target.as_ref().map(|t| &t.entry), hit);
+        // 快照先落账再判空表：没有可信快照时也把上一次的残留目标清掉，免得随后误点
+        // 一个早已不存在的菜单还能取到旧值。
         *self
             .tooltip_menu_target
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = target;
+        if items.is_empty() {
+            // 没有可信快照时连「复制全部」都给不出：弹一个空菜单比不弹更糟。
+            debug!("悬停提示菜单：没有可信的气泡快照，无可执行项，不弹菜单");
+            return;
+        }
+        let _ = self.ui_tx.send(UiCommand::SetTooltipMenuOpen(true));
         self.mark_menu_open(0, String::new());
         // Linux：气泡依附于候选，候选收起时菜单失去对象，与候选右键菜单同样随之收掉（见
         // `notify_ui_hide`）。Windows 那边 `HideCandidates` 本就连带收掉任何菜单。
@@ -366,12 +369,12 @@ mod tests {
     #[test]
     fn menu_items_follow_the_hit() {
         let e = entry();
-        let all = ["复制全部", "截图此窗口"];
+        let all = ["复制全部"];
         assert_eq!(labels(&tooltip_menu_items(Some(&e), None)), all, "内边距");
         assert_eq!(
             labels(&tooltip_menu_items(None, hit(0, None))),
-            ["截图此窗口"],
-            "没有可信快照（缓存缺失 / 与 UI 所画不一致）：不给任何取值项"
+            Vec::<&str>::new(),
+            "没有可信快照（缓存缺失 / 与 UI 所画不一致）：一个可执行项都没有，调用方不弹菜单"
         );
         assert_eq!(
             labels(&tooltip_menu_items(Some(&e), hit(1, Some(1)))),
@@ -381,25 +384,18 @@ mod tests {
                 "复制此行",
                 "上屏此行",
                 "",
-                "复制全部",
-                "截图此窗口"
+                "复制全部"
             ],
             "逐字段的内容行"
         );
         assert_eq!(
             labels(&tooltip_menu_items(Some(&e), hit(1, None))),
-            ["复制「拼音」", "上屏「拼音」", "", "复制全部", "截图此窗口"],
+            ["复制「拼音」", "上屏「拼音」", "", "复制全部"],
             "标题行没有「此行」"
         );
         assert_eq!(
             labels(&tooltip_menu_items(Some(&e), hit(0, Some(0)))),
-            [
-                "复制「完整原文」",
-                "上屏「完整原文」",
-                "",
-                "复制全部",
-                "截图此窗口"
-            ],
+            ["复制「完整原文」", "上屏「完整原文」", "", "复制全部"],
             "整段求值的段没有「此行」"
         );
         assert_eq!(
@@ -611,7 +607,7 @@ mod tests {
     }
 
     /// 审查探针，闸门一：UI 画的是旧结构、缓存已换成新结构（前面插了一段）⇒ 指纹不等，
-    /// 只给截图，不给任何取值项；此时硬点取值命令也只会放弃并 Toast。
+    /// 一个取值项都不给、菜单也不弹；此时硬点取值命令只会放弃并 Toast。
     #[test]
     fn menu_degrades_when_ui_and_cache_disagree() {
         let Some((c, rx, _u)) = typed("fp") else {
@@ -624,8 +620,14 @@ mod tests {
             .last()
             .cloned();
         prepend_code_section(&c);
-        let items = open_menu(&c, &rx, ui_fp, hit(0, Some(0)));
-        assert_eq!(items, ["截图此窗口"]);
+        let _ = drain(&rx);
+        c.show_tooltip_menu(0, 0, 0, hit(0, Some(0)), ui_fp);
+        assert!(
+            !drain(&rx)
+                .iter()
+                .any(|cmd| matches!(cmd, UiCommand::ShowCandidateMenu { .. })),
+            "没有任何可执行项时不该弹菜单"
+        );
         c.tooltip_menu_action(MenuCmd::TooltipCopyLine);
         assert_eq!(toasts(&rx), [ABANDONED_TOAST]);
         // 指纹一致时恢复完整菜单（对照：闸门不是一刀切）。

@@ -647,14 +647,6 @@ impl MacPanel {
         }
     }
 
-    pub fn capture_to_file(&self, path: &std::path::Path) -> Result<(), String> {
-        crate::screenshot::save_bgra_to_png(&self.buffer, self.width, self.height, path)
-    }
-
-    pub fn capture_to_clipboard(&self) -> Result<(), String> {
-        crate::screenshot::copy_bgra_to_clipboard(&self.buffer, self.width, self.height)
-    }
-
     /// 与 `LayeredWindow::hwnd` 同形的占位。macOS 无 HWND，恒返回默认值——
     /// `SoftMouse::hwnd` 在本平台不参与任何判断（拖动走的是 [`PanelMouse`] 的返回值）。
     pub fn hwnd(&self) -> crate::sys::HWND {

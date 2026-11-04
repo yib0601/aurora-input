@@ -62,10 +62,10 @@ Rust 核心跨平台，引擎/词库/候选/词频类改动 macOS 自动受益�
   平台中立的「常驻显示输入法当前状态」。
 
 已接：`RegisterGlobalHotkeys`（见下）、`OpenPath` / `OpenApp`（`/usr/bin/open`，
-`.app` 包走 `open -a … --args`）、`TakeScreenshot` / `ScreenshotCandidateToClipboard` /
-`CopyTooltipText`（见下）、`ReportCandidatePos` / `ReportStatusTipPos`（见下「浮窗拖动
-与位置固定」）、`ScreenshotStatusTip` / `ScreenshotTooltip`、`ShowCandidateMenu` / `HideMenu` /
-`MenuKey` / `MenuPointer` / `SetWorkArea` / `TooltipMenuAt`（见「光栅浮层」）。
+`.app` 包走 `open -a … --args`）、`CopyTooltipText`（见下「提示复制」）、
+`ReportCandidatePos` / `ReportStatusTipPos`（见下「浮窗拖动与位置固定」）、
+`ShowCandidateMenu` / `HideMenu` / `MenuKey` / `MenuPointer` / `SetWorkArea` /
+`TooltipMenuAt`（见「光栅浮层」）。
 
 ### 出厂短语的 `darwin` 条目
 
@@ -203,28 +203,16 @@ macOS 侧的通例是「服务进程只光栅化，窗口一律归 `.app`」—�
   由 IMK 在别的进程里绘制，无法自绘），继续用 `UnifiedMenuBuilder` 与精简菜单树。
 - **候选右键菜单不再抢键盘焦点**：此前 `NSMenu.popUp` 会让 Spotlight 这类宿主连发 Deactivate/Activate，
   需要 `CandidateMenuTracking` 那套「焦点闪断期」补偿；自绘非激活面板后根因消失，相关代码已删除。
-- **截图**：像素都在本进程（候选窗在 `render_frame`，浮层在各层 SHM），「截图所有窗口」「截图此窗口」
-  就地编码存盘并进剪贴板，不再需要 `.app` 参与，也没有屏幕录制授权问题。
 
 已知限制：Toast 的渲染缩放取主屏（`dpi::scale_for_point(0, 0)`），多屏且缩放不同时落在非主屏上会按主屏
 密度渲染（尺寸仍正确，只是清晰度随主屏）；CoreText 后端暂未实现主题字重（`font_styled` 忽略 weight）。
 
-### 候选窗截图 / 提示复制
+### 提示复制
 
-macOS 的候选窗**像素本来就在服务进程里**（我们光栅化后经 SHM 推给 `.app`），故截图不需要
-`.app` 参与：`Forwarder::capture_candidate` 直接拿 `render_frame()` 的 buffer 编码存盘。
-悬停提示的文本同理（随帧下发，服务侧有 `last_tip`），复制也不需要 `.app`。
-
-状态气泡与悬停提示的像素在各自的浮层 SHM 段里，截图同样就地做（见「光栅浮层」）。
-
-两处踩过的坑：
-
-- `screenshot::timestamp()` 在非 Windows 曾恒返回 `"00000000_000000"`，截图文件名不含真实
-  时间 → 第二张起静默覆盖第一张，而操作本身"成功"。现用 `chrono::Local`。
-- `copy_bgra_to_clipboard` 在非 Windows 曾是 `Ok(())` 空实现——**报告成功却什么都没做**，
-  上层据此弹「已截图到剪贴板」，用户粘贴才发现是空的。现走 PNG 临时文件 + `osascript`
-  的 `«class PNGf»`（与文本剪贴板走 `pbcopy` 同一路数，服务进程不必引入 AppKit）；
-  其它平台改为如实报错而非谎报成功。
+悬停提示右键菜单里的「复制」类项不需要 `.app` 参与：原文留在服务侧，协调器按**原始行**
+拼好后下发 `UiCommand::CopyTooltipText`，`Forwarder` 直接调 `crate::popup_menu::set_clipboard_text`
+写系统剪贴板（macOS 走 `pbcopy`，与加词取词同一条外部命令路径，服务进程不必引入 AppKit），
+再用右下角 Toast 反馈结果。
 
 ### 系统明暗
 

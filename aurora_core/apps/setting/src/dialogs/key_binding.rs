@@ -529,7 +529,7 @@ pub fn categorize_lead_verbs(verbs: &[Verb]) -> Vec<VerbCategory> {
             "temp_pinyin" | "temp_english" | "aux_code" | "rare_char" | "reverse" => &mut modes,
             "toggle_mode" | "switch_engine" | "toggle_full_width" | "toggle_punct"
             | "toggle_s2t" | "toggle_t2s" | "toggle_toolbar" => &mut states,
-            "open_settings" | "take_screenshot" | "softkeyboard" => &mut tools,
+            "open_settings" | "softkeyboard" => &mut tools,
             s if s.starts_with("mix:") || s.starts_with("special:") => &mut modes,
             s if s.starts_with("toggle_schema:") || s.starts_with("switch_schema:") => &mut schemas,
             // 命令不逐条进列表：「高级」类里那一项代表**所有**命令，表达式由输入框回填
@@ -1902,7 +1902,6 @@ mod tests {
             "toggle_t2s",
             "toggle_toolbar",
             "open_settings",
-            "take_screenshot",
             // 见 `verb_allowed` 里那段：压制低层同键绑定的唯一手段，不是功能动词。
             "none",
         ] {

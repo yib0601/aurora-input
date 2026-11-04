@@ -236,11 +236,6 @@ impl Toast {
         (buf, w, h, cw, ch, ml, mt, self.shadow.is_some())
     }
 
-    /// 将当前渲染帧保存为 PNG 文件（截图用）。
-    pub fn capture_to_file(&self, path: &std::path::Path) -> Result<(), String> {
-        self.window.capture_to_file(path)
-    }
-
     /// 窗口当前是否可见（查询 Win32 IsWindowVisible）。
     pub fn is_visible(&self) -> bool {
         #[cfg(windows)]
@@ -253,7 +248,7 @@ impl Toast {
         }
     }
 
-    /// 返回 Toast 窗口句柄（截图用）。
+    /// 返回 Toast 窗口句柄。
     #[cfg(windows)]
     pub fn hwnd(&self) -> windows::Win32::Foundation::HWND {
         self.window.hwnd()

@@ -27,7 +27,7 @@
 | `src/tooltip.rs` | 候选悬停反查气泡（显示编码/拼音） |
 | `src/text/dwrite.rs` | DirectWrite 文本测量/渲染（预乘 alpha 回写 BGRA）+ 非 Windows mock（0.6×em 等宽近似） |
 | `src/text/linux/` | Linux 真字形后端（仅 `linux-host` feature）：ttf-parser + ab_glyph_rasterizer，运行期 dlopen fontconfig；无 hinting、普通文字不整形；彩色 emoji（CBDT / COLR v0·v1 / OpenType-SVG）经 `color.rs` 光栅、emoji 序列经 `emoji.rs` 切簇后用 rustybuzz 整形，限制见 `mod.rs` 模块头。默认形态（feature 关）仍是 mock |
-| `src/overlay_host.rs` | Linux 外部宿主（仅 `linux-host`）：状态气泡 / Toast / tooltip 在服务进程光栅化，各层一段 SHM + `CMD_OVERLAY_FRAME`，落位规则（首选/备选点、锚点）交 addon 按工作区定。鼠标交互（悬停保持、拖动、点击关闭、自动隐藏暂停）全在 addon；服务端只管要它判据的两件：悬停提示右键的命中（`UiCommand::TooltipMenuAt` → 按最近画的一帧回 `RequestTooltipMenu`）与「截图此窗口」（从该层 SHM 读回）。macOS 不走这里（`.app` 原生渲染，收文本帧） |
+| `src/overlay_host.rs` | Linux 外部宿主（仅 `linux-host`）：状态气泡 / Toast / tooltip 在服务进程光栅化，各层一段 SHM + `CMD_OVERLAY_FRAME`，落位规则（首选/备选点、锚点）交 addon 按工作区定。鼠标交互（悬停保持、拖动、点击关闭、自动隐藏暂停）全在 addon；服务端只管要它判据的一件：悬停提示右键的命中（`UiCommand::TooltipMenuAt` → 按最近画的一帧回 `RequestTooltipMenu`）。macOS 不走这里（`.app` 原生渲染，收文本帧） |
 | `src/menu_host.rs` | Linux 外部宿主（仅 `linux-host`）的自绘菜单：**复用 `popup_menu` 整套**，各级像素 → 各自 SHM + `CMD_OVERLAY_FRAME`（`EXACT`），addon 报来的指针事件经 `UiCommand::MenuPointer` 喂回 `PopupMenu::on_pointer`，工作区经 `SetWorkArea` 进 `work_area_of`。收掉可见菜单时回送 `MenuClose`（协调器有几处持 state 锁发 `HideMenu`，靠它复位 `menu_open`） |
 | `src/linux_host.rs` | Linux 外部宿主形态的系统能力（剪贴板 wl-clipboard/xclip、`xdg-open`），全走外部命令 |
 | `src/text/backend.rs` | `TextBackend` trait（measure/draw 抽象） |
@@ -36,7 +36,6 @@
 | `src/dpi.rs` | 按目标点所在显示器实时取有效 DPI 缩放（多显示器不同缩放动态适配） |
 | `src/sys.rs` | 平台基础类型/常量/光标函数 shim（Windows 复用 `windows` crate，其它平台 mock） |
 | `src/debounce.rs` | 通用尾沿防抖（悬停高亮/Tooltip/状态泡合并抖动） |
-| `src/screenshot.rs` | LayeredWindow BGRA 缓冲 → PNG 文件 / 剪贴板 |
 
 > `src/viewbox/`、`src/renderer.rs`、`src/status.rs`、`src/text/freetype.rs` 当前是**仅含 doc 注释的占位 stub**（无实现），别 import、别往里加逻辑——真实盒模型在 `src/view.rs`。
 
@@ -63,7 +62,7 @@
 ## 构建与测试
 
 - 传递依赖 `windows` crate（仅 `cfg(windows)` 启用），非 Windows 平台以 mock 编译。`cargo test -p aurora-ui` 在 host 能跑，但**只有纯 Rust 部分（`view` 盒模型/形状、`image_cache`、`debounce`）是真实验证**；文本测量是 mock 近似，Layered Window/DirectWrite/剪贴板/消息泵是空实现，其测试仅校 mock 的 API 契约。
-- 真实窗口透明渲染、鼠标命中、DirectWrite 字形、截图/剪贴板等必须 **Windows 设备或 CI 实测**，host 单测覆盖不到。
+- 真实窗口透明渲染、鼠标命中、DirectWrite 字形、剪贴板等必须 **Windows 设备或 CI 实测**，host 单测覆盖不到。
 
 ## 依赖
 

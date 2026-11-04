@@ -197,8 +197,7 @@ impl Coordinator {
             MenuKind::Command(cmd) => self.run_menu_cmd(cmd),
             MenuKind::Submenu | MenuKind::Separator | MenuKind::Label => {}
         }
-        // 派发完再解除 tooltip 抑制：Tooltip 截图命令必须先于本次解除被处理，
-        // 否则 tooltip 会在截图前被隐藏。详见 clear_tooltip_menu_flag 的说明。
+        // 派发完再解除 tooltip 抑制，别并进 menu_close()。详见 clear_tooltip_menu_flag 的说明。
         self.clear_tooltip_menu_flag();
     }
 
@@ -271,14 +270,6 @@ impl Coordinator {
             MenuCmd::OpenSettings => self.open_settings(None),
             MenuCmd::OpenDictionary => self.open_dictionary(),
             MenuCmd::OpenAbout => self.open_settings(Some("about")),
-            MenuCmd::TakeScreenshot => {
-                if let Some(dir) = screenshots_dir() {
-                    let _ = self.ui_tx.send(UiCommand::TakeScreenshot { dir });
-                }
-            }
-            MenuCmd::ScreenshotCandidateToClipboard => {
-                let _ = self.ui_tx.send(UiCommand::ScreenshotCandidateToClipboard);
-            }
             MenuCmd::OpenConfigDir => self.open_dir(Config::user_config_dir()),
             MenuCmd::OpenAppDir => self.open_dir(
                 std::env::current_exe()
@@ -301,25 +292,11 @@ impl Coordinator {
             MenuCmd::StatusToggleShowOnFocus => self.status_toggle_show_on_focus(),
             MenuCmd::StatusTogglePinned => self.status_toggle_pinned(),
             MenuCmd::StatusResetPosition => self.status_reset_position(),
-            MenuCmd::StatusScreenshot => {
-                if let Some(dir) = screenshots_dir() {
-                    let _ = self.ui_tx.send(UiCommand::ScreenshotStatusTip {
-                        dir: std::path::PathBuf::from(dir),
-                    });
-                }
-            }
             MenuCmd::TooltipCopy
             | MenuCmd::TooltipCopySection
             | MenuCmd::TooltipCommitSection
             | MenuCmd::TooltipCopyLine
             | MenuCmd::TooltipCommitLine => self.tooltip_menu_action(cmd),
-            MenuCmd::TooltipScreenshot => {
-                if let Some(dir) = screenshots_dir() {
-                    let _ = self.ui_tx.send(UiCommand::ScreenshotTooltip {
-                        dir: std::path::PathBuf::from(dir),
-                    });
-                }
-            }
             // 语言栏图标：总开关写用户配置（`[ui.langbar]`，热重载后重渲重发），
             // 纯调试的两项走 state.toml / 内存。两类落点不同，见 set_langbar_config 的说明。
             // 非 Windows 桌面形态下压根没有发布器，菜单项也不会被构建出来，故是空操作。
@@ -677,7 +654,7 @@ impl Coordinator {
     }
 
     /// 右键状态提示气泡请求的功能菜单：常驻显示 / 焦点切换时显示 / 固定位置（均带勾选）/
-    /// 恢复默认位置 / 截图。
+    /// 恢复默认位置。
     pub(crate) fn show_status_menu(&self, x: i32, y: i32) {
         use aurora_ui_types::MenuItemSpec as M;
         let si_always;
@@ -716,7 +693,6 @@ impl Coordinator {
                 true,
                 false,
             ),
-            M::leaf("截图此窗口", cmd(MenuCmd::StatusScreenshot), true, false),
         ];
         self.mark_menu_open(0, String::new());
         let _ = self.ui_tx.send(UiCommand::ShowCandidateMenu {
@@ -1488,22 +1464,9 @@ impl Coordinator {
             })
             .collect();
 
-        // 高级子菜单：截图等不常用功能 + 打开各数据目录（分隔线独立成组）
+        // 高级子菜单：打开各数据目录等不常用功能（分隔线独立成组）
         #[allow(unused_mut)]
         let mut advanced_children = vec![
-            M::leaf(
-                "截图所有窗口到文件",
-                cmd(MenuCmd::TakeScreenshot),
-                true,
-                false,
-            ),
-            M::leaf(
-                "截图候选窗口到剪贴板",
-                cmd(MenuCmd::ScreenshotCandidateToClipboard),
-                true,
-                false,
-            ),
-            M::separator(),
             M::leaf("打开应用程序目录", cmd(MenuCmd::OpenAppDir), true, false),
             M::leaf("打开用户数据目录", cmd(MenuCmd::OpenConfigDir), true, false),
             M::leaf("打开日志目录", cmd(MenuCmd::OpenLogDir), true, false),
@@ -1547,7 +1510,7 @@ impl Coordinator {
         //
         // 放**顶层**而不是塞进「高级」是为了不增加层级深度——「高级 ▸ 应用独立配置 ▸ 初始
         // 输入模式 ▸ 三选一」是四层，而此前的「高级 ▸ 候选窗首显 ▸ 三选一」是三层；提到顶层
-        // 后维持三层不变。这些项也比截图/打开目录更常用。
+        // 后维持三层不变。这些项也比打开目录更常用。
         //
         // 顶层标签固定为「应用独立配置」，**不嵌入进程名**：进程名长度不一（如
         // "Everything.exe" vs "chrome.exe"）曾导致主菜单整体宽度随焦点应用忽宽忽窄，
@@ -2000,15 +1963,12 @@ impl Coordinator {
 
     /// 解除 Tooltip 的「菜单打开中」隐藏抑制。
     ///
-    /// **必须在菜单动作派发之后调用，不能并进 `menu_close()`**：`menu_action()` 是先
-    /// `menu_close()` 再 `run_menu_cmd()`，若在前者里解除，UI 线程会按序先处理解除
-    /// （此时光标在菜单窗口上、不在 tooltip 上 → 立即隐藏 tooltip），再处理
-    /// `ScreenshotTooltip`，于是截图恒定失败在「未显示」上。复制不受影响（文本已留存），
-    /// 表现为「复制能用、截图不能用」。
+    /// 解除后 UI 会立刻按当前鼠标位置重判显隐（指针此时多半还在菜单上 → tooltip 随即隐藏），
+    /// 故只在菜单动作派发完之后调用，**不要并进 `menu_close()`**。
     pub(crate) fn clear_tooltip_menu_flag(&self) {
         let _ = self.ui_tx.send(UiCommand::SetTooltipMenuOpen(false));
-        // 状态气泡同理：菜单关掉后恢复自动隐藏计时。这里解除是安全的——它只影响
-        // 隐藏抑制，不像 tooltip 那样会立即隐藏窗口，故不受"截图命令尚未处理"的时序制约。
+        // 状态气泡同理：菜单关掉后恢复自动隐藏计时。它只影响隐藏抑制，不像 tooltip
+        // 那样会立即隐藏窗口，故解除时机的约束比上面窄。
         let _ = self.ui_tx.send(UiCommand::SetStatusMenuOpen(false));
     }
 
@@ -2134,8 +2094,7 @@ impl Coordinator {
                 let _ = self.ui_tx.send(UiCommand::MenuKey(key_code));
             }
             // 其它键：关闭菜单并吞掉。一并解除气泡 / 状态气泡的隐藏抑制——只收菜单会让它
-            // 残留（气泡从此移出不隐藏、右键被当成「菜单开着」）；这里没有菜单命令要派发，
-            // 不受 clear_tooltip_menu_flag 的截图时序约束。
+            // 残留（气泡从此移出不隐藏、右键被当成「菜单开着」）；这里没有菜单命令要派发。
             _ => {
                 self.menu_close();
                 self.clear_tooltip_menu_flag();
@@ -3240,12 +3199,6 @@ pub(crate) fn focus_monitor() -> Option<MonitorInfo> {
     {
         None
     }
-}
-
-/// 截图保存目录：用户配置目录下的 `screenshots/` 子目录。
-/// 返回 None 表示无法确定用户目录（portable 模式但找不到 exe 路径等极罕见情况）。
-fn screenshots_dir() -> Option<String> {
-    Config::user_config_dir().map(|d| d.join("screenshots").display().to_string())
 }
 
 /// 状态气泡锚点的菜单文案。
@@ -4381,8 +4334,6 @@ mod linux_menu_tests {
             "输入方案",
             "全角",
             "主题",
-            "截图所有窗口到文件",
-            "截图候选窗口到剪贴板",
             "打开日志目录",
             "应用独立配置",
             "设置...",
@@ -4481,13 +4432,7 @@ mod linux_menu_tests {
             .expect("状态气泡菜单没弹");
         assert_eq!(
             labels(&items),
-            [
-                "常驻显示",
-                "焦点切换时显示",
-                "固定位置",
-                "恢复默认位置",
-                "截图此窗口"
-            ]
+            ["常驻显示", "焦点切换时显示", "固定位置", "恢复默认位置"]
         );
         assert!(c.is_menu_open());
     }

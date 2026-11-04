@@ -924,12 +924,7 @@ impl Toolbar {
         self.visible
     }
 
-    /// 将当前渲染帧保存为 PNG 文件（截图用）。
-    pub fn capture_to_file(&self, path: &std::path::Path) -> Result<(), String> {
-        self.window.capture_to_file(path)
-    }
-
-    /// 返回工具栏窗口句柄（截图用）。
+    /// 返回工具栏窗口句柄。
     #[cfg(windows)]
     pub fn hwnd(&self) -> windows::Win32::Foundation::HWND {
         self.window.hwnd()

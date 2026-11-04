@@ -560,7 +560,6 @@ static REGISTRY: &[ConfigField] = &[
     f("keys.pin_candidate", Str),
     f("keys.delete_candidate", Str),
     f("keys.quick_input_select", Str),
-    f("keys.take_screenshot", Str),
     f("keys.softkeyboard", Str),
     f("keys.global_hotkeys", StrList),
     // `keys.schema_hotkeys` 已废弃并**从登记表移除**（与当年 `schema.special_modes` 同样
@@ -1663,7 +1662,7 @@ mod tests {
     /// 与 [`data_config_toml_has_no_orphan_keys`] 互为反向：那个测试管「不许多」，
     /// 这个管「不许少」。缺了这一侧，新增配置项时漏写预置文件不会被任何测试发现——
     /// 本测试补上前，预置文件已积压 31 个缺键（模糊音 10 项、自动造词 5 项、
-    /// 拼音调频衰减 3 项、截图热键、日志滚动 2 项等）。
+    /// 拼音调频衰减 3 项、日志滚动 2 项等）。
     #[test]
     fn data_config_toml_covers_registry() {
         let toml_keys: BTreeSet<String> = leaf_keys_of(&data_config_toml()).into_iter().collect();

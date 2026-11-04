@@ -511,227 +511,12 @@ impl UiManager {
                     UiCommand::OpenApp { path, args } => {
                         open_app(&path, &args);
                     }
-                    UiCommand::TakeScreenshot { dir } => {
-                        let ts = crate::screenshot::timestamp();
-                        let dir = std::path::PathBuf::from(&dir);
-                        let mut saved = 0usize;
-                        let mut candidate_to_clipboard = false;
-
-                        // 候选窗口：保存文件 + 同时复制到剪贴板（与 Go 对齐）
-                        if candidate_window.is_visible() {
-                            let path = dir.join(format!("candidate_{ts}.png"));
-                            match candidate_window.capture_to_file(&path) {
-                                Ok(_) => {
-                                    saved += 1;
-                                    info!("Screenshot saved: {:?}", path);
-                                    match candidate_window.capture_to_clipboard() {
-                                        Ok(_) => candidate_to_clipboard = true,
-                                        Err(e) => tracing::warn!("Screenshot clipboard: {}", e),
-                                    }
-                                }
-                                Err(e) => tracing::warn!("Screenshot candidate: {}", e),
-                            }
-                        }
-                        // 工具栏
-                        if let Some(tb) = &toolbar
-                            && tb.is_visible()
-                        {
-                            let path = dir.join(format!("toolbar_{ts}.png"));
-                            match tb.capture_to_file(&path) {
-                                Ok(_) => {
-                                    saved += 1;
-                                    info!("Screenshot saved: {:?}", path);
-                                }
-                                Err(e) => tracing::warn!("Screenshot toolbar: {}", e),
-                            }
-                        }
-                        // 状态提示
-                        if let Some(st) = &status_tip
-                            && st.is_visible()
-                        {
-                            let path = dir.join(format!("status_tip_{ts}.png"));
-                            match st.capture_to_file(&path) {
-                                Ok(_) => {
-                                    saved += 1;
-                                    info!("Screenshot saved: {:?}", path);
-                                }
-                                Err(e) => tracing::warn!("Screenshot status_tip: {}", e),
-                            }
-                        }
-                        // 悬停提示（编码反查气泡）
-                        if candidate_window.tooltip_is_visible() {
-                            let path = dir.join(format!("tooltip_{ts}.png"));
-                            match candidate_window.tooltip_capture_to_file(&path) {
-                                Ok(_) => {
-                                    saved += 1;
-                                    info!("Screenshot saved: {:?}", path);
-                                }
-                                Err(e) => tracing::warn!("Screenshot tooltip: {}", e),
-                            }
-                        }
-                        // 右键菜单
-                        if let Some(pm) = &popup_menu
-                            && pm.is_visible()
-                        {
-                            let path = dir.join(format!("popup_menu_{ts}.png"));
-                            match pm.capture_to_file(&path) {
-                                Ok(_) => {
-                                    saved += 1;
-                                    info!("Screenshot saved: {:?}", path);
-                                }
-                                Err(e) => tracing::warn!("Screenshot popup_menu: {}", e),
-                            }
-                        }
-                        // Toast（通常不可见，有则顺带保存）
-                        if let Some(t) = &toast
-                            && t.is_visible()
-                        {
-                            let path = dir.join(format!("toast_{ts}.png"));
-                            match t.capture_to_file(&path) {
-                                Ok(_) => {
-                                    saved += 1;
-                                    info!("Screenshot saved: {:?}", path);
-                                }
-                                Err(e) => tracing::warn!("Screenshot toast: {}", e),
-                            }
-                        }
-                        info!("UI screenshots taken: {}, dir: {:?}", saved, dir);
-                        // 结果 toast
-                        if let Some(t) = &mut toast {
-                            let msg = if saved > 0 {
-                                if candidate_to_clipboard {
-                                    format!(
-                                        "已保存 {} 张截图（候选已复制到剪贴板）\n{}",
-                                        saved,
-                                        dir.display()
-                                    )
-                                } else {
-                                    format!("已保存 {} 张截图\n{}", saved, dir.display())
-                                }
-                            } else {
-                                "没有可见的 UI 窗口可截图".to_string()
-                            };
-                            let kind = if saved > 0 {
-                                ToastKind::Success
-                            } else {
-                                ToastKind::Info
-                            };
-                            t.show(&msg, ToastPosition::BottomRight, kind, None);
-                            toast_hide_at = Some(
-                                std::time::Instant::now() + std::time::Duration::from_millis(4000),
-                            );
-                        }
-                    }
-                    UiCommand::ScreenshotCandidateToClipboard => {
-                        let (msg, kind) = if candidate_window.is_visible() {
-                            match candidate_window.capture_to_clipboard() {
-                                Ok(_) => {
-                                    info!("Candidate screenshot copied to clipboard");
-                                    ("候选窗口已截图到剪贴板".to_string(), ToastKind::Success)
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Screenshot to clipboard failed: {}", e);
-                                    (format!("截图到剪贴板失败：{}", e), ToastKind::Error)
-                                }
-                            }
-                        } else {
-                            ("候选窗口未显示，无法截图".to_string(), ToastKind::Info)
-                        };
-                        if let Some(t) = &mut toast {
-                            t.show(&msg, ToastPosition::BottomRight, kind, None);
-                            toast_hide_at = Some(
-                                std::time::Instant::now() + std::time::Duration::from_millis(3000),
-                            );
-                        }
-                    }
-                    UiCommand::ScreenshotStatusTip { dir } => {
-                        let ts = crate::screenshot::timestamp();
-                        let (msg, kind) = match &status_tip {
-                            Some(st) if st.is_visible() => {
-                                let path = dir.join(format!("status_tip_{ts}.png"));
-                                match st.capture_to_file(&path) {
-                                    Ok(_) => {
-                                        info!("Screenshot saved: {:?}", path);
-                                        // 存盘的同时进剪贴板：截完就能直接粘贴，省去翻目录。
-                                        let clip = st.capture_to_clipboard();
-                                        if let Err(e) = &clip {
-                                            tracing::warn!(
-                                                "Screenshot status_tip clipboard: {}",
-                                                e
-                                            );
-                                        }
-                                        let suffix = if clip.is_ok() {
-                                            "（已复制到剪贴板）"
-                                        } else {
-                                            ""
-                                        };
-                                        (
-                                            format!(
-                                                "状态提示气泡已截图{}\n{}",
-                                                suffix,
-                                                path.display()
-                                            ),
-                                            ToastKind::Success,
-                                        )
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Screenshot status_tip: {}", e);
-                                        (format!("截图失败：{}", e), ToastKind::Error)
-                                    }
-                                }
-                            }
-                            _ => ("状态提示气泡未显示，无法截图".to_string(), ToastKind::Info),
-                        };
-                        if let Some(t) = &mut toast {
-                            t.show(&msg, ToastPosition::BottomRight, kind, None);
-                            toast_hide_at = Some(
-                                std::time::Instant::now() + std::time::Duration::from_millis(3000),
-                            );
-                        }
-                    }
                     UiCommand::CopyTooltipText(text) => {
                         let (msg, kind) = if !text.is_empty() {
                             crate::popup_menu::set_clipboard_text(&text);
                             ("提示内容已复制".to_string(), ToastKind::Success)
                         } else {
                             ("提示内容为空，无法复制".to_string(), ToastKind::Info)
-                        };
-                        if let Some(t) = &mut toast {
-                            t.show(&msg, ToastPosition::BottomRight, kind, None);
-                            toast_hide_at = Some(
-                                std::time::Instant::now() + std::time::Duration::from_millis(3000),
-                            );
-                        }
-                    }
-                    UiCommand::ScreenshotTooltip { dir } => {
-                        let ts = crate::screenshot::timestamp();
-                        let (msg, kind) = if candidate_window.tooltip_is_visible() {
-                            let path = dir.join(format!("tooltip_{ts}.png"));
-                            match candidate_window.tooltip_capture_to_file(&path) {
-                                Ok(_) => {
-                                    info!("Screenshot saved: {:?}", path);
-                                    // 存盘的同时进剪贴板：截完就能直接粘贴，省去翻目录。
-                                    let clip = candidate_window.tooltip_capture_to_clipboard();
-                                    if let Err(e) = &clip {
-                                        tracing::warn!("Screenshot tooltip clipboard: {}", e);
-                                    }
-                                    let suffix = if clip.is_ok() {
-                                        "（已复制到剪贴板）"
-                                    } else {
-                                        ""
-                                    };
-                                    (
-                                        format!("提示气泡已截图{}\n{}", suffix, path.display()),
-                                        ToastKind::Success,
-                                    )
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Screenshot tooltip: {}", e);
-                                    (format!("截图失败：{}", e), ToastKind::Error)
-                                }
-                            }
-                        } else {
-                            ("提示气泡未显示，无法截图".to_string(), ToastKind::Info)
                         };
                         if let Some(t) = &mut toast {
                             t.show(&msg, ToastPosition::BottomRight, kind, None);
@@ -1193,7 +978,7 @@ impl Drop for UiManager {
 /// 协调器命令收菜单（`HideMenu` / `HideCandidates`）。真收掉了一个**可见**菜单时告诉气泡：
 /// 协调器有几条收菜单的路不补发 `SetTooltipMenuOpen(false)`，气泡的抑制标志要在这里收口
 /// （见 `Tooltip::on_menu_dismissed`）。菜单已由自己 tick 收起（点了菜单项）时不算——那条路
-/// 协调器会在派发完菜单命令后才解除，「截图此窗口」靠的就是这个先后。
+/// 由协调器在派发完菜单命令后统一解除抑制，不能在这里被当成「菜单被收掉」再处理一次。
 fn hide_popup_menu(
     popup_menu: &mut Option<crate::popup_menu::PopupMenu>,
     candidate_window: &mut crate::candidate_window::CandidateWindow,
@@ -1514,7 +1299,7 @@ mod hide_popup_menu_tests {
     }
 
     /// 菜单已不可见（点菜单项时由它自己的 tick 收起）：协调器随后的 `HideMenu` 不得调到
-    /// `on_menu_dismissed`——否则气泡在「截图此窗口」处理之前就被藏掉。
+    /// `on_menu_dismissed`——否则抑制标志被提前清掉，气泡会当场按指针位置重判显隐。
     #[test]
     fn invisible_menu_does_not_dismiss_tooltip() {
         let (mut w, mut m) = setup();
@@ -1566,8 +1351,6 @@ mod menu_id_tests {
             MenuCmd::OpenDictionary,
             MenuCmd::OpenSettings,
             MenuCmd::OpenAbout,
-            MenuCmd::TakeScreenshot,
-            MenuCmd::ScreenshotCandidateToClipboard,
             MenuCmd::TogglePasswordSuppress,
             MenuCmd::FirstShowMode(0),
             MenuCmd::FirstShowMode(1),
@@ -1581,11 +1364,9 @@ mod menu_id_tests {
             MenuCmd::InitialPunct(2),
             MenuCmd::StatusToggleAlways,
             MenuCmd::StatusResetPosition,
-            MenuCmd::StatusScreenshot,
             MenuCmd::StatusTogglePinned,
             MenuCmd::StatusToggleShowOnFocus,
             MenuCmd::TooltipCopy,
-            MenuCmd::TooltipScreenshot,
             MenuCmd::TooltipCopySection,
             MenuCmd::TooltipCommitSection,
             MenuCmd::TooltipCopyLine,

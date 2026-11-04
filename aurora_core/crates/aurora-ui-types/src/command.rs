@@ -245,19 +245,11 @@ pub enum UiCommand {
     OpenPath(String),
     /// 启动应用程序并传参（如 aurora_setting.exe `--page dict`）。
     OpenApp { path: String, args: String },
-    /// 截图所有可见 UI 窗口，保存到 dir 目录（由协调器根据 config 确定）。
-    TakeScreenshot { dir: String },
-    /// 将候选窗口截图复制到剪贴板（候选不可见则提示）。
-    ScreenshotCandidateToClipboard,
-    /// 截图状态提示气泡到文件（状态提示右键菜单「截图此窗口」）。
-    ScreenshotStatusTip { dir: std::path::PathBuf },
     /// 把悬停提示的内容复制到剪贴板并 Toast 结果（其右键菜单的各「复制」项）。
     ///
     /// 文本由协调器按**原始行**拼好（未截断、未折行，见 `RenderedTooltip`）——气泡上画的是
     /// 显示行，UI 侧手里没有原文。空串 = 没有可复制的内容，UI 提示「为空」。
     CopyTooltipText(String),
-    /// 截图悬停提示到文件（其右键菜单「截图此窗口」）。
-    ScreenshotTooltip { dir: std::path::PathBuf },
     /// 设置悬停提示右键菜单打开状态（开启时抑制其 WM_MOUSELEAVE 自动隐藏）。
     SetTooltipMenuOpen(bool),
     /// 标记状态气泡的右键菜单开/关（打开期间抑制自动隐藏）。

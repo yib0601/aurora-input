@@ -31,7 +31,7 @@ use tracing::{debug, warn};
 /// | 动词 | 策略位 | why |
 /// |---|---|---|
 /// | `toggle_schema:` / `switch_schema:` / `toggle_mode` / `switch_engine` | 无 | 它们正是用来**离开/返回英文态**的；带上 `CHINESE_ONLY` 就成了单程票 |
-/// | `toggle_full_width` / `toggle_toolbar` / `open_settings` / `open_dictionary` / `take_screenshot` | 无 | 两模式下都该生效，与固定字段那段同档 |
+/// | `toggle_full_width` / `toggle_toolbar` / `open_settings` / `open_dictionary` | 无 | 两模式下都该生效，与固定字段那段同档 |
 /// | `toggle_punct` / `toggle_s2t` / `toggle_t2s` / `single_char` | `CHINESE_ONLY` | 只在中文态有意义；**不带 `GLOBAL`**，避免不必要地抢占宿主快捷键 |
 /// | 进 overlay 的（`temp_pinyin` / `temp_english` / `aux_code` / `rare_char` / `reverse` / `mix:` / `special:`） | `CHINESE_ONLY \| GLOBAL` | 进 overlay 只在中文输入中途有意义；`GLOBAL` 让 TSF 用 `RegisterHotKey` 抢占，穿透 QQNT/Tabby 等 Chromium 宿主的同名加速键 |
 /// | `command:<表达式>` | 无 | 跑的是用户的命令，与中英态无关（英文态下也该按得动）；不改输入状态，不需要抢占 |
@@ -424,7 +424,6 @@ impl Compiler {
             ("toggle_toolbar", &h.toggle_toolbar),
             ("open_settings", &h.open_settings),
             ("open_dictionary", &h.open_dictionary),
-            ("take_screenshot", &h.take_screenshot),
         ] {
             if let Some(raw) = parse_hotkey(value) {
                 result.key_down.push(HotkeyEntry {
@@ -1823,7 +1822,6 @@ mod tests {
             "toggle_toolbar",
             "open_settings",
             "open_dictionary",
-            "take_screenshot",
             // B 类进 overlay
             "temp_pinyin",
             "temp_english",
@@ -1877,7 +1875,6 @@ mod tests {
             ("toggle_toolbar", false, false),
             ("open_settings", false, false),
             ("open_dictionary", false, false),
-            ("take_screenshot", false, false),
             ("toggle_punct", true, false),
             ("toggle_s2t", true, false),
             ("toggle_t2s", true, false),

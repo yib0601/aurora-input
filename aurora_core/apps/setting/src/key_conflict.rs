@@ -284,7 +284,6 @@ pub const HOTKEY_FIELDS: &[(&str, &str)] = &[
     ("keys.softkeyboard", "显示/隐藏软键盘"),
     ("keys.open_settings", "打开设置"),
     ("keys.open_dictionary", "打开词库管理"),
-    ("keys.take_screenshot", "截图输入法窗口"),
     ("keys.add_word", "快捷加词"),
     ("keys.open_add_word_dialog", "打开加词界面"),
     ("keys.activate_ime", "切换到本输入法"),

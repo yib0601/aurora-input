@@ -1526,11 +1526,6 @@
       "type": "str"
     },
     {
-      "default": "ctrl+shift+f11",
-      "key": "keys.take_screenshot",
-      "type": "str"
-    },
-    {
       "default": "ctrl+shift+k",
       "key": "keys.softkeyboard",
       "type": "str"

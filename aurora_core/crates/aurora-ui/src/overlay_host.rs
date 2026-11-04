@@ -277,23 +277,6 @@ impl OverlayShms {
         self.shown[slot(kind)] = true;
     }
 
-    /// 该层当前显示着的一帧 `(BGRA, 宽, 高)`，从 SHM 读回（截图用）；没在显示为 `None`。
-    ///
-    /// 「在显示」是服务端这边的认识：addon 自己计时 / 被点击收掉的浮层不回报。截图只从
-    /// 气泡自己的右键菜单进来，菜单开着期间 addon 不让它消失，两边在这里是一致的。
-    pub(crate) fn snapshot(&self, kind: u32) -> Option<(Vec<u8>, u32, u32)> {
-        let i = slot(kind);
-        if !self.shown[i] {
-            return None;
-        }
-        let shm = self.shms[i].as_ref()?;
-        let hdr = shm.read_header();
-        let (w, h) = (hdr.width, hdr.height);
-        let n = w as usize * h as usize * 4;
-        let px = shm.pixels();
-        (n > 0 && px.len() >= n).then(|| (px[..n].to_vec(), w, h))
-    }
-
     /// 隐藏一层。本就没显示过则什么都不发（候选窗每帧都会问一次 tooltip 该不该藏）。
     pub(crate) fn hide(&mut self, sink: &dyn HostRenderSink, kind: u32) {
         let i = slot(kind);
@@ -313,21 +296,11 @@ impl OverlayShms {
 /// 状态气泡与 Toast 的渲染器 + 三层 SHM。tooltip 的渲染器挂在候选窗里（它要候选行几何），
 /// 这里只替它管 SHM。
 ///
-/// SHM 放在锁后：截图类命令在后台线程收尾（见 `manager_macos` 的 `spawn_screenshot_work`），
-/// 结果 Toast 得在那边弹，碰不到 forwarder 的 `&mut self`。渲染器（内含 `Rc`）不能过线程，
-/// 那边按主题快照现建一个，见 [`ToastHandle`]。
+/// SHM 放在锁后：本结构只被 forwarder 线程的 `&mut self` 碰，渲染器（内含 `Rc`）不必过线程。
 pub(crate) struct Overlays {
     shms: Arc<Mutex<OverlayShms>>,
     status: Option<StatusTip>,
     toast: Option<Toast>,
-    theme: Option<Box<aurora_theme::Resolved>>,
-}
-
-/// 可带进后台线程的 Toast 入口：SHM 共享，渲染器在使用线程上现建（截图是偶发动作，
-/// 建一个渲染器的成本淹没在剪贴板外部命令里）。
-pub(crate) struct ToastHandle {
-    shms: Arc<Mutex<OverlayShms>>,
-    theme: Option<Box<aurora_theme::Resolved>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -355,35 +328,6 @@ fn push_toast(
     }
 }
 
-impl ToastHandle {
-    pub(crate) fn show(
-        self,
-        sink: &dyn HostRenderSink,
-        text: &str,
-        position: ToastPosition,
-        kind: ToastKind,
-        duration_ms: i32,
-        accent: Option<[u8; 4]>,
-    ) {
-        let mut toast = Toast::new()
-            .map_err(|e| tracing::warn!("Toast 渲染器创建失败: {e}"))
-            .ok();
-        if let (Some(t), Some(theme)) = (&mut toast, &self.theme) {
-            t.set_theme(theme);
-        }
-        push_toast(
-            &self.shms,
-            toast.as_mut(),
-            sink,
-            text,
-            position,
-            kind,
-            duration_ms,
-            accent,
-        );
-    }
-}
-
 impl Overlays {
     pub(crate) fn new(
         ev_tx: std::sync::mpsc::Sender<crate::manager::UiEvent>,
@@ -399,14 +343,6 @@ impl Overlays {
             shms: Arc::new(Mutex::new(OverlayShms::new(suffix))),
             status,
             toast,
-            theme: None,
-        }
-    }
-
-    pub(crate) fn toast_handle(&self) -> ToastHandle {
-        ToastHandle {
-            shms: Arc::clone(&self.shms),
-            theme: self.theme.clone(),
         }
     }
 
@@ -417,7 +353,6 @@ impl Overlays {
         if let Some(s) = &mut self.toast {
             s.set_theme(t);
         }
-        self.theme = Some(Box::new(t.clone()));
     }
 
     pub(crate) fn show_toast(
@@ -471,11 +406,6 @@ impl Overlays {
 
     pub(crate) fn hide(&self, sink: &dyn HostRenderSink, kind: u32) {
         lock(&self.shms).hide(sink, kind);
-    }
-
-    /// 见 [`OverlayShms::snapshot`]。
-    pub(crate) fn snapshot(&self, kind: u32) -> Option<(Vec<u8>, u32, u32)> {
-        lock(&self.shms).snapshot(kind)
     }
 
     /// 服务端认为该层此刻在显示（最近推的是可见帧）。
@@ -636,31 +566,5 @@ mod tests {
         assert_eq!(u(&frames[0], 20), OVERLAY_PLACE_ANCHOR);
         assert_eq!(u(&frames[1], 16) & SharedRenderHeader::FLAG_VISIBLE, 0);
         assert!(u(&frames[1], 4) > u(&frames[0], 4), "隐藏帧也推进 seq");
-    }
-
-    /// 截图从 SHM 读回的就是推下去的那一帧；藏了就没有。
-    #[test]
-    fn snapshot_reads_back_shown_frame_only() {
-        let cap = Cap(std::sync::Mutex::new(Vec::new()));
-        let mut shms = OverlayShms::new(format!("_ts{}", std::process::id()));
-        assert!(shms.snapshot(OVERLAY_KIND_TOOLTIP).is_none(), "没显示过");
-        let buf: Vec<u8> = (0..3 * 2 * 4).map(|i| i as u8).collect();
-        let ov = Overlay {
-            buf: buf.clone(),
-            width: 3,
-            height: 2,
-            content_x: 0,
-            content_y: 0,
-            content_w: 3,
-            content_h: 2,
-            software_shadow: false,
-            place: Place::Absolute { x: 0, y: 0 },
-            scale: 1.0,
-        };
-        shms.show(&cap, OVERLAY_KIND_TOOLTIP, &ov, 0);
-        assert_eq!(shms.snapshot(OVERLAY_KIND_TOOLTIP), Some((buf, 3, 2)));
-        assert!(shms.snapshot(OVERLAY_KIND_STATUS).is_none(), "各层各管各的");
-        shms.hide(&cap, OVERLAY_KIND_TOOLTIP);
-        assert!(shms.snapshot(OVERLAY_KIND_TOOLTIP).is_none(), "藏了就不给");
     }
 }

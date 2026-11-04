@@ -231,7 +231,7 @@ fn menu_step(event: MenuEvent) -> MenuStep {
 }
 
 /// 鼠标跟踪器：检测鼠标是否悬停在 tooltip 上（WM_MOUSELEAVE 触发时直接隐藏窗口）；
-/// 右键弹出菜单（按段 / 按行复制、上屏，复制全部，截图此窗口）。
+/// 右键弹出菜单（按段 / 按行复制、上屏，复制全部）。
 struct TooltipMouse {
     hwnd: HWND,
     mouse_over: Rc<Cell<bool>>,
@@ -884,16 +884,6 @@ impl Tooltip {
         styled.into_string()
     }
 
-    /// 将当前渲染帧保存为 PNG 文件（截图用）。
-    pub fn capture_to_file(&self, path: &std::path::Path) -> Result<(), String> {
-        self.window.capture_to_file(path)
-    }
-
-    /// 将当前渲染帧复制到剪贴板（截图用）。
-    pub fn capture_to_clipboard(&self) -> Result<(), String> {
-        self.window.capture_to_clipboard()
-    }
-
     /// 窗口当前是否可见（查询 Win32 IsWindowVisible）。
     pub fn is_visible(&self) -> bool {
         #[cfg(windows)]
@@ -945,8 +935,8 @@ impl Tooltip {
     /// `SetTooltipMenuOpen(false)`，不在这里收口 `suppress_hide` 就会一直是 true——气泡从此
     /// 移出不隐藏、再右键也被当成「菜单开着」。
     ///
-    /// 不会抢在「截图此窗口」之前把气泡藏掉：点菜单项时菜单已由它自己的 tick 收起，协调器
-    /// 随后的 `HideMenu` 落在一个不可见的菜单上，UI 循环不会调到这里。
+    /// 点菜单项时菜单已由它自己的 tick 收起，协调器随后的 `HideMenu` 落在一个不可见的菜单上，
+    /// UI 循环不会调到这里（抑制标志因此由协调器在派发完之后统一解除）。
     pub fn on_menu_dismissed(&mut self) {
         if self.suppress_hide.get() {
             self.set_menu_open(false);
