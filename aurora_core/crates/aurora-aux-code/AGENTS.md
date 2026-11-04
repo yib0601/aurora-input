@@ -1,9 +1,10 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-08-15 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-aux-code
 
-## Purpose
+> 拼音/双拼的辅助码过滤纯逻辑 crate：按字形辅助码裁减候选，不碰文件系统、不依赖配置，路径解析与懒加载归调用方。
+
+## 职责
 
 辅助码过滤：为拼音/双拼候选提供字形层面的二次筛选。用户在拼音码后追加辅助码
 （偏旁/部首/笔画对应的按键串），本 crate 据此裁减掉候选字词中字形不匹配者。
@@ -21,10 +22,10 @@
 纯逻辑 crate，不依赖 aurora-config、不接触文件系统（路径解析职责上提给调用方），
 无 Windows 平台依赖，任意主机可编译测试。
 
-## Key Files
+## 关键文件
 
-| File | Description |
-|------|-------------|
+| 文件 | 说明 |
+|------|------|
 | `src/lib.rs` | 模块文档 + 统一导出：`AuxCodeTable`、`AuxCodeLookup`、`AuxCodeFilterOptions`、`aux_code_matches`、`filter_by_aux_code`、`AuxCodeSession`、`load_from_file`、`load_merged`、`read_name` |
 | `src/lookup.rs` | `AuxCodeLookup` trait：筛选取码的唯一接口（`any_code` 按优先级回调、`is_empty` 决定 passthrough，前缀匹配为默认方法）。`AuxCodeTable` 实现它；协调器的方案来源运行时（`aux_code_source.rs`，文件表 + 方案视图分层）也实现它 |
 | `src/table.rs` | `AuxCodeTable`：三段式紧凑布局（`entries` + `code_ends` + `arena`，与 `aurora-reverse::PinyinTable` 同构）；`from_rows` 单表构建、`merge`/`append` 多表坍缩、查询（`any_code_starts_with`/`any_code_starts_with_char`）、状态（`is_empty`/`char_count`）。`codes_of`/`first_code`/`code_count` 仅测试用（`#[cfg(test)]`）。**纯内存，不碰 `std::path`/文件** |
@@ -33,9 +34,7 @@
 | `src/direct.rs` | **直接辅助码**（双拼，不按引导键、末 1～2 位自动当辅码）的纯函数：`split_direct`（奇偶切分）、`is_direct_source`（前缀候选资格）、`direct_matches` + `DirectPhraseRule::Any`（单字按码开头；词组 1 位任一字、2 位「任一字码以 ab 开头或 i<j 分别以 a、b 开头」）、`direct_placement` + `merge_direct_hits`（并入排序；常量 `ODD_KEEP_TOP_MIN_SYLLABLES` = 3、`EVEN_KEEP_FULL_COVER` = 2）。它是「提」不是「筛」，不受 `filter_by_aux_code` 的子序列不变量约束；协调器侧在 `handle_direct_aux.rs` |
 | `src/session.rs` | `AuxCodeSession`：辅助码**筛选会话状态机**——内部持 `CandidateStore`（原始候选快照 + 筛选视图）+ 辅助码缓冲；`apply`（通过 `CandidateStore::set_filter` 从快照重筛，**只返回命中者**）、`restore_original`（通过 `CandidateStore::clear_filter` 还原）。**不含显示态**：组合区（preedit）拼接/光标是协调器职责，分隔符前缀在协调器进入时拼一次。协调器 `State.aux_code` 只持它（含显示态一并打包在 `AuxCodeOverlay`），按键路由/UI 更新留在协调器 |
 
-## For AI Agents
-
-### Working In This Directory
+## 硬约定
 
 - **核心不变量（不可打破）**：`filter_by_aux_code` 输出的 `kept` 必须是输入候选的
   **子序列**（不凭空加/丢后重排），被保留候选的相对顺序与原列表完全一致（不额外按权重重排）。
@@ -96,7 +95,7 @@
   码长任意（笔画/拆字 1~4+ 码混排）。`from_rows` 稳定排序 + 字内 first-seen 去重，
   **别换成 `HashMap<char, Vec<String>>`**——省数倍内存，二分+early-return 已够快。
 
-### Testing Requirements
+## 构建与测试
 
 - 纯逻辑 crate，无 Windows 依赖，任意主机直接 `cargo test -p aurora-aux-code`。
 - 关键守护测试：`kept_preserves_original_relative_order`（子序列不变量）、
@@ -104,21 +103,21 @@
   `load_and_merge_multiple_files`（load+merge 组合，即协调器懒加载路径）、
   `session::tests::apply_always_reesifts_from_snapshot`（会话从快照重筛语义）。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
 
 - `aurora-candidate`（`Candidate` / `CandidateStore` / `FilterOutcome`）
 
-### External
+### 外部
 
 - `tracing`（构建/过滤日志，`debug`/`warn` 级）
 
 ## 全局约束
 
-- 空输入/空表 passthrough 语义（见上），勿回退为「全滤」。
-- 数据文件格式与 rime-lua-aux-code `aux_code` 目录一致，路径解析职责上提。
-- 日志 INFO 级不得含用户输入/候选内容，见根 `AGENTS.md` 日志红线。
-- `cargo fmt` 改完必跑。
+按需引用根 `AGENTS.md`（日志隐私红线、VK 常量、提交与格式化规范均以它为准）。本 crate 特有：
+
+- 空输入/空表 passthrough、多表 `merge`/`append` 坍缩成单表、路径解析职责上提，是本文档的立约项，改动不得回退。
+- 数据文件格式与 rime-lua-aux-code `aux_code` 目录一致；码表生成物不入版本库。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

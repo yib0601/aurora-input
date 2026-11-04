@@ -1,14 +1,17 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-07-06 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-bridge
 
-## Purpose
+> Rust 服务进程 ↔ C++ TSF DLL 的 IPC 桥（Windows Named Pipe + Push 管道）：定义 handler 契约，并承载 host-render 帧的 SHM 写入。
+
+## 职责
+
 Named Pipe 服务器 + Push 管道，实现 Rust 服务进程与 C++ wind_tsf TSF DLL 之间的双向 IPC 通信（Windows 专属）。定义 `MessageHandler` trait 供 aurora-coordinator 实现，通过 `DeferredHandler` 在初始化期间对 DLL 返回安全默认值，通过 `PushServer` 主动向 DLL 推送状态变更。
 
-## Key Files
-| File | Description |
-|------|-------------|
+## 关键文件
+
+| 文件 | 说明 |
+|------|------|
 | `src/handler.rs` | `MessageHandler` trait：全部命令处理接口（按键/焦点/IME 激活/模式/提交/光标/Host Render/候选鼠标 select·hover·scroll·右键 等）+ 数据类型（`KeyEventData`/`KeyAction`/`StatusUpdateData`/`FocusData`/`CaretData` 等）；`KeyAction::with_composition_placeholder`（非 app_inline preedit 占位） |
 | `src/server.rs` | `BridgeServer` + `dispatch_command`：命名管道主循环（每连接独立线程）、全部命令分发逻辑（含 FOCUS_GAINED 两段式、批处理事件展开）、`encode_key_action` 编码；`ClientCtx{conn_id,pid}` 连接级身份（host-render setup/note_focus/cleanup 用） |
 | `src/push.rs` | `PushServer`：推送管道服务器（单写者 writer 线程）；三种投递语义——`push_to_active`（幂等广播，状态/配置同步）、`push_commit_to_active`（有副作用的活动客户端精准投递）、`push_to_token`（**按事件源精确投递、无兜底**，activation 状态位用）；`set_client_connected_hook`（客户端 token 握手后回调，host-render 重连补推握手用）；管道名格式锁定测试 |
@@ -22,9 +25,8 @@ Named Pipe 服务器 + Push 管道，实现 Rust 服务进程与 C++ wind_tsf TS
 | `src/host_render_sink.rs` | `HostRenderSink` trait（macOS forwarder 推帧抽象，`PushServer` 实现之） |
 | `src/{server_unix,push_unix,shared_memory_posix}.rs` | macOS/Linux 路径：UDS 请求/推送服务器 + POSIX SHM hostrender 写端（`cfg(unix)`） |
 
-## For AI Agents
+## 硬约定
 
-### Working In This Directory
 - **新增命令须三处同步**：`handler.rs`（trait 方法定义）→ `server.rs`（`dispatch_command` match 分支）→ `deferred.rs`（`DeferredHandler` 转发实现）。漏掉 `deferred.rs` 会导致服务启动期间该命令被静默丢弃。
 - **`DeferredHandler::handle_key_event_policed` 必须显式覆盖**，不得依赖 trait 默认实现（默认只调 `handle_key_event`）。`Coordinator` 重写的 `handle_key_event_policed` 含统计埋点和 preedit 占位后处理，若 `DeferredHandler` 走默认实现，就绪后这些逻辑仍被跳过，导致上屏统计恒为 0。新增类似"trait 默认实现外有额外逻辑"的方法时同理。
 - **FOCUS_GAINED 两段式，同步段只做纯内存操作**：`dispatch_command` 同步段只调 `handle_caret_update`（纯字段写入）并立即回 `CMD_MODE_PUSH`（权威 chinese/full 模式，解除 DLL 在 OnSetFocus 内的阻塞，消除首键模式竞态）；`handle_focus_gained`（重型：build_status + push 完整激活状态）延后到 `handle_client` 写出响应后才执行。不得在同步段新增任何阻塞或跨进程调用。
@@ -33,6 +35,7 @@ Named Pipe 服务器 + Push 管道，实现 Rust 服务进程与 C++ wind_tsf TS
 - **推送管道命名格式**：`\\.\pipe\aurora_input_push{suffix}`（suffix 如 `_dev`），与 TSF DLL `Globals.h` 一致；`push.rs` 有格式锁定测试 `test_push_pipe_name_suffix_position`。历史上曾因名称格式与 TSF 不一致导致 DLL 连不上 push 管道、热键白名单无法同步，改动时须对齐 TSF 侧常量。
 
 ### Host Render（已完整实现 + 真机验证，改动前必读）
+
 - **架构**：全局 SHM per kind（Candidate/Tooltip/Status 三段，非 per-instance——用户拍板内存代价不可接受），帧头 `target_instance_id` 区分实例，`SetEvent` 唤醒同 PID 全部实例，只有匹配者显示。C++ `aurora_tsf/src/HostWindow.cpp` 是权威解码端，**零改动**——协议/值域一律以它为准。
 - **hide 必达 + `visible_owner` 单一真源**：所有隐藏路径（HideCandidates/HideTooltip/HideStatus/special 退出/断线 cleanup/Shutdown）统一收敛到 `hide_kind`，它只看 `visible_owner[kind]`、不查白名单/评估态；hide 帧 `target_instance_id=0`（clientID 从 1 起，0 恒不匹配 → 广播隐藏）。这是 Go 版「special 退出候选窗不隐藏」多实例 bug 的根治点，勿退化。
 - **翻页/hover 三值域必须区分**（真机踩坑：翻页点击无效）：① Rust 内部 tag `HOVER_PAGE_PREV/NEXT = 100000/100001`；② SHM hit-rect 表 & `CMD_CANDIDATE_SELECT` 上行 = `-1 上页 / -2 下页`；③ `CMD_CANDIDATE_HOVER` 上行（因 hover 需独立的「无」）= `-1 无 / -2 上页 / -3 下页`。写帧时（`aurora-ui/manager.rs`）必须把内部 tag 重映射为 SHM 值域，正数 tag 会被 C++ `_HitTest` 当候选索引 → `mouse_select(100000)` 被丢弃。
@@ -46,24 +49,28 @@ Named Pipe 服务器 + Push 管道，实现 Rust 服务进程与 C++ wind_tsf TS
 - **avail 位按事件源 PID**：`push_activation_status(client_token)` 用 `client_token >> 32`（PID）查白名单，不用全局焦点槽（会被兄弟进程污染）。
 - **写帧失败必回退本地窗口**，不得静默丢帧（Go 经验）；无 host-render 目标时本地 LayeredWindow 路径零分支副作用。
 
-### Testing Requirements
+## 构建与测试
+
 - `src/push.rs` 的 `test_push_pipe_name_suffix_position` 无系统依赖，可在任意平台跑（纯字符串格式验证）。
 - 涉及命名管道（`BridgeServer::start`、`PushServer::start`）的功能须在 Windows 设备或 CI（Windows runner）验证；`cfg(windows)` 块在非 Windows host 编译不参与。
 - 协议变更须同步手工验证 C++ TSF DLL 侧（`aurora_tsf/include/BinaryProtocol.h`），bridge 与 DLL 之间无自动 schema 校验。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
+
 - `aurora-ipc`（IPC 协议编解码：`IpcHeader`/`codec::*`/`protocol::*`/`SharedRenderHeader` 等）
 
-### External
+### 外部
+
 - `bytes`、`tracing`、`anyhow`/`thiserror`
 - **无 async runtime**：IPC 为同步线程模型（每连接独立线程），`BridgeServer::start`/`PushServer::start` 均为同步 fn（tokio 已于 2026-07 移除，勿再引入）
 - `windows`（`cfg(windows)` gate：Named Pipe API、`ConvertStringSecurityDescriptorToSecurityDescriptorA`）
 
 ## 全局约束
-- bridge handler 收到的提交文本/preedit 内容不得出现在 INFO 日志；见根 `AGENTS.md` 日志隐私规则。
-- 协议帧格式（命令码/payload 布局）变更须同步 C++ `BinaryProtocol.h`（跨语言镜像约束）。
-- 改完跑 `cargo fmt --package aurora-bridge`。
+
+按需引用根 `AGENTS.md`（日志隐私红线、协议面三层闸门、提交与格式化规范均以它为准）。本 crate 特有：
+
+- 协议帧格式（命令码 / payload 布局）是跨语言镜像契约：变更须同步 C++ `aurora_tsf/include/BinaryProtocol.h`，两侧无自动 schema 校验。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

@@ -1,16 +1,17 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-06-29 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-cmdbar
 
-## Purpose
+> 命令直通车核心库：短语文本 → AST → 求值 → display 文本 + 动作链；纯逻辑，副作用能力全部由宿主经 `Services` trait 注入。
+
+## 职责
 
 命令直通车的核心库：把短语文本通过词法/语法解析生成 AST，再对 `EvalContext` 求值，产出 display 文本与可执行动作链。纯 Rust 库，不含平台代码，所有副作用能力（按键注入、剪贴板、进程、IME 等）由宿主通过 `Services` trait 注入；宿主（aurora-coordinator）在短语 hook 处调用 `evaluate_phrase()`，用户选中候选后调用 `run_actions()`。
 
-## Key Files
+## 关键文件
 
-| File | Description |
-|------|-------------|
+| 文件 | 说明 |
+|------|------|
 | `src/lib.rs` | 统一 re-export 全部公共类型；含端到端集成测试 |
 | `src/phrase.rs` | 宿主集成入口：`evaluate_phrase` / `run_actions` / `is_cmdbar_grammar`；高层 `PhraseEval` 把单候选与 `$SS` 数组分流 |
 | `src/ast.rs` | AST 节点：`Phrase`（Literal/Template/Command/Array）、`Expr`、`CommandPhrase`、`ArrayPhrase`、`Modifiers`（有序 Vec，last-write-wins）、`ModValue`（parse 期静态投影） |
@@ -20,11 +21,9 @@
 | `src/services.rs` | 8 个副作用 trait（`ClipboardService` / `KeyInjector` / `UrlOpener` / `ProcessRunner` / `DictService` / `ImeController` / `ConfigService` / `SearchEngine`）及 `Services` 聚合结构 |
 | `src/registry.rs` | `FuncSpec` 元信息、`Registry`（`with_builtins` / `full` / `default_registry`）、`Category` 枚举；`named_params` 白名单 + `eval_named` 入口**必须成对声明**（有自检测试兜底） |
 | `src/parser/` | 手写词法（`lexer.rs`）+ 语法（`parser.rs`）；`is_cmdbar_grammar` 检测顶层 `{` 或 marker；`parse_arg_list` 产出位置参数 + 具名参数（`k=expr`，仅函数调用可用，marker 短语的选项仍是末参 `{k: v}`） |
-| `src/funcs/` | 内置函数：`value`（code/tail/last/clip/sel/app/title/date/time/now/env）、`text`（len/upper/lower/trim/sub/replace/regex/split/concat/reverse/url/html/json/base64/default）、`calc`（calc/num）、`action`（open/proc.run/proc.any/proc.shell/key.tap/key.seq/clip.copy/clip.paste/web.search/…）、`dict_ime`（dict.add/ime.toggle/ime.schema/ime.theme_cycle/setting.open/setting.web）、`config`（config.get/config.set/config.toggle）、`help` |
+| `src/funcs/` | 内置函数：`value`（code/tail/last/clip/sel/app/title/date/time/now/env）、`text`（len/upper/lower/trim/sub/replace/regex/split/concat/reverse/url/html/json/base64/default）、`calc`（calc/num）、`action`（open/proc.run/proc.any/proc.shell/key.tap/key.seq/clip.copy/clip.paste/web.search/…）、`dict_ime`（dict.add/ime.toggle/ime.schema/ime.theme_cycle/setting.open）、`config`（config.get/config.set/config.toggle）、`help` |
 
-## For AI Agents
-
-### Working In This Directory
+## 硬约定
 
 - **宿主集成入口只有三个**：`is_cmdbar_grammar(text)` 判路由，`evaluate_phrase(text, ctx, reg)` 解析求值，`run_actions(actions, ctx, reg)` 选中执行。不要直接拼接 `parse` + `evaluate`，phrase.rs 已封装并处理了 `$SS`/`$AA` 分流。
 - **`type(arg)` 是 eval 拦截的特例**，不经 registry 查找，直接产出 `ActionKind::Text`；其余动作函数产出 `ActionKind::Effect`。`run_actions` 先执行所有 Effect（副作用先于上屏），再拼接 Text，这个顺序不能颠倒。
@@ -36,19 +35,19 @@
 - **`ResolvedAction` 不持有求值结果，只持有 `Expr`**，在 `run()` 时按当前 ctx 重新求值（对齐 Go 的闭包延迟语义）。这使 `type(last())` 每次执行都拿到最新 history，宿主在 commit 后调用 `History::push()` 即可。
 - **`Registry::full()` 一次装齐所有函数**，不需要像 Go 版分两阶段（stub + RegisterActions）。测试纯模板逻辑用 `Registry::with_builtins()`，不需要副作用函数时不要用 `full()`（避免引入不必要依赖）。
 
-### Testing Requirements
+## 构建与测试
 
 - 无 Windows 平台依赖，可直接在 host 运行：`cargo test -p aurora-cmdbar`。
 - 新增内置函数在 `funcs/` 对应文件的 `#[cfg(test)]` 里用表驱动加典型 + 边界 + 错误用例；`phrase.rs` 的集成测试验证端到端通路（包括缺服务降级）。
 - 测试用上下文用 `MemoryContext::new().with_input(...).with_services(...)`；固定时间输出设置 `ctx.clock = Some(...)`。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
 
 无（`Cargo.toml` 中无 `wind-*` 依赖；通过 `Services` trait 与宿主解耦）。
 
-### External
+### 外部
 
 - `anyhow` / `thiserror`：错误传播与 `CmdbarError` 定义
 - `chrono`：`date` / `time` / `now` 函数的时间计算
@@ -58,7 +57,8 @@
 
 ## 全局约束
 
-- 日志：该 crate 目前几乎不打日志；后续接入时 INFO 级禁止记录候选文本/输入码/词库内容，仅记录函数名、arity、错误类型，见根 `AGENTS.md`。
-- 提交前跑 `cargo fmt`，见根 `AGENTS.md`。
+按需引用根 `AGENTS.md`（日志隐私红线、提交与格式化规范均以它为准）。本 crate 特有：
+
+- 该 crate 目前几乎不打日志；后续接入时 INFO 级只记函数名 / arity / 错误类型，不记候选文本、输入码与词库内容。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

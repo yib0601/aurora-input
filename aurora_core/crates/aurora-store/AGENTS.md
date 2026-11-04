@@ -1,11 +1,12 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-10-16 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-store
 
-## Purpose
+> 用户数据门面：全部真源是用户目录 `<userdata>/data/` 下的文本，复制用户目录即带走全部数据；redb 只供旧库链迁移读。
 
-用户数据门面。**全部用户数据的真源都在用户目录 `<userdata>/data/`（`StateLoc.text_dir`，常量 `DATA_DIR_NAME`）**，复制用户目录即带走全部数据（设计 `docs/design/user-data-storage-redesign.md` §2.1 / §2.4 / §2.5）：
+## 职责
+
+用户数据门面。**全部用户数据的真源都在用户目录 `<userdata>/data/`（`StateLoc.text_dir`，常量 `DATA_DIR_NAME`）**，复制用户目录即带走全部数据：
 - 用户词 `data/<schema>/user.dict.yaml`，学到的数据 `temp.dict.yaml` / `draft.dict.yaml` / `freq.table.yaml` / `assoc.table.yaml`，都是 `aurora-userdata` 引擎的文本目标，门面委托 `Runtime`（方法签名不变）；学到的数据按 `learned_text.rs` 的规则自动绑定。
 - Shadow `data/<schema>/shadow.dict.yaml`、短语 `data/phrases.dict.yaml` 是文本小表（`TextTable`，内存持有、按组补丁）。
 - 快捷格式 `data/quick_format.toml`、常用字 `data/common_chars.yaml`、字符集 `data/charsets/<key>.yaml`（`TextDoc`，写入带指纹复核，坏了按最后一次好数据服务）；补全 `data/completion.table.yaml`、统计 `data/stats/*.toml`（机写文件，坏了先用 `data/.backup/` 里的上一版自愈、否则另存重建，`machine_file.rs`）。
@@ -13,10 +14,10 @@
 
 三个查询层 `StoreUserLayer` / `StoreTempLayer` / `StoreDraftLayer` 也在本 crate，都是引擎层的薄包装。
 
-## Key Files
+## 关键文件
 
-| File | Description |
-|------|-------------|
+| 文件 | 说明 |
+|------|------|
 | `src/store.rs` | `Store` 核心：打开引擎、按规则绑定文本、跑旧库迁移；redb `Database` 只在旧库链未完成时打开（`with_db` 只剩迁移读与测试造旧库用） |
 | `src/learned_text.rs` | 学到的数据（temp / draft / freq / assoc）落 `data/<schema>/` 的绑定规则 |
 | `src/legacy_retire.rs` | 旧库链迁完：删 `migrated-*` 标记、`userdata.redb` 改名 `.legacy`（不覆盖已有） |
@@ -35,14 +36,12 @@
 | `src/migration.rs` | 版本迁移框架；当前 `CURRENT_VERSION=1`，全新库直接打版本号 |
 | `src/stat_collector.rs` / `src/stats.rs` | 每日打字统计：按月 `data/stats/YYYY-MM.toml`，元数据 `data/stats/meta.toml`（缺失 / 坏了由每日数据重算，不归零）；收集器 30 秒写一次 |
 | `src/quick_format.rs` / `src/common_chars.rs` / `src/charsets.rs` | 覆盖表：`data/quick_format.toml`、`data/common_chars.yaml`、`data/charsets/<key>.yaml`；备份包里快捷格式仍是 YAML |
-| `src/completion.rs` | 补全历史（邮箱后缀 / 网址 / 快捷输入）：内存持有、去抖 2 秒落 `data/completion.table.yaml` |
+| `src/completion.rs` | 补全历史（现存只有快捷输入这一类）：内存持有、去抖 2 秒落 `data/completion.table.yaml` |
 | `src/migrate_p4.rs` | 剩余旧表迁成文件（每类目标已存在即跳过），标记 `migrated-p4`；`legacy_put_*` 测试造旧库用 |
 | `src/user_dicts.rs` | 用户分库 `data/<schema>/dicts/*.dict.yaml` 与开关 `dicts.toml`：列表、条目增删、清空、新建 / 导入 / 改名 / 删除（引擎侧登记成扩展词库） |
 | `src/external_edit.rs` | 外部编辑会话（`data.beginEdit` / `endEdit`）：暂停写回、挡住界面修改，租约 `EDIT_LEASE` |
 
-## For AI Agents
-
-### Working In This Directory
+## 硬约定
 
 - **临时词 / 草稿 / 词频 / 联想历史不在 redb 里了**（P1b）：这四组门面方法委托 `self.runtime()`，**不经 `with_db`**——按键路径不再碰 redb Mutex（`temp_hot_path_does_not_touch_redb` / `draft_freq_assoc_hot_paths_do_not_touch_redb` 用 `pause()` 守着）。旧表 `TEMP_WORDS` / `TEMP_ABBREV` / `DRAFT_WORDS` / `FREQ` / `ASSOC_HIST` 只供迁移读，**不要再往里写**；`words_generation` 系列代次仍由门面推进，时机与旧实现逐条一致。
 - **状态目录**：`Store::open(path)` 把引擎状态放在 `<path>.state/`，redb 文件此前不存在时先清空它（测试反复用同一路径不串数据）；生产走 `Store::open_with_state(path, StateLoc)`（协调器传 `Config::state_dir()/runtime/<dir_id>`——按用户目录分开，换目录不串数据），从不清空。迁移**合并**而非替换：重做时引擎已有条目为准、count 取大，上一轮失败后的写入不丢；`migrated_p1()` 为真协调器才升 `format_version`。
@@ -64,21 +63,21 @@
 
 - **`FreqTracker` 是 legacy，不要在新代码中引用**。词频记录走 `Store::record_freq` / `get_freq`（引擎 + `data/<schema>/freq.table.yaml`，按方案隔离）。
 
-### Testing Requirements
+## 构建与测试
 
 - `aurora-store` 无 `windows` crate 依赖，可在任意 host 直接运行：`cargo test -p aurora-store`。
 - 各测试在 `std::env::temp_dir()` 创建带唯一名的 `.redb` 临时文件，测后删除；并发运行时文件名已区分，不会互相干扰。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
 
 - `aurora-userdata` — 运行时引擎（四组数据的后端）
 - `aurora-dict` / `aurora-candidate` — `DictLayer` 与候选类型（`store_layer.rs`）
 - `aurora-wdict` — 交换格式（`pub use aurora_wdict as wdict` 保持原路径）
 - `aurora-cmdbar` / `aurora-utils`
 
-### External
+### 外部
 
 - `redb` — 只供旧库迁移读（P4b 删除）
 - `serde` / `toml` / `serde_yaml` — 统计与快捷格式（TOML）、覆盖表（YAML）；`serde_json` 只剩备份包 jsonl 与迁移读
@@ -88,6 +87,8 @@
 
 ## 全局约束
 
-提交前跑 `cargo fmt`；日志 INFO 级不得含用户输入/词库内容（见根 `AGENTS.md`）。
+按需引用根 `AGENTS.md`（日志隐私红线、提交与格式化规范均以它为准）。本 crate 特有：
+
+- 用户数据真源一律在 `<userdata>/data/` 下的文本，redb 只供旧库链迁移读——新增用户数据 API 不得再开 redb 通路。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

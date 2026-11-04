@@ -1,20 +1,21 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-10-14 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-userdata
 
-## Purpose
+> 用户数据引擎：「快照 + 按设备日志 + 增量表」三种物理形态 + 运行时领域 API `Runtime`，经 `aurora-store` 门面接入。
 
-用户数据引擎（设计：[docs/design/user-data-storage-redesign.md](../../../docs/design/user-data-storage-redesign.md) §3）：
+## 职责
+
+用户数据引擎：
 「快照 + 日志 + 增量表」三种物理形态各管一类变化速度。P0 交付引擎与 `DictLayer` 适配，P1a 补上运行时领域 API（`Runtime`）与草稿层；
 P1b 起 `aurora-store::Store` 持有一个 `Runtime`，临时词 / 草稿 / 词频 / 联想历史的门面方法全部委托到这里
 （生产状态目录 `local_dir()/state/runtime/<dir_id>/`，按用户目录分开；测试的 `Store::open` 用 redb 旁的派生目录）。P2 文本层在同一台
 引擎上多一步「按行补丁写回」。
 
-## Key Files
+## 关键文件
 
-| File | Description |
-|------|-------------|
+| 文件 | 说明 |
+|------|------|
 | `src/record.rs` | 日志记录帧：`len u32 \| crc32 u32 \| body`，body 含 seq / ts / kind / target / **boundary** / schema / code / text / payload。decode 对半帧与篡改一律 `Err`，绝不 panic |
 | `src/journal.rs` | 按设备的追加日志 `.wjl`：一条一次 `write(2)`，无用户态缓冲；open 时截掉坏尾巴、从最后一条完整记录续号；超长字段（>u16）写前拒；裁剪是方法，重写 + rename 后把自己的 fd 换到新文件，**永不 mmap** |
 | `src/state.rs` | 折回水位 `state`（toml）与真源级原子写 `atomic_write`（tmp → fsync → rename → fsync 目录）。state 读不出 = 「水位未知」，由快照内嵌 `max_seq` 兜底，绝不整份回放 |
@@ -29,9 +30,7 @@ P1b 起 `aurora-store::Store` 持有一个 `Runtime`，临时词 / 草稿 / 词�
 | `tests/text_target.rs` | 文本目标：折回写回、手改后重建、编辑器竞争、删除 vs 读不了、整文件替换、空闲折回 |
 | `tests/engine_crash_paths.rs` | 引擎级：写后可读 / 重开回放、折回后不再回放、state 缺失按快照水位、折回期间新到的操作保留、第二实例只读且不写盘、删 journal/ 不倒号、快照坏整份回放、换号后封存日志仍可见且续号。折回半写崩溃在 `engine.rs` 单测（需 `snapshot::FAIL_BEFORE_META` 故障注入） |
 
-## For AI Agents
-
-### Working In This Directory
+## 硬约定
 
 - **读路径无锁**：按键线程 `UserData::view()` 克隆一个 `Arc<View>` 后不再碰锁。消费方只借用，不把 `Arc<View>` 或其中的 reader 存进长寿结构——否则折回后的旧段释放不掉。
 - **写路径一把写锁**：`apply` 持它跨「追加 + 发布」，`fold` 持它跨「取水位 + 取起点」与「换入」。这保证折回起点视图含全部 `seq ≤ 水位` 的操作；折回只摘 `seq ≤ 水位` 的该 (target, schema) 条目，期间新到的留下。改这两处的持锁范围前先看 `fold_keeps_ops_that_arrived_during_fold`。
@@ -41,7 +40,7 @@ P1b 起 `aurora-store::Store` 持有一个 `Runtime`，临时词 / 草稿 / 词�
 - **只读实例零写入**：拿不到锁就不开日志写端、不换号、不截尾（尾巴可能是写者正写的那条）。
 - **记录带 boundary**：拍平的码推不回音节边界，而 delta 的简拼分组索引要它。写入端（P1 的协调器）必须传真实位图；位图是**字节**位置，`nihaoma` = `0b100101`（0、2、5），不是 `0b10101`——计划阶段的夹具就错过一次。
 - **零条目快照只有 sidecar**：`snapshot::build` 遇零条目只写带水位的 sidecar（gen = 0）并清掉代号文件；`open` 对「sidecar 不存在」给 `None`（零段），对「头坏 / 指向的 wdat 不在 / 条目数对不上」给 `Err`（当零段并整份回放）。
-- **叠加语义只有一份**：`engine::apply_ops`（表见 `docs/design/user-data-storage-plan-p1a.md` Task 1）。读、折回、层都经 `overlay_entries` 调它——别在别处再写一份 Upsert/Delete 的 match。
+- **叠加语义只有一份**：`engine::apply_ops`。读、折回、层都经 `overlay_entries` 调它——别在别处再写一份 Upsert/Delete 的 match。
 - **批量操作走 `fold_with`**：清空、导入、草稿过期 / 淘汰都是「旧快照 + delta → policy → 新快照」原子换段，水位随之推进；不要逐条写 Delete。按键路径的单条写走 `apply` / `apply_batch`。
 - **文本目标**（`bind_text` 绑定的 (目标, 方案)）分两种格式（`TextBinding.format`）：`Words`（用户词 `user.dict.yaml`，计数 / 时间不进文本，只有 Incr / Touch 且文件未被手改时折回不重建段）与 `Table`（学到的数据，`text/codec.rs` 的列规格，计数 / 时间都进文本，按键补丁）。`fold` 自动走 `fold_text`（§3.5 次序：读 + 指纹 → 补丁 → tmp + fsync → 复核原文件指纹 → 上一版留存进 `data/.backup/` + rename + fsync 目录 → 由文本重建段 → 换入 → state 记 `text_fp`）。`fold_with` 对 `Table` 目标改为由文件当前内容 + 待处理操作整文件写回（文件解析不了 ⇒ 报错不写），对 `Words` 目标报错（清空 / 导入用 `rewrite_text`）；显式清空用 `clear` / `replace_text_entries`（坏文件先另存进 `data/.backup/` 的 `.corrupt-<时间>`）。手改文件后 `sync_text` 由文本重建段，水位不回退。文本目标空闲 `TEXT_IDLE`（30 s）或最老待处理写入超过 `TEXT_MAX_PENDING`（5 min）折回；失败按目标退避，压实不重试退避中的目标。
 - **绑定规则与采纳**：`set_text_rule` 设规则后，维护 / 压实 / `fold_with` 前把规则管的目标自动绑定。绑定一个从没归文本管过、文件也不在、但引擎里有数据的目标时，先由当前视图渲染出文本（`adopt_view`）、成功后才登记绑定——绝不由「文件不存在」推出「数据为空」。
@@ -60,19 +59,19 @@ P1b 起 `aurora-store::Store` 持有一个 `Runtime`，临时词 / 草稿 / 词�
 - 日志记录格式 v1 **尚未发布**，改字段直接改编码即可；一旦随版本发出去就要加版本分支。
 - 目标键 `"{target}:{schema}"` 既是 state 的 key，也是快照目录 `state/<schema>/<target>.{wdat,meta}`；`schema` 是**数据方案 id**（拼音族折叠为 `pinyin`）。
 
-### Testing Requirements
+## 构建与测试
 
 - `cargo test -p aurora-userdata`（Linux 原生可跑；`File::try_lock` 需工具链 ≥ 1.89）。
 - 测试目录名带 pid；用 `TMPDIR` 隔离并发会话。`fold_keeps_ops_that_arrived_during_fold` 是竞态用例，改写锁后连跑 10 次。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
 
 - `aurora-dict` — `WdatStreamWriter` / `WdatReader` / `reader_pool`、`DictLayer` / `LayerType`
 - `aurora-candidate` — `Candidate`、排序 `better`
 
-### External
+### 外部
 
 - `crc32fast` — 记录帧校验
 - `memmap2` — sidecar 映射（快照 wdat 经 `reader_pool`）
@@ -82,6 +81,8 @@ P1b 起 `aurora-store::Store` 持有一个 `Runtime`，临时词 / 草稿 / 词�
 
 ## 全局约束
 
-提交前跑 `cargo fmt -p aurora-userdata`；日志 INFO 级不得含词条内容（见根 `AGENTS.md`）。
+按需引用根 `AGENTS.md`（日志隐私红线、提交与格式化规范均以它为准）。本 crate 特有：
+
+- 「快照 / 按设备日志 / 增量表」三种物理形态各管一类变化速度：新增数据形态先确认落在哪一种，不要旁路另开文件。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

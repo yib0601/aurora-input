@@ -1,16 +1,17 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-06-29 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-rpc
 
-## Purpose
+> core ↔ 设置端的本地 JSON-RPC 双通道（ctrl 请求-响应 + events 广播），本地授权靠 OS ACL。
+
+## 职责
 
 为 aurora_input core 提供本地 JSON-RPC IPC 服务，架起 coordinator（服务进程）与设置端（wind_setting_native）之间的双向通信：控制通道（请求-响应）和事件通道（单向广播）。去掉了旧版 wind-webapi 的 axum/CORS/PNA/token/端口发现，本地授权靠 OS ACL。
 
-## Key Files
+## 关键文件
 
-| File | Description |
-|------|-------------|
+| 文件 | 说明 |
+|------|------|
 | `src/lib.rs` | 对外导出 `CoreRpc`、`DispatchState`、`dispatch`、`EventSink`、`RpcServer`、`ctrl_endpoint`、`events_endpoint` |
 | `src/dispatch.rs` | 传输无关的 JSON-RPC 分发：`system.*` / `config.*` 本地处理，其余转发 `CoreRpc::data_rpc`；含 `FakeCore` stub 单测 |
 | `src/server.rs` | `RpcServer` 句柄：`start()` 启动 ctrl + events 两个后台线程；`ctrl_endpoint` / `events_endpoint` 管道/套接字路径生成 |
@@ -18,9 +19,7 @@
 | `src/client.rs` | 最小同步客户端（单次请求-响应），供 `aurora_input config` CLI 向运行中 core 触发热重载 |
 | `src/capabilities.rs` | 从 `config_schema::REGISTRY` + L1⊕L2 系统预置配置动态生成 `system.capabilities`，替代退役的 manifest.toml |
 
-## For AI Agents
-
-### Working In This Directory
+## 硬约定
 
 - **双通道架构**：ctrl 通道（请求-响应，每连接一线程）+ events 通道（单向广播，writer 线程消费 mpsc 队列写线路）。同步线程模型，**不引入 tokio**。
 - **CoreRpc trait 是唯一扩展点**：宿主（coordinator）注入 `Arc<dyn CoreRpc>` 实现 `is_chinese_mode`、`active_schema_id`、`apply_config`、`data_rpc`、`fonts`。`data_rpc` 负责转发 schema/dict/freq/shadow/stats/theme/phrase 等数据类 RPC；dispatch 层本身只处理 `system.*` / `config.*`。
@@ -32,20 +31,20 @@
 - **平台传输**：Windows 管道路径由 `ctrl_endpoint(suffix)` / `events_endpoint(suffix)` 生成（`suffix` 来自 `variant::pipe_suffix()`）；传输实现代码以 `#[path = "transport_*.rs"]` 按平台切换，dispatch/协议层平台无关。
 - **client.rs 失败语义**：连不上（core 未运行）立即返回 `Err`，调用方应回退到离线直写配置文件，不得重试。
 
-### Testing Requirements
+## 构建与测试
 
 - aurora-rpc 在 `[target.'cfg(windows)'].dependencies]` 中依赖 `windows` crate，非 Windows 主机（Linux CI）无法编译 `transport_windows.rs`，不能在非 Windows 环境跑测试。
 - 在 Windows 开发主机上可运行 `cargo test -p aurora-rpc`：`dispatch.rs` 的单测使用 `FakeCore` stub，不需要真实管道；`capabilities.rs` 的单测需要仓库 `data/` 目录存在（`CARGO_MANIFEST_DIR/../../../data`）。
 - 新增 dispatch 逻辑需在 `dispatch.rs` 的 `tests` 模块补用例（参考已有 `FakeCore` 模式）。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
 
 - `aurora-ipc` — JSON-RPC 协议类型（`Request`/`Response`/`EventMessage`）+ 4 字节大端长度前缀帧（`encode_message`）
 - `aurora-config` — `Config::load`/`set_user_value`/`data_dir`、`config_schema::validate`/`registry`/`leaf_entries`
 
-### External
+### 外部
 
 - `serde` / `serde_json` — JSON 序列化
 - `toml` — config.setItems 落盘时 JSON → toml::Value 转换
@@ -55,7 +54,8 @@
 
 ## 全局约束
 
-- 日志 INFO 级不得含用户输入/候选内容，见根 `AGENTS.md` 日志红线。
-- `cargo fmt` 改完必跑。
+按需引用根 `AGENTS.md`（日志隐私红线、提交与格式化规范均以它为准）。本 crate 特有：
+
+- 传输层与 dispatch 分层：新平台 / 新传输只加 `transport_*.rs`，平台判断不得进 dispatch 与协议层。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

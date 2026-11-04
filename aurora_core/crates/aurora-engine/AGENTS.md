@@ -1,15 +1,17 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-07-06 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-engine
 
-## Purpose
-输入引擎层：把用户编码转成候选词。Schema 驱动的引擎工厂——按方案 TOML 的 `engine_type` 构建四类引擎（拼音（含双拼）/ 码表 / 混输 / 英文），由 `EngineManager` 统一懒加载、切换并分发 `convert`。下游消费 aurora-config（方案定义）、aurora-dict（词库查询）、aurora-store（用户/临时词频），上游被 coordinator 调用。
-从词库到候选的全链路现状文档见 [docs/architecture/engine-candidate-pipeline.md](../../../docs/architecture/engine-candidate-pipeline.md)。
+> Schema 驱动的引擎工厂：按 `engine_type` 构建拼音/码表/混输/英文四类引擎，`EngineManager` 懒加载、切换并分发 `convert`。
 
-## Key Files
-| File | Description |
-|------|-------------|
+## 职责
+
+输入引擎层：把用户编码转成候选词。Schema 驱动的引擎工厂——按方案 TOML 的 `engine_type` 构建四类引擎（拼音（含双拼）/ 码表 / 混输 / 英文），由 `EngineManager` 统一懒加载、切换并分发 `convert`。下游消费 aurora-config（方案定义）、aurora-dict（词库查询）、aurora-store（用户/临时词频），上游被 coordinator 调用。
+
+## 关键文件
+
+| 文件 | 说明 |
+|------|------|
 | `src/lib.rs` | 对外导出：`EngineManager`、`Engine`/`ExtendedEngine`/`ConvertResult`/`EngineType`、四类引擎、`FreqSettings`/`FreqStrategy` |
 | `src/engine.rs` | `Engine`/`ExtendedEngine` trait 与 `ConvertResult`（候选 + preedit + 上屏/分段语义字段）；trait 默认方法把顶码、造词出码、扩展词库热插拔做成可选能力 |
 | `src/manager.rs` | `EngineManager`：方案注册表 + `build_engine` 工厂。懒加载、`switch_schema`/`cycle_schema`、`reload_from_config`/`invalidate_schema` 热更新、override 层深合并、主码表反查索引、双拼韵母键集、词频设置解析 |
@@ -21,11 +23,10 @@
 | `src/english_phrase.rs` | 英文词组分词（t42）：`'` 切段、每段打前缀、允许跳词。**按候选 `text` 的空格切词，不读 `code`**（出厂词组两种编码并存，共同前缀式的 code 里没有后段词）。`LazyPhraseIndex` 懒建 + 后台预热 + 可作废（词库热摘不重建引擎）+ **落盘 mmap**（`<cache>/<方案键>/phrase-<指纹>.wphr`，指纹＝各启用层 `DictLayer::entries_digest` + `ENGLISH_PHRASE_INDEX_TAG`，进文件名而非 `.fp`，故热摘后取另一份、启用回来复用；>3 MB mmap、扫描前后指纹不等不落盘；收词/小写化语义一改要把 tag +1）。堆版与 mmap 版是同一份字节镜像、同一套查找代码。排序 `weight → 跨度 → 文本`，主键必须是 weight（协调器会统一重排） |
 | `src/english_merge.rs` | 英文候选混入（中文侧有候选时**只收精确命中**，可按长度补前缀；为空时给一页补全）：配置按引擎分——`schema.codetable.english_merge`（`enable`/`min_length`/`block_commit`/`block_commit_on_word`/`complete_min_length`/`exact_position`/`complete_position`/`max_count`，可经方案级 `[engine.codetable.english_merge]` 覆盖）与 `schema.pinyin.english_merge`（无 `block_commit`），由 `manager::english_merge_cfg` 分流折叠成 `Effective`；取哪些走 `select`、否决走两级 `vetoes_commit`（前缀级 `has_any` / 成词级 `has_word`，门槛 `veto_min_length`），**混输也调这两个**（`schema.mix.english_*` 折成同一形态）。合并接在 `manager.rs` 的三条通路，混输的合并仍走自己的 `truncation_tier`（见该模块文档）；两项位次由协调器 `place_english_after_common_exact` 应用 |
 
-## For AI Agents
+## 硬约定
 
-### Working In This Directory
 - **引擎构建唯一入口是 `manager.rs::build_engine`**：读方案 TOML（用户目录 > 安装目录，再深合并 `schema_overrides/{id}.toml`），按 `engine_type` 分派；mixed 递归构建 primary/secondary 子引擎，但**英文子引擎不递归构建**——它经 `EnglishProvider` 回调借 `engines["english"]` 那一个实例（英文引擎带一张随用户词库增长的词组分词索引，靶机 18 万条时每份 12.7 MB，各建一份是纯浪费）。新增方案字段须在此解析，并考虑是否需在 `reload_from_config` 热更新（否则改设置要重启才生效）。
-- **码表行为分层（仅码表有 override）**：上屏等行为解析顺序为 方案 `schema_overrides/{id}.toml [codetable]`（带 `enabled` 总开关，逐字段 `Some` 覆盖）> 全局 `schema.codetable` > 内置默认；统一经 `CodetableGlobal::resolved()` / `resolve_codetable()`。拼音、混输**无方案 override**，只读全局 `schema.pinyin` / `schema.mix`。混输的码表类行为继承主码表 `schema.codetable`。调频/造词全局唯一按引擎分（`schema.codetable.frequency` / `schema.pinyin.frequency`）。详见 `docs/redesign/schema-config-layering.md`。
+- **码表行为分层（仅码表有 override）**：上屏等行为解析顺序为 方案 `schema_overrides/{id}.toml [codetable]`（带 `enabled` 总开关，逐字段 `Some` 覆盖）> 全局 `schema.codetable` > 内置默认；统一经 `CodetableGlobal::resolved()` / `resolve_codetable()`。拼音、混输**无方案 override**，只读全局 `schema.pinyin` / `schema.mix`。混输的码表类行为继承主码表 `schema.codetable`。调频/造词全局唯一按引擎分（`schema.codetable.frequency` / `schema.pinyin.frequency`）。
 - **词频是与 weight 解耦的独立维度**：引擎 `convert` 只产出基础权重候选；`freq_rerank` 是 coordinator 排序后调用的纯函数，**不得在引擎内改 weight 做词频**。两套语义（码表永久 used-first / 拼音衰减褪色）不可混用。
 - **拼音 vs 码表的根本差异**：拼音走连续解码（DAG 分词 + Viterbi 打分 + 层级排序，节点分取自词条自身的词典权重），码表只做 `DictManager` 精确 + 前缀查表无评分。匹配层级的**唯一真相**是 `aurora_candidate::cmp_match_layers`（`is_abbrev`/`is_prefix`/`is_partial`），引擎层、协调器 `candidate_display_order`、`freq_rerank` 三处统一调用它，勿再各写一份。
 - **「层级」与「来源」必须分开**：层级键是布尔的，等价于「惩罚 = ∞」，只该用于结构性的匹配质量差异。召回**来源**（模糊音 `is_fuzzy`、用户词 `meta.is_user_dict`）一律走 weight 上的惩罚/加成，不得塞进 `cmp_match_layers`。`is_fuzzy` 曾是其首要键，真实词库下把模糊候选整体压到 200 名开外（`si` 下「是」第 231 位，而生产候选上限 50~300），模糊音在拼音/混输/临拼三条路径上全部等价于未实现；现改为 `FUZZY_WEIGHT_SCALE` 折扣。同理 `is_prefix` 被静态短语、`is_fuzzy` 被用户词简拼借作「沉底」标记都已拆出独立字段（`is_promoted_completion` / `is_abbrev`）——**要沉底就加自己的字段，别借现成的布尔**。
@@ -52,7 +53,7 @@
   能压住整串匹配、界面上恰好相反（`baichx` 下「拜城县」引擎序第 72、界面第 1）。`tests/pinyin_eval.rs`
   出两张表：引擎序（历史基线，limit 10）与界面序（limit 300 → 同一比较器 → 同文去重，与协调器实测
   逐条对拍一致）。E 类（短简拼 `zhge`/`zhy`/`baichx`）只有界面序有意义。
-- **整句候选与词库同量纲**：拼音侧 `SENTENCE_WEIGHT_BASE`(3e7) **已退役**（`docs/design/sentence-weight-same-axis.md`，四步全部实施），现为 `sentence_weight()` = `exp(log_prob/n + ln DICT_TOTAL)`，即各词频次的几何平均。整句要降位走 `is_sentence_demoted`（step 6.5「整句让位于精确整词」，把整句压到 `用户词weight - 1`——这是「用户把词加进词库、配再高权重也换不回首选」的修复点）。3e7 只在**码表侧**还活着，且那边的值是 1e6（`codetable/sentence.rs`）。
+- **整句候选与词库同量纲**：拼音侧 `SENTENCE_WEIGHT_BASE`(3e7) **已退役**（四步全部实施），现为 `sentence_weight()` = `exp(log_prob/n + ln DICT_TOTAL)`，即各词频次的几何平均。整句要降位走 `is_sentence_demoted`（step 6.5「整句让位于精确整词」，把整句压到 `用户词weight - 1`——这是「用户把词加进词库、配再高权重也换不回首选」的修复点）。3e7 只在**码表侧**还活着，且那边的值是 1e6（`codetable/sentence.rs`）。
 - **懒加载 + single-flight 构建锁**：`ensure_loaded` 抢方案专属 build_lock 后复查，避免后台预热与首次切换重复熔大词库；不同方案可并行构建。引擎缓存在 `invalidate_schema`/`reload_from_config` 清除；方案常驻策略关着时（`schema.keep_all_loaded = false`，出厂）另由协调器的清扫拍子调 `evict_idle` 摘掉闲置 30 分钟的引擎——「最后使用」只在 `ensure_loaded` 快路径打（一次原子读写），保护名单见 `residency_protected`；摘除只清**只属于该方案**的反查索引 / 单字全码表 / 按词查编码用户层槽，不走 `invalidate_schema` 的全清。懒建缓存（单字全码表、按词查编码用户层）另由同一拍子调 `evict_idle_caches` 做 30 分钟闲置释放，**不看**常驻开关；「最后使用」同样记淘汰时钟读数（取表处一次原子写 / 已持锁时顺手写）。
 - **`convert` 永不 panic**：引擎错误降级为 `ConvertResult::default()`（空候选），勿在热路径用会 panic 的 `unwrap`。锁中毒统一 `unwrap_or_else(|e| e.into_inner())`。
 - **扩展词库热插拔**：`set_dict_enabled` 直接翻 `codetable-extra-<id>` 系统层的 enabled 标志，无需重建引擎；启用集变化会失效反查索引（编码提示依赖启用词库合并）。
@@ -63,22 +64,28 @@
 - **★ 上屏三通路的「英文守护」在 `EngineManager` 上有第二份实现，改一处要想到另一处**：英文混入（`schema.codetable.english_merge` / `schema.pinyin.english_merge`）把同一套否决接在 `manager.rs` 的 `convert` / `recheck_auto_commit` / `handle_top_code` 三个方法上——那里是三条通路的**共同收口点**。⚠️ 否决只对码表侧有意义（拼音无满码上屏/顶码），故 `Effective::block_commit` 在拼音侧恒 `false`。混输的那份（`schema.mix.*`，接在 `MixedEngine` 内部）与它**互不接管**、按引擎类型分流（`english_merge_ctx` 显式排除 Mixed/English），故两份不会叠加生效。判据同源要求不变：三处都必须叠「英文确有候选」。
 - **顶码否决必须叠「对方确有候选」**：⓪ 叠 `has_pinyin`、③ 叠 `english_blocks_commit`（`english_merge::vetoes_commit`，查英文词库）。只看开关就禁顶码会把「顶码抢了别人的活」修成「谁的活都没人干」——纯五笔溢出串（`aaaab`）在 `pinyin_only_overflow=true` 下 overflow 侧只查拼音、同样交不出候选，用户卡在既不上屏又无候选的长串上。③ 天然满足（英文按前缀确有词条：中文侧为空时 overflow 的前缀补全交得出候选）。③ 还须放在 `if let Some(sec)` 块**外**：英文守护与拼音子引擎无关，纯码表+英文混输也要生效。
 
-### Testing Requirements
+## 构建与测试
+
 - 纯逻辑，host 可跑：`cargo test -p aurora-engine`（单元测试 + `tests/engine_manager.rs` 集成测试；部分用例读 `data/schemas/` 真实数据文件）。
-- 传递依赖的 aurora-dict 仅在 `cfg(windows)` 下引入 `windows` crate；本仓开发机即 Windows，host 直接构建/测试即可，无需交叉编译或上设备。
+- 传递依赖的 aurora-dict 仅在 `cfg(windows)` 下引入 `windows` crate；host 直接 `cargo test -p aurora-engine` 即可，无需交叉编译或上设备（当前开发机是 Fedora 44 Linux，见根 `AGENTS.md`「当前开发机」）。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
+
 - `aurora-candidate` — `Candidate`/`CandidateSource`/`better` 排序
 - `aurora-dict` — `CachedDict`、`DictManager`/CompositeDict、`SystemDictLayer`/`StoreUserLayer`/`StoreTempLayer`、wdat/wcmt mmap
 - `aurora-store` — redb 用户/临时词库与词频记录（`FreqRecord`/`FreqProfile`）
 - `aurora-config` — `Config`、`schema::Schema`/`DictSpec`、`CodeCommitConfig`、`PinyinGlobalConfig`
 
-### External
+### 外部
+
 - `tracing`（日志）、`anyhow`/`thiserror`（错误）、`serde`/`serde_yaml`/`toml`（方案与 override 解析）
 
 ## 全局约束
-- 引用根 `AGENTS.md`：INFO 级日志只记方案 id / 条目数 / key 数，**不得含候选文本、用户输入或词库内容**；改完跑 `cargo fmt`。
+
+按需引用根 `AGENTS.md`（日志隐私红线、候选排序必须落 weight、提交与格式化规范均以它为准）。本 crate 特有：
+
+- INFO 级日志只记方案 id / 条目数 / key 数，**不得含候选文本、用户输入或词库内容**。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

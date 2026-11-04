@@ -1,16 +1,17 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-06-29 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-dict
 
-## Purpose
+> 多层复合词典引擎：`DictLayer` 接口 + `CompositeDict` 跨层聚合 + wdb/wdat mmap 零拷贝查询，每方案一个 `DictManager`。
+
+## 职责
 
 多层复合词典系统。定义 `DictLayer` 查询接口与 `CompositeDict` 跨层聚合引擎，负责 wdb/wdat 二进制格式的生成与 mmap 零拷贝查询，（用户词 / 临时词 / 草稿的查询层 `Store*Layer` 已于 P1b 挪到 `aurora-store`，本 crate 不再依赖用户库）。向上为各引擎 crate 暴露 `DictManager` 作为每方案唯一词典入口，向下依赖 `aurora-candidate`（候选类型）与 `aurora-wdict`（文本转义判据）。
 
-## Key Files
+## 关键文件
 
-| File | Description |
-|------|-------------|
+| 文件 | 说明 |
+|------|------|
 | `src/lib.rs` | 对外导出 `CompositeDict`、`DictLayer/LayerType/MutableLayer`、`DictManager/SystemDictLayer` |
 | `src/layer.rs` | `DictLayer`/`MutableLayer` trait；`LayerType` 枚举（Logic=0 \< User=1 \< Temp=2 \< Cell=3 \< System=4，数值越小优先级越高） |
 | `src/composite.rs` | `CompositeDict` 跨层聚合；去重继承更高权重；前缀查保最短码；`set_layer_enabled` 热插拔；含完整单元测试 |
@@ -26,9 +27,7 @@
 | `src/hotcache.rs` | 热点码查找缓存层 |
 | `src/stats.rs` | 系统词库统计纯计算（设置页「词库统计」）：按码分组喂入 `StatsBuilder`，出条目/单字/词组分档、码长与简码、重码组与 Top、分字集静重与字频加权选重率；条目来源是 `cached::for_each_code_group`（多库按码 k 路归并，保留 order/boundary）。口径改了要加 `STATS_ALGO_VERSION` |
 
-## For AI Agents
-
-### Working In This Directory
+## 硬约定
 
 - **每方案独立 DictManager**：Rust 采用「每方案引擎各持一个 `DictManager`（含 `CompositeDict`）」而非 Go 的「单 composite 切层」。切方案由 EngineManager 缓存引擎实现，`DictManager` 本身无 `SwitchSchema`——不要在 `DictManager` 上添加跨方案切换逻辑。
 
@@ -46,19 +45,19 @@
 
 - **Shadow 不是查询层**：`ShadowRecord`（pin/delete 规则）不挂进 `CompositeDict`，其应用由引擎在候选排序后由调用方执行；本 crate 不持有 Shadow 状态。
 
-### Testing Requirements
+## 构建与测试
 
 - `aurora-dict` 在 `[target.'cfg(windows)'.dependencies]` 中依赖 `windows` crate（条件编译），但各测试均为文件 I/O 与纯内存逻辑，不直接调用 Windows API。
 - Windows 下可直接运行：`cargo test -p aurora-dict`；跨平台 CI 注意 Windows 条件依赖仅在 Windows target 下链接，Linux/macOS host 可跑但不会链接 windows crate。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
 
 - `aurora-candidate` — `Candidate` 类型、排序函数 `better`、`CandidateSource`
 - `aurora-wdict` — 码表文本列的转义与命令栏条目判据（`codetable.rs`）
 
-### External
+### 外部
 
 - `memmap2` — mmap 零拷贝词库文件
 - `serde` / `serde_yaml` / `toml` — 词库/配置反序列化
@@ -67,6 +66,8 @@
 
 ## 全局约束
 
-提交前跑 `cargo fmt`；日志 INFO 级不得含词库条目内容（见根 `AGENTS.md`）。
+按需引用根 `AGENTS.md`（日志隐私红线、提交与格式化规范均以它为准）。本 crate 特有：
+
+- 日志 INFO 级最多记方案 / 表名 / 条目计数，不得含词库词条内容。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

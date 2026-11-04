@@ -68,7 +68,7 @@ cargo test             # 运行测试
 ```
 
 - **Windows**：原生构建；图标、版本信息与 DPI 感知 manifest 通过 `winresource` 在构建期嵌入
-- **Linux**：原生构建，也可用 `scripts/dev.sh` 交叉编译 Windows 产物；平台细节见 [docs/linux.md](docs/linux.md)
+- **Linux**：原生构建，也可用 `scripts/dev.sh` 交叉编译 Windows 产物
 - **macOS**：由主仓库的 `scripts/mac/dev.sh` 一并构建并打进 `.pkg`
 
 没有运行中的输入法服务时，可以用 `AURORA_RPC_MOCK=1` 以模拟数据预览界面（改动不会保存）：
@@ -123,7 +123,6 @@ src/
   file_assoc.rs      .wpkg / .wtheme 文件关联（Windows 注册表）
   xdg_assoc.rs       Linux 的协议与文件关联（XDG）
   assets/            设置清单与 capability 快照
-docs/                设计文档与平台说明
 ```
 
 ## 参与贡献

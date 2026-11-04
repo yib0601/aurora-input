@@ -148,12 +148,12 @@ scripts/dev.sh hooks       # Linux/macOS
 
 | 目录 | 说明 |
 |------|------|
-| `aurora_core/` | Rust 核心服务（cargo workspace，18 个 crate） |
+| `aurora_core/` | Rust 核心服务（cargo workspace，33 个 crate + 4 个 app） |
 | `aurora_tsf/` | Windows TSF 接口层（C++/CMake） |
+| `aurora_linux/` | Linux 前端（Fcitx5 addon + X11 候选窗，C++/CMake） |
 | `aurora_macos/` | macOS IMKit 输入法客户端（Swift/SwiftPM） |
 | `data/` | 入库的方案、码表、主题等数据源文件 |
 | `scripts/` | 构建与部署脚本 |
-| `docs/` | 设计文档 |
 
 各 crate 的职责索引与协作约定见根目录 [AGENTS.md](AGENTS.md)。
 

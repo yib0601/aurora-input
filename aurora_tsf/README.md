@@ -4,9 +4,8 @@ Windows TSF (Text Services Framework) 输入法核心实现，负责与 Windows 
 
 > 本组件已并入 **WindInput** 仓库（`aurora_tsf/`，同级于 `aurora_core/`）。对端服务现为
 > **Rust 版**（`aurora_input`，原 Go 服务的继任者）；IPC 二进制协议保持兼容（见
-> `include/BinaryProtocol.h` ↔ Rust `crates/aurora-ipc`）。可在本仓库 Linux 交叉编译链路里
-> 直接用 MinGW 构建，亦保留 Windows/MSVC 原生构建。迁移说明见
-> [`docs/redesign/tsf-migration.md`](../docs/redesign/tsf-migration.md)。
+> `include/BinaryProtocol.h` ↔ Rust `crates/aurora-ipc`）。可在本仓库 Linux 交叉编译链路里用
+> clang + cargo-xwin 的 MSVC SDK 构建，亦保留 Windows/MSVC 原生构建。
 
 ## 功能
 
@@ -47,21 +46,27 @@ aurora_tsf/
 
 ## 构建
 
-### 方式一：MinGW 交叉编译（默认，Linux→Windows；本仓库链路）
+### 方式一：Linux→Windows 交叉编译（默认；clang + cargo-xwin 的 MSVC SDK）
 
-需要 mingw-w64 工具链（`x86_64-w64-mingw32-g++` / `-windres`）。MinGW 自带 TSF 头不完整，
-缺失接口/GUID/常量由 `include/mingw_tsf_compat.h` 补齐（仅 `__MINGW32__` 生效）。
+需要 `clang++-19` / `lld-19` / `llvm-rc-19`，以及 cargo-xwin 下载到 `~/.cache/cargo-xwin/xwin`
+的 MSVC CRT/SDK（`../scripts/dev.sh` 的 `setup_xwin_env` 会设好 `XWIN_ARCH=x86,x86_64`）。
+与 Rust 侧（`cargo-xwin` / `x86_64-pc-windows-msvc`）统一工具链。
 
 ```bash
 make                       # → build/wind_tsf.dll
-make DEV_VARIANT=1       # → build_dev/wind_tsf_dev.dll（独立 CLSID/管道/日志目录）
+make DEV_VARIANT=1         # → build_dev/wind_tsf_dev.dll（独立 CLSID/管道/日志目录）
 # 或经 dev.sh：
-../scripts/dev.sh tsf            # release
-../scripts/dev.sh tsf debug      # dev 变体
+../scripts/dev.sh m1       # release（同时出 x64 + x86）
+../scripts/dev.sh dm1      # dev 变体
 ```
 
-构建输出：`build/wind_tsf.dll`（PE32+ x64，静态链接，无 MinGW 运行时依赖）。
-细节见 [`docs/redesign/tsf-migration.md`](../docs/redesign/tsf-migration.md)。
+构建输出：`build/wind_tsf.dll`（PE32+ x64，静态链接）。
+
+> ⚠️ 交叉编出的 DLL 在带安全加固的宿主里 COM 激活失败，只能用来验证「编不编得过」；
+> 交付产物一律由 Windows 编译机的原生 MSVC 产出（见根 `AGENTS.md`「构建 / 测试」）。
+>
+> `include/mingw_tsf_compat.h` 是 MinGW 时代的历史垫片（整体 `#ifdef __MINGW32__`），当前
+> 工具链不打 MinGW 目标，`__MINGW32__` 不再定义，它编成空。
 
 ### 方式二：Windows/MSVC 原生（可选，用完整 Windows SDK）
 
@@ -249,7 +254,6 @@ TSF 层使用两个命名管道与 Go 服务通信：
 > `aurora_core/crates/aurora-ipc/testdata/wire_vectors.json` 校验（TSF / Linux / macOS 读同一份）。
 > 注意 `static_assert(sizeof(...))` 拦不住字段互换——两个 `uint16_t` 换位置后字节数不变、
 > 编译全过、DLL 照常加载，只有真值表会红。
-> 设计见 `docs/design/cross-platform-consistency.md`。
 
 ### 协议头格式（8 字节）
 

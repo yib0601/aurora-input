@@ -1,16 +1,19 @@
-<!-- Parent: ../../AGENTS.md -->
-<!-- Updated: 2026-06-29 -->
+<!-- Parent: ../../../AGENTS.md -->
 
 # aurora-ui
 
-## Purpose
+> 所有浮层窗口（候选窗/工具栏/菜单/状态泡/Toast/Tooltip）的渲染与鼠标交互层：独立 UI 线程 + Layered Window 透明上屏。
+
+## 职责
+
 输入法所有浮层窗口的渲染与交互层：候选窗、常驻工具栏、级联弹出菜单、状态泡、Toast、悬停 Tooltip。
 在独立 UI 线程跑 Win32 消息泵，经 mpsc 通道接收协调器（aurora-coordinator）下发的 `UiCommand`、回送鼠标 `UiEvent`。
 所有窗口走自带的 `view` 盒模型渲染到 BGRA 缓冲，再经 Layered Window 透明上屏；外观/颜色/几何全部消费 aurora-theme 的 `Resolved`。
 
-## Key Files
-| File | Description |
-|------|-------------|
+## 关键文件
+
+| 文件 | 说明 |
+|------|------|
 | `src/lib.rs` | 模块导出 + 仅 re-export `UiManager`；顶部注释定义跨平台可测性三层（必读） |
 | `src/manager.rs` | `UiManager` + UI 线程主循环。协议类型（`UiCommand`/`UiEvent`/菜单族）**定义已下沉 aurora-ui-types**，此处 `pub use` 再导出保持原路径；加变体时两边同步（见 aurora-ui-types/AGENTS.md） |
 | `src/wake.rs` | UI 线程唤醒原语：Windows＝auto-reset 事件 + `MsgWaitForMultipleObjectsEx`，非 Windows＝条件变量。消息循环据此「睡到有事发生」，取代早先的固定 8ms 轮询 |
@@ -22,7 +25,6 @@
 | `src/status_tip.rs` | 状态提示气泡（切换中英/标点/全半角/方案时短暂或常驻显示） |
 | `src/toast.rs` | 一次性通知 Toast（按位置/类型配色，定时自动隐藏） |
 | `src/tooltip.rs` | 候选悬停反查气泡（显示编码/拼音） |
-| `src/input_diag_hud.rs` | 输入诊断 HUD：四分区文本浮窗（输入态/窗口链/TSF 实例/HostRender），可拖动、双击复制、右键菜单（复制·显示分类·停止刷新·置顶）。定位三档见 `plan_position`——**已定位时走钳制而非原样沿用**，否则内容变长会被屏幕边缘吞掉；拖动不经此路径，故当次说了算、下次更新钳回。`format_diag_lines` 与视图类型已下沉 aurora-ui-types（纯测试随迁），此处再导出 |
 | `src/text/dwrite.rs` | DirectWrite 文本测量/渲染（预乘 alpha 回写 BGRA）+ 非 Windows mock（0.6×em 等宽近似） |
 | `src/text/linux/` | Linux 真字形后端（仅 `linux-host` feature）：ttf-parser + ab_glyph_rasterizer，运行期 dlopen fontconfig；无 hinting、普通文字不整形；彩色 emoji（CBDT / COLR v0·v1 / OpenType-SVG）经 `color.rs` 光栅、emoji 序列经 `emoji.rs` 切簇后用 rustybuzz 整形，限制见 `mod.rs` 模块头。默认形态（feature 关）仍是 mock |
 | `src/overlay_host.rs` | Linux 外部宿主（仅 `linux-host`）：状态气泡 / Toast / tooltip 在服务进程光栅化，各层一段 SHM + `CMD_OVERLAY_FRAME`，落位规则（首选/备选点、锚点）交 addon 按工作区定。鼠标交互（悬停保持、拖动、点击关闭、自动隐藏暂停）全在 addon；服务端只管要它判据的两件：悬停提示右键的命中（`UiCommand::TooltipMenuAt` → 按最近画的一帧回 `RequestTooltipMenu`）与「截图此窗口」（从该层 SHM 读回）。macOS 不走这里（`.app` 原生渲染，收文本帧） |
@@ -38,9 +40,8 @@
 
 > `src/viewbox/`、`src/renderer.rs`、`src/status.rs`、`src/text/freetype.rs` 当前是**仅含 doc 注释的占位 stub**（无实现），别 import、别往里加逻辑——真实盒模型在 `src/view.rs`。
 
-## For AI Agents
+## 硬约定
 
-### Working In This Directory
 - **线程模型**：`UiManager::new()` 启 `ui-manager` 线程跑 `manager::ui_thread`；协调器持 `aurora_coordinator::UiSender` 下发（**不是裸 `Sender<UiCommand>`**，见下条）、`take_event_rx()`（仅一次）取 `Receiver<UiEvent>` 收鼠标事件。**所有窗口/缓存（`thread_local` 鼠标处理表、image cache）只在该 UI 线程存活**，禁止跨线程触碰窗口。
 - **循环是事件驱动的，不再轮询**：`ui_thread` 空闲时阻塞在 `wake::UiWaitPort::wait`（Windows 等「消息队列 ∪ 唤醒事件 ∪ 最近到期时刻」），到期源全空即无限等待。两条硬约束由此而来：
   - **投递命令必须唤醒**，故协调器侧一律经 `UiSender`（把投递 + 唤醒绑成一次 `send`，编译器守门），别用裸 `Sender`。
@@ -59,24 +60,29 @@
 - **边框圆角别用 `eff_border` 的第三个返回值**：它在节点未配 `border.radius` 时兜底 `0.0`，直接用会把上游按 `item_radius` 设好的圆角抹平。只取它的色与宽，圆角走节点自身的 `border_radius`（`candidate_window.rs` 内有两处注释标记这个坑）。
 - **浮层不抢焦点（不变量）**：wnd_proc 对 `WM_MOUSEACTIVATE`→`MA_NOACTIVATE`、`WM_NCHITTEST`→`HTCLIENT`，点击候选/工具栏不激活窗口、目标应用保持前台；菜单窗无焦点，键盘由协调器 `MenuKey(VK)` 转发。改窗口样式/消息处理时勿破坏这条。
 
-### Testing Requirements
+## 构建与测试
+
 - 传递依赖 `windows` crate（仅 `cfg(windows)` 启用），非 Windows 平台以 mock 编译。`cargo test -p aurora-ui` 在 host 能跑，但**只有纯 Rust 部分（`view` 盒模型/形状、`image_cache`、`debounce`）是真实验证**；文本测量是 mock 近似，Layered Window/DirectWrite/剪贴板/消息泵是空实现，其测试仅校 mock 的 API 契约。
 - 真实窗口透明渲染、鼠标命中、DirectWrite 字形、截图/剪贴板等必须 **Windows 设备或 CI 实测**，host 单测覆盖不到。
 
-## Dependencies
+## 依赖
 
-### Internal
+### 内部
+
 - `aurora-theme` — 唯一活跃消费的本仓 crate：`Resolved`/`RvNode`/`RvImage`/`RvGradient`/`schema::Dim`，提供窗口外观。
 - `aurora-candidate`、`aurora-bridge` — Cargo.toml 已声明，当前源码未直接引用（预留/待接线）。
 
-### External
+### 外部
+
 - `tiny-skia` — 纯 Rust 2D 光栅化（盒模型形状/渐变/背景图填充）。
 - `windows` / `windows-core`（仅 Windows）— Win32 窗口、GDI、DirectWrite、剪贴板、Shell。
 - `resvg` / `image` — SVG 栅格化与位图解码（主题图标/背景）。
 - `tracing`、`anyhow`、`thiserror`、`tokio`。
 
 ## 全局约束
-- 改完跑 `cargo fmt`。
-- 日志 INFO 级不得含用户输入/候选/词库内容——候选数量/坐标可记，候选文本仅 `debug!`（参见 `manager.rs` 现有用法）。
+
+按需引用根 `AGENTS.md`（日志隐私红线、提交与格式化规范均以它为准）。本 crate 特有：
+
+- 日志 INFO 级不得含候选文本（候选数量 / 坐标可记），候选文本仅 `debug!`。
 
 <!-- MANUAL: 此行以下为人工补充区，重新生成时保留 -->

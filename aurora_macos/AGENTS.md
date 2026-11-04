@@ -1,13 +1,12 @@
-# wind_macos
+<!-- Parent: ../AGENTS.md -->
 
-macOS IMKit `.app` 工程。与 Win 端 `aurora_tsf/` DLL 对位，与跨平台 Rust 服务
-（`aurora_core/`，cargo workspace）通过 Unix Domain Socket 通信。
+# aurora_macos（wind_macos）
 
-`.app` 只是 IMKit 壳：渲染、定位、上屏决策的真身都在 Rust 服务里。对应关系见
-`scripts/mac/dev.sh` 头部注释（Win 的 `m1`=TSF DLL ↔ mac 的 `m1`=`.app`，
-Win 的 `m2`=核心 exe ↔ mac 的 `m2`=Rust 服务）。
+> macOS IMKit `.app` 工程：与 Win 端 `aurora_tsf/` DLL 对位，与跨平台 Rust 服务（`aurora_core/`，cargo workspace）通过 Unix Domain Socket 通信。`.app` 只是 IMKit 壳——渲染、定位、上屏决策的真身都在 Rust 服务里。
 
-## 当前阶段
+`.app` 与 Rust 服务的对应关系见 `scripts/mac/dev.sh` 头部注释（Win 的 `m1`=TSF DLL ↔ mac 的 `m1`=`.app`，Win 的 `m2`=核心 exe ↔ mac 的 `m2`=Rust 服务）。
+
+## 职责
 
 协议通路、IMKit 骨架、候选/菜单/提示的呈现均已就位：
 
@@ -22,16 +21,51 @@ Win 的 `m2`=核心 exe ↔ mac 的 `m2`=Rust 服务）。
 ### 与 Windows 的功能差距（待补）
 
 Rust 核心跨平台，引擎/词库/候选/词频类改动 macOS 自动受益；差距集中在**宿主层**。
-`aurora-ui` 的 `UiCommand` 有 51 个变体，`manager_macos.rs` 的 Forwarder 目前接了 37 个
+`aurora-ui` 的 `UiCommand` 有 59 个变体，`manager_macos.rs` 的 Forwarder 目前接了 37 个
 （数字随 core 加变体而变，改动时顺手核一下：
 `awk '/^pub enum UiCommand/,/^}/' aurora-ui-types/src/command.rs | grep -cE '^    [A-Z]'`）。
 未接的：
 
 | UiCommand | 影响 | 备注 |
 |---|---|---|
-| `ShowInputDiag` / `HideInputDiag` / `CopyInputDiagText` | 输入诊断 HUD 整套缺失 | 设计见 `docs/design/input-diagnostics-hud.md`。**菜单入口已按平台摘掉**（`build_main_menu_items` 的 `advanced_children`）——留一个点了没反应的项比没有更糟 |
 | `SetToolbarPos` / `SetToolbarAutoHide` / `SetToolbarVertical` / `SetToolbarLayout` | N/A（mac 用菜单栏指示器，无浮动工具栏） | 对应配置项已在设置清单里按平台隐藏（`platform = "windows"`），不再是"无处落地"。`SetToolbarLayout`（`ui.toolbar.items`，格的显隐与顺序）同理——菜单栏指示器只有一个主字，没有"哪几格" |
 | `SetHostRender` | Windows 专有（宿主进程内 Band 窗口） | mac 无对应概念 |
+
+非 `UiCommand` 的一项差距，同样待补：
+
+| 能力 | 影响 | 备注 |
+|---|---|---|
+| `CMD_INPUT_STATS`（英文输入统计） | 英文模式下的输入不计入统计 | Win 侧由 TSF DLL 在英文模式下上报，`.app` 未采集。**已知并暂缓**（2026-08-12 决定：当前 macOS 用户量少，优先级低）。对应设置项 `stats.track_english` 已按平台隐藏，故当前不表现为「开关无效」，只表现为统计数字偏低 |
+
+### 已按平台屏蔽的设置项
+
+无落点的配置**在设置清单里门控掉**（`platform = "windows"`，见 `wind-setting`
+`settings_manifest.toml`），而不是留着让用户配一个不生效的开关：
+
+| 配置项 | macOS 上为何无落点 |
+|---|---|
+| `ui.toolbar.hide_in_fullscreen` / `auto_hide` / `auto_hide_delay` / `vertical` | 菜单栏指示器不是浮动窗口，无从隐藏 / 排列 / 自动淡出。`ui.toolbar.visible` **不在此列**——它在 mac 上控制指示器显隐，是有落点的 |
+| `input.capslock.cancel_on_mode_switch` | 实现手段是合成一次 CapsLock 敲击（`key_inject::tap_caps_lock`），而 macOS 的大写锁定态由 HID 层维护，CGEvent 改不动它。补 VK→CGKeyCode 映射也没用。**`IOHIDSetModifierLockState` 那条路后来也实测过：连接开得出、返回 `KERN_SUCCESS`、状态纹丝不动（Darwin 25.5）；`kIOHIDServerConnectType` 则 `IOServiceOpen` 直接失败，需特权。** 软键盘面板上的 Caps 键同样受这条限制，已按此**在 macOS 上画成禁用态**（`soft_keyboard.rs` 的 `CAPS_CLICKABLE`）：键位留着、不进命中表，但 `caps_on` 的高亮照旧——改不动不等于读不到 |
+| `stats.track_english` | 英文模式下的输入由 Windows 侧 TSF DLL 经 `CMD_INPUT_STATS` 上报，`.app` 没有对应采集点 |
+
+`keys.session_actions` 里的 **CapsLock** 同理无落点（`capslock_hook` 在非 Windows 是
+`bail!` 的空壳），但它是对话框内的一个**取值**而非独立配置项，清单门控管不到，故在
+`wind-setting` 的 `session_actions.rs::key_options` 里按平台剔除。已有配置（从 Windows
+同步过来的）不丢——词表外的键会被当「当前值」保留，并显示「本平台不支持」。
+
+**仍然保留的两个容易被误判为「该屏蔽」的**：
+
+- **「候选窗首显」**（应用独立配置菜单）：`fast` 档的加速判据依赖 `CMD_CARET_PROBE`，
+  那只有 Windows DLL 发；但三档在 mac 上仍有可观测差别（`wait` 兜底 150ms、`fast` 25ms、
+  `instant` 不等），故保留。只是菜单文案描述的 TSF reflow 背景在 mac 上不成立。
+- **`ui.toolbar.visible`**：形态不同（浮动条 vs 菜单栏指示器）但语义一致，文案已改写成
+  平台中立的「常驻显示输入法当前状态」。
+
+已接：`RegisterGlobalHotkeys`（见下）、`OpenPath` / `OpenApp`（`/usr/bin/open`，
+`.app` 包走 `open -a … --args`）、`TakeScreenshot` / `ScreenshotCandidateToClipboard` /
+`CopyTooltipText`（见下）、`ReportCandidatePos` / `ReportStatusTipPos`（见下「浮窗拖动
+与位置固定」）、`ScreenshotStatusTip` / `ScreenshotTooltip`、`ShowCandidateMenu` / `HideMenu` /
+`MenuKey` / `MenuPointer` / `SetWorkArea` / `TooltipMenuAt`（见「光栅浮层」）。
 
 ### 出厂短语的 `darwin` 条目
 
@@ -51,6 +85,55 @@ Windows 版：
 本机（Linux）验到的：四条的函数名、参数个数、具名参数都合法，lint 无提示
 （`builtin_platform_phrases::every_platform_entry_calls_only_known_functions_with_valid_arity`），
 按 `darwin` 过滤时每个码恰好一条。macOS 只做了交叉 check，真机效果交 CI / 用户验证。
+
+## 关键文件
+
+| 路径 | 角色 |
+|------|------|
+| `Package.swift` | SwiftPM 清单，4 个 target（kit / smoke / app / tests） |
+| `Sources/WindInputKit/IPC/ProtocolTypes.swift` | 协议常量 + payload 类型 + endpoint 路径 |
+| `Sources/WindInputKit/IPC/WireGeometry.swift` | 浮窗落位的 wire ↔ Cocoa 坐标换算（双向，互逆性有 round-trip 测试兜底）|
+| `Sources/WindInputKit/IPC/BinaryCodec.swift` | 帧 encode/decode。`encodeFocusGainedFrame(inputScopeMask:)`: FocusGained 帧布局 `pid:u32(0占位) + inputScopeMask:u64`（bit31=IS_PASSWORD 标记密码框；旧版空帧=mask 0） |
+| `Sources/WindInputKit/IPC/BridgeClient.swift` | UDS 阻塞客户端；`init(socketPath:, ioTimeoutMs:)` 可选 I/O 超时（`SO_RCVTIMEO`/`SO_SNDTIMEO`，0=不设）。request 连接设 2s——服务卡死/重启时同步 `readFrame` 超时抛错而非在 IMKit 主线程无限 hang（上层 catch → reconnect 自愈）；push 连接（PushClient）必须保持 0（长期空闲等服务端推送，否则被读超时误判断连）。**`connect()` 必设 `SO_NOSIGPIPE`**: 否则对端（Rust 服务）重启后向死连接 `write` 触发 SIGPIPE → 默认处置直接**杀死 .app 进程**（表现为服务重启后输入法彻底失灵、需强制重启前端）；设此项后 `write` 改返回 EPIPE 由 `send()` 抛错交上层重连。request/push/sendClient 都用此构造，一处覆盖 |
+| `Sources/WindInputKit/IPC/BridgeResponseRouter.swift` | 把响应帧路由到 `TextInputClient` 调用。**新增 cmd 必须在此显式接一臂**——`default` 是"消费按键但不出字"，漏接的表现是按键被吃掉、屏幕上什么都没有（历史案例：`commitThenDefer` 漏接导致码表顶码上屏丢字） |
+| `Sources/WindInputSmoke/main.swift` | `swift run wind-smoke` — 连 bridge + push，打印帧 |
+| `Sources/WindInputApp/main.swift` | `.app` 入口：默认启 IMKServer + NSApp.run; 也支持 `--register-input-source` / `--enable-input-source` / `--select-input-source` 子命令。`--register-input-source` **总是重注册 + RunLoop 常驻**，不因「已注册」早退（重新部署 .app 的 cdhash 变，必须重注册刷新否则无法切换；install 已先杀旧守护，早退会让注册失去维持进程而失效）。变体隔离：mode-id 检查用 `Bundle.main.bundleIdentifier + "."` 前缀精确匹配（避免 `WindInput`/`WindInputDev` 子串互串） |
+| `Sources/WindInputApp/Controller/InputController.swift` | `IMKInputController` 子类，同步 KeyEvent roundtrip，路由 PassThrough/Consumed/CommitText/UpdateComposition; `activateServer`/`deactivateServer` 发 FocusGained/FocusLost（驱动协调器 imeActivated → 指示器）; **密码框适配**（与 Win 侧密码框适配同口径）: `activateServer` 用 `IsSecureEventInputEnabled()` 探测，命中则在帧 payload 携带 InputScope bitmask 的 IS_PASSWORD 位（bit31），协调器据此对密码框强制英文半角直通（模式图标不变）; `deactivateServer` 失焦时若仍有 marked text 先 `setMarkedText("")` 清残留 + 清本端 composition。`menu()` 重写：点系统输入源图标弹出统一菜单（复用 UnifiedMenuBuilder）; 选中项经 IMK `doCommandBySelector` → `imkMenuCommand:` 读 NSMenuItem.tag 回发 CmdMenuAction。**自愈重连**: bridge 连接持有在实例字段，`activateServer`/`handle` 入口 `ensureConnected()` 懒重连; `handle` 的 `send`/`readFrame` 经 `sendAndApply` 执行，失败 catch → `reconnect()` 后**用新连接重试当前键一次**（服务重启后第一个键就自愈，不丢字）; 连接用 `ioTimeoutMs=2000` + `SO_NOSIGPIPE`。**智能配对光标**: `router.moveHostCursor` 闭包把 kit 层的 `CursorMove` 意图用 `KeySynthesizer` 合成 ←/→ 方向键（主线程 async，排在 insertText 后）; 需辅助功能授权，未授权静默降级 |
+| `Sources/WindInputApp/Controller/KeyHandler.swift` | `NSEvent.keyCode` → Win VK 映射 + Modifier 编码 + KeyEvent 帧构造 |
+| `Sources/WindInputApp/UI/CandidatePanelHost.swift` | 候选框承载层：订阅 push，收 CmdHostRenderFrame→SHM→NSPanel、CmdCandidateRects→hit-test、CmdModeStatus→ModeStatusController、CmdOverlayFrame→`OverlayHost`（悬停提示 / 状态气泡 / Toast / 自绘菜单）; 协调候选悬停与悬停提示的保持 / 宽限; 命令直通车按键：CmdKeyTap/Hold/Release/Seq→`KeySynthesizer` CGEvent 合成，CmdKeyType→`activeResponder.applyPushResponse`→router `insertText` 上屏; 鼠标选词回发。导出 `unifiedMenuItems()`/`sendMenuAction(_:)` 供菜单栏指示器 / 系统输入菜单复用同一 IPC 请求与回发路径 |
+| `Sources/WindInputApp/UI/KeySynthesizer.swift` | 命令直通车按键合成（key.tap/seq/hold/release）: canonical 键名→CGKeyCode + 修饰键→CGEventFlags 映射，经 `CGEvent.post(tap: .cgSessionEventTap)` 向聚焦应用注入; **需「辅助功能」授权**，`ensureTrusted()` 未授权时弹一次系统请求并放弃本次（ad-hoc 签名重部署 cdhash 变会使旧授权失效，须重授）。key.type / clip.paste 文本上屏不走此处，走 `client.insertText` 免授权 |
+| `Sources/WindInputApp/UI/CandidatePanel.swift` | 候选框 NSPanel（borderless 浮窗）+ 自绘 bitmap + 鼠标命中/悬停; 右键只报目标（候选下标 / −1 主菜单），菜单由服务端自绘; 空白处左键**拖动**整窗，松手回报 `pos.candidate`（见「浮窗拖动与位置固定」）|
+| `Sources/WindInputApp/UI/OverlayHost.swift` · `OverlayPanel.swift` · `MenuCatcherPanel.swift` | 光栅浮层承载层，见下「光栅浮层」 |
+| `Sources/WindInputApp/UI/UnifiedMenuBuilder.swift` | 把服务下发的统一菜单树（MenuItemData）构建为原生 NSMenu; 菜单栏指示器与系统输入菜单共用（候选右键菜单已改服务端自绘）。两种派发：`.inProcess`（普通 NSMenu，builder 作 target 回调）与 `.imkCommand`（系统输入菜单，target=nil + selector，IMK 经 doCommandBySelector 路由）; 菜单 id 统一经 NSMenuItem.tag 回传 |
+| `Sources/WindInputApp/UI/ModeStatusController.swift` | 菜单栏模式指示器（NSStatusItem）: 收 CmdModeStatus 显示中英/全半角/标点/方案; 下拉菜单（NSMenuDelegate 动态填充）复用统一菜单树，点击回发 CmdMenuAction，服务未就绪时回退只读状态 |
+| `Sources/WindInputApp/UI/PanelGeometry.swift` | 把 `WireGeometry` 的纯几何接到真实 NSScreen（只决定「哪块屏」这一件事，其余在 kit 里可测）|
+| `Sources/WindInputApp/Resources/Info.plist` | IMK 元数据：ComponentInputModeDict / TISInputSourceID / LSUIElement（**不可**设 LSBackgroundOnly，否则候选 NSPanel 无法显示）/ InputMethodConnectionName = bundleID_Connection。**不可设 `tsInputModeDefaultStateKey`**: 会让 mode 注册即「已启用」却不落盘 AppleEnabledInputSources，导致「+ 添加输入法」列表过滤掉它、主列表又没有 → 中英文分组两头都看不见（Tahoe 实测） |
+| `Sources/WindInputApp/Resources/AppIcon.icns` | 应用图标（Finder/安装器/关于面板），plist `CFBundleIconFile=AppIcon` 引用。与菜单栏单色 `menu_icon.pdf`（`tsInputMethodIconFileKey`）互不相干 |
+| `Sources/WindInputApp/Resources/AuroraInput.entitlements` | App Sandbox 关闭（IMKit `.app` 与服务 UDS 共享文件路径需要） |
+| `Sources/WindInputApp/Resources/{zh-Hans,en}.lproj/InfoPlist.strings` | 本地化菜单名（"极光输入法" / "AuroraInput"） |
+
+## 硬约定
+
+### 协议同步铁律
+
+修改 cmd id 或帧布局必须三处同步：
+
+- `aurora_core/crates/aurora-ipc/src/protocol.rs` + `codec.rs`（**Rust SSOT**）
+- `aurora_tsf/include/BinaryProtocol.h`（Win）
+- `aurora_macos/Sources/WindInputKit/IPC/{ProtocolTypes,BinaryCodec}.swift`（本目录）
+
+> **值由机器把关**：命令码与真源的一致性、以及「同方向不重码」，由
+> `cargo run -p aurora-tools --bin gen_protocol`（在 `aurora_core/` 下）校验，已接入 CI、
+> pre-push 与 `dev.sh ci`。
+>
+> **字节布局也由机器把关**：`Tests/WindInputKitTests/WireVectorTests.swift` 读
+> `aurora_core/crates/aurora-ipc/testdata/wire_vectors.json`（Rust 真源重录），TSF / Linux /
+> macOS 三端消费同一份。上面那句「帧布局它管不到」说的是 `gen_protocol`；改布局后本测试会红。
+
+⚠️ **别按"名字像 Windows 的"来判断要不要接**：`CommitThenDefer`/`CommitAndHold`
+的名字来自 TSF 的「吃了再吐」机制，但产出它们的是跨平台协调器逻辑
+（码表顶码 direct_commit 在 `handle_candidate.rs`），macOS 一样会收到。
+判断依据只看**谁产出**，不看名字。
 
 ### 软键盘：唯一一个由**服务进程自己开窗**的浮层
 
@@ -85,49 +168,11 @@ macOS 侧的通例是「服务进程只光栅化，窗口一律归 `.app`」—�
    `NSApp.sendEvent:`，面板一个鼠标事件都收不到——窗口画得出来、CFRunLoop 的 source
    与 timer 也照常转，唯独点不动。连带地 `stop_main_loop` 也从
    `QuitApplicationEventLoop()` 换成了 `NSApp.stop:` + 补投一个唤醒事件（`stop:` 只设
-   标志，要等下一个事件才生效，不补投的话「重启服务」会挂死）。见
-   `docs/design/soft-keyboard.md` §11.2。
-
-非 `UiCommand` 的一项差距，同样待补：
-
-| 能力 | 影响 | 备注 |
-|---|---|---|
-| `CMD_INPUT_STATS`（英文输入统计） | 英文模式下的输入不计入统计 | Win 侧由 TSF DLL 在英文模式下上报，`.app` 未采集。**已知并暂缓**（2026-08-12 决定：当前 macOS 用户量少，优先级低）。对应设置项 `stats.track_english` 已按平台隐藏，故当前不表现为「开关无效」，只表现为统计数字偏低 |
-
-### 已按平台屏蔽的设置项
-
-无落点的配置**在设置清单里门控掉**（`platform = "windows"`，见 `wind-setting`
-`settings_manifest.toml`），而不是留着让用户配一个不生效的开关：
-
-| 配置项 | macOS 上为何无落点 |
-|---|---|
-| `ui.toolbar.hide_in_fullscreen` / `auto_hide` / `auto_hide_delay` / `vertical` | 菜单栏指示器不是浮动窗口，无从隐藏 / 排列 / 自动淡出。`ui.toolbar.visible` **不在此列**——它在 mac 上控制指示器显隐，是有落点的 |
-| `input.capslock.cancel_on_mode_switch` | 实现手段是合成一次 CapsLock 敲击（`key_inject::tap_caps_lock`），而 macOS 的大写锁定态由 HID 层维护，CGEvent 改不动它。补 VK→CGKeyCode 映射也没用。**`IOHIDSetModifierLockState` 那条路后来也实测过：连接开得出、返回 `KERN_SUCCESS`、状态纹丝不动（Darwin 25.5）；`kIOHIDServerConnectType` 则 `IOServiceOpen` 直接失败，需特权。** 详见 `docs/design/soft-keyboard.md` §11.9 —— 软键盘面板上的 Caps 键同样受这条限制，已按此**在 macOS 上画成禁用态**（`soft_keyboard.rs` 的 `CAPS_CLICKABLE`）：键位留着、不进命中表，但 `caps_on` 的高亮照旧——改不动不等于读不到 |
-| `stats.track_english` | 英文模式下的输入由 Windows 侧 TSF DLL 经 `CMD_INPUT_STATS` 上报，`.app` 没有对应采集点 |
-
-`keys.session_actions` 里的 **CapsLock** 同理无落点（`capslock_hook` 在非 Windows 是
-`bail!` 的空壳），但它是对话框内的一个**取值**而非独立配置项，清单门控管不到，故在
-`wind-setting` 的 `session_actions.rs::key_options` 里按平台剔除。已有配置（从 Windows
-同步过来的）不丢——词表外的键会被当「当前值」保留，并显示「本平台不支持」。
-
-**仍然保留的两个容易被误判为「该屏蔽」的**：
-
-- **「候选窗首显」**（应用独立配置菜单）：`fast` 档的加速判据依赖 `CMD_CARET_PROBE`，
-  那只有 Windows DLL 发；但三档在 mac 上仍有可观测差别（`wait` 兜底 150ms、`fast` 25ms、
-  `instant` 不等），故保留。只是菜单文案描述的 TSF reflow 背景在 mac 上不成立。
-- **`ui.toolbar.visible`**：形态不同（浮动条 vs 菜单栏指示器）但语义一致，文案已改写成
-  平台中立的「常驻显示输入法当前状态」。
-
-已接：`RegisterGlobalHotkeys`（见下）、`OpenPath` / `OpenApp`（`/usr/bin/open`，
-`.app` 包走 `open -a … --args`）、`TakeScreenshot` / `ScreenshotCandidateToClipboard` /
-`CopyTooltipText`（见下）、`ReportCandidatePos` / `ReportStatusTipPos`（见下「浮窗拖动
-与位置固定」）、`ScreenshotStatusTip` / `ScreenshotTooltip`、`ShowCandidateMenu` / `HideMenu` /
-`MenuKey` / `MenuPointer` / `SetWorkArea` / `TooltipMenuAt`（见「光栅浮层」）。
+   标志，要等下一个事件才生效，不补投的话「重启服务」会挂死）。
 
 ### 光栅浮层（悬停提示 / 状态气泡 / Toast / 自绘菜单）
 
-与 Linux Fcitx5 addon 同构（设计与分期见 `docs/design/mac-overlay-raster.md`，Linux 一侧见
-`docs/design/linux-port.md` §5b/§5c）：服务进程按主题光栅化进各层自己的 SHM 段
+与 Linux Fcitx5 addon 同构：服务进程按主题光栅化进各层自己的 SHM 段
 （`/WindInput_SHM[Dev]` + `_TIP` / `_STS` / `_TST` / `_MN<k>`），`CMD_OVERLAY_FRAME` 只带落位规则
 与自动隐藏时长；`.app` 只贴图、落位、计时、转发鼠标。主题的背景图 / 渐变 / 图层 / 软阴影 / 边框 /
 字号偏移因此与 Windows、Linux 完全一致，不再有「每加一个主题字段就要在 Swift 里再抄一遍」。
@@ -220,7 +265,7 @@ host-render DLL 一直在发这个帧、服务端收下什么也不做——两�
 `.app` 侧在 `CandidateContentView.scrollWheel` 采集，触控板须攒够一格再发：
 `hasPreciseScrollingDeltas` 的一次轻扫会来几十个极小 delta，逐个上报会让高亮飞过整页。）
 
-## 安装与 TIS 注册
+### 安装与 TIS 注册
 
 `.app` 工程层的必要条件（缺一项就注册不上或切不过去）：
 
@@ -260,7 +305,7 @@ Program 公证——已多次实测。
 > 的结论，并附 ensan-hcl sample 对照实验。**该结论已被实测推翻**，多半是当时撞上了上面
 > 这个需要注销的缓存问题。勿据此认为本机测不了。
 
-## 变体共存（release/dev）
+### 变体共存（release/dev）
 
 `.app` 无编译期变体标记，一律从**自身 bundleID 后缀**派生变体：
 `Bundle.main.bundleIdentifier` 末尾为 `Dev` → dev。`BridgeEndpoints.variantSuffix`
@@ -325,58 +370,9 @@ panel 的 `show()` 里；拖动引入了反方向，两边一旦不互逆，每�
 **关键**：两变体 `.app` 可执行同名 `WindInput`，进程定位须用 `.app` 路径；
 SHM / socket / config 全部变体隔离（漏一处即冲突，如曾漏 SHM → 开机后开发版候选框不显示）。
 
-## 目录
+## 构建与测试
 
-| 路径 | 角色 |
-|------|------|
-| `Package.swift` | SwiftPM 清单，4 个 target（kit / smoke / app / tests） |
-| `Sources/WindInputKit/IPC/ProtocolTypes.swift` | 协议常量 + payload 类型 + endpoint 路径 |
-| `Sources/WindInputKit/IPC/WireGeometry.swift` | 浮窗落位的 wire ↔ Cocoa 坐标换算（双向，互逆性有 round-trip 测试兜底）|
-| `Sources/WindInputKit/IPC/BinaryCodec.swift` | 帧 encode/decode。`encodeFocusGainedFrame(inputScopeMask:)`: FocusGained 帧布局 `pid:u32(0占位) + inputScopeMask:u64`（bit31=IS_PASSWORD 标记密码框；旧版空帧=mask 0） |
-| `Sources/WindInputKit/IPC/BridgeClient.swift` | UDS 阻塞客户端；`init(socketPath:, ioTimeoutMs:)` 可选 I/O 超时（`SO_RCVTIMEO`/`SO_SNDTIMEO`，0=不设）。request 连接设 2s——服务卡死/重启时同步 `readFrame` 超时抛错而非在 IMKit 主线程无限 hang（上层 catch → reconnect 自愈）；push 连接（PushClient）必须保持 0（长期空闲等服务端推送，否则被读超时误判断连）。**`connect()` 必设 `SO_NOSIGPIPE`**: 否则对端（Rust 服务）重启后向死连接 `write` 触发 SIGPIPE → 默认处置直接**杀死 .app 进程**（表现为服务重启后输入法彻底失灵、需强制重启前端）；设此项后 `write` 改返回 EPIPE 由 `send()` 抛错交上层重连。request/push/sendClient 都用此构造，一处覆盖 |
-| `Sources/WindInputKit/IPC/BridgeResponseRouter.swift` | 把响应帧路由到 `TextInputClient` 调用。**新增 cmd 必须在此显式接一臂**——`default` 是"消费按键但不出字"，漏接的表现是按键被吃掉、屏幕上什么都没有（历史案例：`commitThenDefer` 漏接导致码表顶码上屏丢字） |
-| `Sources/WindInputSmoke/main.swift` | `swift run wind-smoke` — 连 bridge + push，打印帧 |
-| `Sources/WindInputApp/main.swift` | `.app` 入口：默认启 IMKServer + NSApp.run; 也支持 `--register-input-source` / `--enable-input-source` / `--select-input-source` 子命令。`--register-input-source` **总是重注册 + RunLoop 常驻**，不因「已注册」早退（重新部署 .app 的 cdhash 变，必须重注册刷新否则无法切换；install 已先杀旧守护，早退会让注册失去维持进程而失效）。变体隔离：mode-id 检查用 `Bundle.main.bundleIdentifier + "."` 前缀精确匹配（避免 `WindInput`/`WindInputDev` 子串互串） |
-| `Sources/WindInputApp/Controller/InputController.swift` | `IMKInputController` 子类，同步 KeyEvent roundtrip，路由 PassThrough/Consumed/CommitText/UpdateComposition; `activateServer`/`deactivateServer` 发 FocusGained/FocusLost（驱动协调器 imeActivated → 指示器）; **密码框适配**（对齐 Win 36614ae）: `activateServer` 用 `IsSecureEventInputEnabled()` 探测，命中则在帧 payload 携带 InputScope bitmask 的 IS_PASSWORD 位（bit31），协调器据此对密码框强制英文半角直通（模式图标不变）; `deactivateServer` 失焦时若仍有 marked text 先 `setMarkedText("")` 清残留 + 清本端 composition。`menu()` 重写：点系统输入源图标弹出统一菜单（复用 UnifiedMenuBuilder）; 选中项经 IMK `doCommandBySelector` → `imkMenuCommand:` 读 NSMenuItem.tag 回发 CmdMenuAction。**自愈重连**: bridge 连接持有在实例字段，`activateServer`/`handle` 入口 `ensureConnected()` 懒重连; `handle` 的 `send`/`readFrame` 经 `sendAndApply` 执行，失败 catch → `reconnect()` 后**用新连接重试当前键一次**（服务重启后第一个键就自愈，不丢字）; 连接用 `ioTimeoutMs=2000` + `SO_NOSIGPIPE`。**智能配对光标**: `router.moveHostCursor` 闭包把 kit 层的 `CursorMove` 意图用 `KeySynthesizer` 合成 ←/→ 方向键（主线程 async，排在 insertText 后）; 需辅助功能授权，未授权静默降级 |
-| `Sources/WindInputApp/Controller/KeyHandler.swift` | `NSEvent.keyCode` → Win VK 映射 + Modifier 编码 + KeyEvent 帧构造 |
-| `Sources/WindInputApp/UI/CandidatePanelHost.swift` | 候选框承载层：订阅 push，收 CmdHostRenderFrame→SHM→NSPanel、CmdCandidateRects→hit-test、CmdModeStatus→ModeStatusController、CmdOverlayFrame→`OverlayHost`（悬停提示 / 状态气泡 / Toast / 自绘菜单）; 协调候选悬停与悬停提示的保持 / 宽限; 命令直通车按键：CmdKeyTap/Hold/Release/Seq→`KeySynthesizer` CGEvent 合成，CmdKeyType→`activeResponder.applyPushResponse`→router `insertText` 上屏; 鼠标选词回发。导出 `unifiedMenuItems()`/`sendMenuAction(_:)` 供菜单栏指示器 / 系统输入菜单复用同一 IPC 请求与回发路径 |
-| `Sources/WindInputApp/UI/KeySynthesizer.swift` | 命令直通车按键合成（key.tap/seq/hold/release）: canonical 键名→CGKeyCode + 修饰键→CGEventFlags 映射，经 `CGEvent.post(tap: .cgSessionEventTap)` 向聚焦应用注入; **需「辅助功能」授权**，`ensureTrusted()` 未授权时弹一次系统请求并放弃本次（ad-hoc 签名重部署 cdhash 变会使旧授权失效，须重授）。key.type / clip.paste 文本上屏不走此处，走 `client.insertText` 免授权 |
-| `Sources/WindInputApp/UI/CandidatePanel.swift` | 候选框 NSPanel（borderless 浮窗）+ 自绘 bitmap + 鼠标命中/悬停; 右键只报目标（候选下标 / −1 主菜单），菜单由服务端自绘; 空白处左键**拖动**整窗，松手回报 `pos.candidate`（见「浮窗拖动与位置固定」）|
-| `Sources/WindInputApp/UI/OverlayHost.swift` · `OverlayPanel.swift` · `MenuCatcherPanel.swift` | 光栅浮层承载层，见上「光栅浮层」 |
-| `Sources/WindInputApp/UI/UnifiedMenuBuilder.swift` | 把服务下发的统一菜单树（MenuItemData）构建为原生 NSMenu; 菜单栏指示器与系统输入菜单共用（候选右键菜单已改服务端自绘）。两种派发：`.inProcess`（普通 NSMenu，builder 作 target 回调）与 `.imkCommand`（系统输入菜单，target=nil + selector，IMK 经 doCommandBySelector 路由）; 菜单 id 统一经 NSMenuItem.tag 回传 |
-| `Sources/WindInputApp/UI/ModeStatusController.swift` | 菜单栏模式指示器（NSStatusItem）: 收 CmdModeStatus 显示中英/全半角/标点/方案; 下拉菜单（NSMenuDelegate 动态填充）复用统一菜单树，点击回发 CmdMenuAction，服务未就绪时回退只读状态 |
-| `Sources/WindInputApp/UI/PanelGeometry.swift` | 把 `WireGeometry` 的纯几何接到真实 NSScreen（只决定「哪块屏」这一件事，其余在 kit 里可测）|
-| `Sources/WindInputApp/Resources/Info.plist` | IMK 元数据：ComponentInputModeDict / TISInputSourceID / LSUIElement（**不可**设 LSBackgroundOnly，否则候选 NSPanel 无法显示）/ InputMethodConnectionName = bundleID_Connection。**不可设 `tsInputModeDefaultStateKey`**: 会让 mode 注册即「已启用」却不落盘 AppleEnabledInputSources，导致「+ 添加输入法」列表过滤掉它、主列表又没有 → 中英文分组两头都看不见（Tahoe 实测） |
-| `Sources/WindInputApp/Resources/AppIcon.icns` | 应用图标（Finder/安装器/关于面板），plist `CFBundleIconFile=AppIcon` 引用。与菜单栏单色 `menu_icon.pdf`（`tsInputMethodIconFileKey`）互不相干 |
-| `Sources/WindInputApp/Resources/AuroraInput.entitlements` | App Sandbox 关闭（IMKit `.app` 与服务 UDS 共享文件路径需要） |
-| `Sources/WindInputApp/Resources/{zh-Hans,en}.lproj/InfoPlist.strings` | 本地化菜单名（"极光输入法" / "AuroraInput"） |
-
-## 协议同步铁律
-
-修改 cmd id 或帧布局必须三处同步：
-
-- `aurora_core/crates/aurora-ipc/src/protocol.rs` + `codec.rs`（**Rust SSOT**）
-- `aurora_tsf/include/BinaryProtocol.h`（Win）
-- `aurora_macos/Sources/WindInputKit/IPC/{ProtocolTypes,BinaryCodec}.swift`（本目录）
-
-> **值由机器把关**：命令码与真源的一致性、以及「同方向不重码」，由
-> `cargo run -p aurora-tools --bin gen_protocol`（在 `aurora_core/` 下）校验，已接入 CI、
-> pre-push 与 `dev.sh ci`。
->
-> **字节布局也由机器把关**：`Tests/WindInputKitTests/WireVectorTests.swift` 读
-> `aurora_core/crates/aurora-ipc/testdata/wire_vectors.json`（Rust 真源重录），TSF / Linux /
-> macOS 三端消费同一份。上面那句「帧布局它管不到」说的是 `gen_protocol`；改布局后本测试会红。
-> 设计见 `docs/design/cross-platform-consistency.md`。
-
-
-⚠️ **别按"名字像 Windows 的"来判断要不要接**：`CommitThenDefer`/`CommitAndHold`
-的名字来自 TSF 的「吃了再吐」机制，但产出它们的是跨平台协调器逻辑
-（码表顶码 direct_commit 在 `handle_candidate.rs`），macOS 一样会收到。
-判断依据只看**谁产出**，不看名字。
-
-## 本地开发
-
-需要的工具：Xcode（含 swift 5.9+）、Rust toolchain。
+### 本地开发
 
 ```bash
 cd wind_macos
@@ -395,7 +391,7 @@ swift run wind-smoke
 - 请求通道：`[smoke] <- recv cmd=0x0401 len=0`（Consumed）或 `cmd=0x0002 len=0`（PassThrough）
 - push 通道：至少看到 `cmd=0x0206`（StatePush）一帧
 
-## 构建 / 部署
+### 构建 / 部署
 
 统一入口 `scripts/mac/dev.sh`（命令面对齐 Windows 的 `scripts/dev.ps1`）：
 
@@ -416,3 +412,25 @@ scripts/mac/dev.sh hooks        # 激活 pre-commit（提交前 cargo fmt --chec
 
 **固定用自签证书签名**：macOS 26 的 IME 必须真 Authority（纯 ad-hoc 装上能切但 IMK 不拉起
 控制器 → 无法输入）；且证书签名 cdhash 稳定，重装不掉 TIS 注册，不用每次去系统设置重加。
+
+## 依赖
+
+### 外部工具
+
+- Xcode（含 swift 5.9+）
+- Rust toolchain
+
+### 内部
+
+- Rust 服务（`aurora_core/` cargo workspace）：渲染、定位、上屏决策的真身；本目录只经 UDS 与它通信
+- `aurora-ui`：浮层光栅化与 `mac_panel.rs` 的软键盘面板
+- `aurora-ui-rust`（平级仓 `../aurora-ui-rust`）：设置程序 auroraui，单实例转发（深链依赖）
+- `scripts/mac/dev.sh`：构建 / 安装 / 诊断的统一入口
+
+## 全局约束
+
+跨组件与全仓约定按需引用根 [`AGENTS.md`](../AGENTS.md)（协议面三层闸门、平台分层策略、提交与格式化、构建脚本），本节只补本目录特有的：
+
+- **先判「真身归谁」再动手**：通例是渲染 / 定位 / 上屏决策归 Rust 服务，`.app` 只保留必须拿 IMKit 上下文的部分（caret、keyCode、IMK 生命周期、NSPanel 呈现）；软键盘是唯一例外，判据是「这个浮层要不要跟随 caret」。
+- **变体隔离不能漏面**：SHM / socket / config / 目录 / 设置应用名全部按变体派生，漏一处即两变体互相踩（曾漏 SHM，表现为开机后开发版候选框不显示）。
+- **授权与签名是功能前提，不是部署细节**：辅助功能授权掉线时按键合成 / 宿主光标回退是**静默**失灵；判据要看 TCC 里存的 csreq，而不是系统设置页的开关。

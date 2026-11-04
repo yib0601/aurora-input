@@ -1,4 +1,10 @@
-# wind_linux
+<!-- Parent: ../AGENTS.md -->
+
+# aurora_linux
+
+> Linux 上的 **Fcitx5 addon**（C++17）：按键转发给 Rust 服务、把服务的上屏/预编辑写回 Fcitx5 的 `InputContext`；与 Windows 的 `aurora_tsf/`、macOS 的 `aurora_macos/` 对位。
+
+## 职责
 
 Linux 上的 **Fcitx5 addon**（C++17），与 Windows 的 `aurora_tsf/`（TSF DLL）、macOS 的
 `aurora_macos/`（IMKit `.app`）对位。它是薄壳：按键转发给 Rust 服务、把服务的上屏/预编辑写回
@@ -8,7 +14,45 @@ Fcitx5 的 `InputContext`。引擎/词库/候选逻辑全在服务里，这里**
 `linux-host` 让协调器走「外部宿主 forwarder」（`aurora-ui/src/manager_macos.rs`，macOS 与 Linux
 共用，文件名沿用）。
 
-## 结构
+边界：
+
+- 引擎 / 词库 / 候选逻辑全在 Rust 服务里，这里**不做任何中英判定**；窗口与浮层的**像素**也在服务进程光栅化，本 addon 只贴帧、给本地几何与交互记账。
+- `src/core` + `include` 是纯逻辑（编解码 / 键映射 / 按键合成 / 响应路由 / 菜单与浮层交互 / SHM 读端），不依赖 Fcitx5，可单独编与测；碰 Fcitx5 头文件的只有 `src/fcitx/WindEngine.*` 与 `src/fcitx/X11Panel.*`。
+
+### 与 Windows / macOS 的差距
+
+| 能力 | 现状 | 备注 |
+|---|---|---|
+| 候选窗显示（X11） | 已接 | 见「候选窗（X11）」 |
+| 候选窗显示（Wayland 原生） | 已接（`WaylandPanel`），treeland 真机验过 | 跟着光标走的（候选、tooltip、跟随光标的状态气泡）走 `zwp_input_method_v2` 的 popup surface（KWin 只有 input-method-v1，走 `zwp_input_panel_v1` 的 overlay 面板：KWin 全局只认一个面板、角色拆不掉，故每个显示周期换新 surface，旧的经 `RetiredSurfaces` 延迟销毁），**由合成器按文本光标摆位**（客户端报的 `cursorRect()` 是窗口相对坐标，没法自己摆），合成进同一张位图（tooltip 按服务端落位相对候选窗摆）；按屏幕摆的（Toast、屏幕锚点 / 固定位置的状态气泡）在合成器有 wlr-layer-shell 时各开一个 OVERLAY 层 surface，按锚点 + 边距摆，在任务栏之上，且不论焦点在哪种应用都走这条（XWayland 窗口会被 treeland 压在任务栏下）。气泡右键菜单开在一张铺满输出的透明 layer 底板上（各级菜单是子 surface），坐标即输出坐标，菜单外的点击也由底板接住（代替抓指针；请求 2s 无菜单 / 60s 无点击 / 120s 上限三道兜底收起）。layer surface 收起时连角色对象一起销毁、下次重建（只摘 buffer 时 treeland 不再发 configure）；所有我们的 wl_surface 只建不毁并挂全零 user_data 占位（classicui 的指针回调会读它）。鼠标：点选、翻页、滚轮、悬停、右键菜单；layer 上的气泡可拖（relative-pointer 取位移，surface 自己在动，按 surface 坐标算会乱跳）、Toast 可点击关闭；popup 里只有候选与气泡收鼠标。跟随光标的气泡不能拖；菜单靠近屏幕下 / 右缘可能被合成器裁掉；锚在底 / 右边的 layer 气泡开始拖时可能跳一个任务栏厚度（合成器不告诉独占区）；候选窗落在任务栏处会被盖住（popup 层级归合成器）；GNOME 不支持 input-method-v2，应用走 X11 / XWayland 那条路（仅当 `XDG_CURRENT_DESKTOP` 分段含 `GNOME` 时按 §7.10 折光标，Shell 扩展见 `gnome-shell-extension/README.md`；非 GNOME 保持直通）；KDE Plasma（input-method v1）Kubuntu 26.04 / KWin 6.6.6 真机验过；多显示器 / 混合缩放只近似；arm64 上未实机验 |
+| 多显示器 | 未做 | 工作区取整个根窗口，不按 RandR 显示器切分：跨屏边缘的翻转/钳制按整块虚拟屏算 |
+| HiDPI（帧 `scale>1`） | 按物理像素原样贴 | X11 没有逻辑坐标，服务端在 Linux 上目前恒发 scale=1 |
+| 候选窗拖动 / 固定位置回报（`pos.candidate` / `pos.candidate.query`） | 未接 | 服务端问位置时不答 = 保留旧值（macOS 不可见时也不答，语义安全） |
+| 候选右键菜单 / 功能主菜单 | 已接（X11） | 见「自绘菜单」。缺：Wayland；多显示器（工作区取整块根窗口）；点菜单外那一下被菜单吃掉（同 X11 原生菜单，Windows 会透传）；菜单开着时在候选上再右键只关菜单、不接着弹新菜单（Windows 会） |
+| tooltip / 状态气泡 / toast | 已接（X11），含鼠标交互 | 见「光栅浮层」：悬停保持、气泡拖动与右键菜单、提示右键菜单（复制 / 上屏 / 截图）、Toast 点击关闭，e2e 逐项覆盖。缺：Wayland；多显示器（拖动夹回按整块根窗口）；「截图所有窗口到文件」（`TakeScreenshot` 的 `shot.panel`）仍只截候选窗（气泡 / 提示菜单里的「截图此窗口」已可用）；提示菜单开着时点在提示上只关菜单、不接着弹新菜单（Windows 会重新请求） |
+| 多显示器下的浮层锚点 | 未做 | 工作区取整个根窗口（同候选窗）：Toast / 锚点气泡落在整块虚拟屏的角上，而不是光标所在显示器 |
+| 命令直通车按键合成（`CMD_KEY_TAP/SEQ/HOLD/RELEASE`） | 已接（`forwardKey`） | 见「命令直通车按键合成」。与 Windows（`SendInput`，系统级）/ macOS（CGEvent 发到会话）不同：**只打进当前输入上下文所在的应用**，窗口管理器级的全局快捷键（如 Super+E）不会触发；`hold` 不改变 X 服务器的真实修饰态；`capslock` 只是把键交给应用，不切换大写锁定。e2e（DBus 前端）逐条覆盖，XIM 手工探针验过；GTK / Qt 模块、Wayland 前端、真实应用里的行为未验 |
+| 出厂命令短语（`system.phrases.toml` 的 `$CC`） | 按平台取舍 | `cono` / `coca` 在 Linux 上是 `proc.any` 多候选（装了哪个编辑器 / 计算器就开哪个），`cohm` 走 `xdg-open`；`codl`（删行，`key.seq("Home", "Shift+End", "Backspace")`）经上一行的按键合成生效，e2e 断言了它的 ForwardKey 序列。审计清单与取舍见设计文档 §5e。e2e 仅在 `linux-host` 形态下验证（假程序放进 PATH）；各真实桌面上的程序名没有逐个验过 |
+| 模式指示 | 托盘 / 面板图标（`subModeIcon`）按模式主字运行时渲染，同 Windows 语言栏：中文为方案标签、英文「英」、大写锁定「A」，自定义方案标签 / `[ui.labels]` 同样上图 | 见设计文档 §5d（含 Windows 状态对照表、宿主图标缓存）。e2e 经 kimpanel 验了图标名与标签随 Shift / CapsLock / 切方案 / 菜单切换、换焦点不回退，并验文件在用户图标目录、是合法 PNG；notificationitem（SNI）取的是同一个值但未单独验，真机托盘（GNOME AppIndicator、KDE、Deepin dde-dock）的实际显示与图标缓存时序未验。缺：角标（全角 / 标点）；密码框里不换「英」；首次安装时若用户图标目录此前不存在，托盘要重启 Fcitx5 后才看得见运行时图标（之前显示种子） |
+| 系统输入法配置里的「配置」按钮 | ExternalOption → 设置程序 | e2e 验了 `Controller1.GetConfig` 的描述与命令可启动；fcitx5-configtool 5.1.6+ 直接启动，22.04（5.0.x）显示一页一个按钮；真机点按钮与 Deepin 配置界面未验 |
+| 非嵌入模式的占位组合 | 不写进应用（addon 过滤） | 见设计文档 §5d |
+| 工具栏 / 软键盘 | 已接（0.127，X11 与 Wayland） | addon 自绘、服务端出像素 |
+| 截图所有窗口到文件（主菜单「高级」） | 已接 | 候选窗与各浮层的像素都在服务进程，就地编码存盘（`manager_macos.rs` 的 `TakeScreenshot`，macOS 同一份）；不含菜单。此前因流程按「像素在宿主」写（`shot.panel`）而摘掉，现已不需要宿主回应 |
+| 按应用独立配置（compat） | 机制可用，真机验过（2026-10-09：两个应用分别默认中文 / 英文，切换焦点时正确切换）；**打包时不带 Windows 内置规则**（`scripts/lib/gen-compat.sh linux` 生成「字段说明 + 零规则」的 Linux 版系统层，各平台兼容策略不共用） | 服务按 `FOCUS_GAINED` 的 bundleId（= `InputContext::program()`）匹配规则，同 macOS；设置端的应用兼容性窗口保留 |
+| 打开设置（`settings.open` 扩展信封） | 已接 | `WindEngine::onExt` → `spawnDetached`（与拉起服务同一个：双 fork 不留僵尸、新会话、继承 fcitx5 的会话环境，但不继承它的 fd 与信号处置；`fcitx::startProcess` 只做前两样）。设置程序已开着时由它自己的单实例转发参数；但**转来的切页要等设置窗口下一次输入事件才显示**（auroraui Linux 后端，冷启动深链正常） |
+| 系统关联（`aurora-input://` 协议、`.wpkg` / `.wtheme`） | 已接（deb 声明 + 设置程序可按用户注册） | deb 装 `scripts/linux/pkg/` 下两个 `.desktop` 与 `windinput.xml`，类型图标在 `data/icons/hicolor/*/mimetypes/`（`scripts/linux/gen-mime-icons.py`）；便携 / tarball 在设置「高级 → 系统集成」按用户注册（写 `$XDG_DATA_HOME`）。`scripts/linux/e2e-assoc.sh` 覆盖类型识别、默认处理者、`xdg-open` / `gio open` 拉起设置程序进导入确认、首实例已开时转参、注册/取消一圈。未验：真桌面文件管理器双击（Nautilus / Dolphin / Deepin）、KDE 的 ktraderclient 查询分支、snap / flatpak 浏览器点链接；用户级注册不装图标 |
+| 全局热键 | 不做（确定） | 设置端藏掉热键对话框的「全局」勾选；热键只在输入法激活、有焦点时经按键通路生效 |
+| 首启自动配置（开箱即用） | 已接（`src/fcitx/FirstRunSetup.cpp`，addon 加载后经 defer 事件执行） | 把「极光输入法」加进输入法组、`ShareInputState=All`、`ActiveByDefault=True`，三件原先要用户手动做的事一次配好；**只补不改**（组里已有极光就不动；两个 Behavior 仅在出厂默认值时才改），完成后写 `~/.config/fcitx5/aurorainput-setup-done` 标记，此后一律尊重用户现状（删掉标记可让下次重做）。前提：addon 的 `OnDemand=False`——`True` 时「极光不在组里 → addon 不加载 → 引导不跑」是死锁。代价是不用极光的 Fcitx5 用户也会加载本 addon 并拉起服务。实测：全新用户配置目录清空后启动 fcitx5，重启一次即能用 GNOME 原生应用打中文 |
+| Shift 单击切中英 | 已接（addon 接管 Fcitx5 的 `AltTriggerKeys`） | `claimShiftTap`，设计文档 §8；用户清空 `AltTriggerKeys` 或当前不是清风时不插手 |
+| 「Shift+鼠标拖选不算单击」 | 缺 | Windows 靠 ToggleTapPolicy 的四个鼠标信号；Fcitx5 引擎收不到鼠标事件 |
+| CapsLock 状态通知（`VK_CAPITAL` keyup） | 已发 | 松开时发，服务端同步镜像、弹状态气泡、托盘换「A」；另由每键 `toggles` 校准 |
+| 英文输入统计（`CMD_INPUT_STATS`） | 不发 | 同 macOS |
+| 小键盘 / 符号键映射 | keysym 走 US 布局反查 | 非 US 布局的 Shift 符号键（如德语 `§`）没有 VK，透传给宿主 |
+| 彩色 emoji | 已接（服务端文字后端） | CBDT（Noto Color Emoji）、COLR v0/v1、OpenType-SVG 实测可画；肤色 / ZWJ / 国旗 / 键帽按字体 GSUB 合成一个字形。依赖系统装彩色 emoji 字体（`.deb` Recommends `fonts-noto-color-emoji`），没有时画单色字形或方框。sbix 未实测、COLR v1 扫掠渐变降级为纯色，见 `aurora-ui/src/text/linux/mod.rs` 模块头 |
+| 非 X11 坐标（Wayland） | 已绕开 | 不用坐标：popup surface 交给合成器摆位。XWayland 应用仍走 X11 窗口 |
+| 界面缩放（DPI） | 已接 | Wayland 取 wl_output / xdg-output（分数缩放经 wp_viewporter），X11 取 `Xft.dpi`（回退 `GDK_SCALE`）；经 `host.display` 扩展信封上报，服务端 `aurora_ui::dpi::scale_for_point` 统一按它光栅化 |
+
+## 关键文件
 
 | 路径 | 角色 |
 |---|---|
@@ -29,71 +73,14 @@ Fcitx5 的 `InputContext`。引擎/词库/候选逻辑全在服务里，这里**
 | `src/fcitx/WindEngine.{h,cpp}` | Fcitx5 引擎（`InputMethodEngineV2`）；与 `X11Panel` 是仅有的两个依赖 Fcitx5 头文件的地方 |
 | `src/fcitx/X11Panel.{h,cpp}` | X11 候选窗 + 三层光栅浮层 + 自绘菜单：自建 xcb 连接、override-redirect 窗口贴帧、候选窗的鼠标点击/悬停/滚轮/右键回传、浮层的悬停保持 / 拖动 / 右键 / 点击关闭与自动隐藏计时、菜单打开期间抓指针并回报 |
 | `data/*.conf.in` | addon / 输入法描述文件模板（构建时生成到 `build/…/share/fcitx5/`） |
-| `data/icons/hicolor` | 图标成品，CMake 装到 `share/icons`。`windinput`（应用图标）由 `scripts/linux/gen-icons.py` 拆自 wind-setting 的 ico；托盘图标的种子 `windinput-zh` / `-en` / `-caps`（运行时图标还没写出时的降级）由 `aurora_core/crates/aurora-ui/examples/gen_tray_icons.rs` 生成，与运行时图标同一个 `tray_icon::render`（`host_ui_test` 核对文件齐全）。运行时图标不在这里，在用户的 `$XDG_DATA_HOME/icons/hicolor` |
+| `data/icons/hicolor` | 图标成品，CMake 装到 `share/icons`。`windinput`（应用图标）由 `scripts/linux/gen-icons.py` 拆自设置程序（`aurora_core/apps/setting`）的 ico；托盘图标的种子 `windinput-zh` / `-en` / `-caps`（运行时图标还没写出时的降级）由 `aurora_core/crates/aurora-ui/examples/gen_tray_icons.rs` 生成，与运行时图标同一个 `tray_icon::render`（`host_ui_test` 核对文件齐全）。运行时图标不在这里，在用户的 `$XDG_DATA_HOME/icons/hicolor` |
 | `tests/*_test.cpp` | 纯 C++17 单测（不需要 Fcitx5），与 `aurora_tsf/tests` 同风格 |
 | `include/GnomeCaretGeom.h` + `src/core/GnomeCaretGeom.cpp` | GNOME 光标折算的纯函数（桌面名 / 前端名 / scale）。D-Bus 客户端在 `src/fcitx/GnomeCaret.cpp`，只在 Wayland 且有 gio 时编进 addon |
 | `gnome-shell-extension/` | Shell 扩展 `windinput-caret@windinput`（Shell 47–50）。安装说明见该目录 README |
 
-`src/core` 与 `include` 不依赖 Fcitx5，能单独编、单独测——这条边界别破。
+## 硬约定
 
-## 构建 / 测试
-
-本机无 root 时先搭用户前缀 SDK（幂等，只写 `~/.local/opt/fcitx5-sdk`，不碰 `/usr`）：
-
-```bash
-scripts/linux/bootstrap-sdk.sh                  # apt-get download + dpkg -x fcitx5 全家、Xvfb、cmake(pip)、dbus-next(pip)
-eval "$(scripts/linux/bootstrap-sdk.sh env)"    # PATH / PKG_CONFIG_PATH / CMAKE_PREFIX_PATH / LD_LIBRARY_PATH
-```
-
-```bash
-make -C wind_linux test                         # 单测：不需要 cmake / Fcitx5，g++ 直接编
-cmake -S wind_linux -B aurora_linux/build/cmake -G Ninja && cmake --build aurora_linux/build/cmake
-ctest --test-dir aurora_linux/build/cmake         # 同一批单测经 CMake 跑
-scripts/linux/e2e.sh                            # 端到端：真服务 + 真 fcitx5 + DBus 客户端打字
-```
-
-`e2e.sh` 的做法（改它之前先读脚本头注释）：`dbus-run-session` 起私有会话总线；服务二进制拷进
-临时目录、`data` 下逐项软链到 `build_dev/data`（`system.phrases.toml` 例外：取仓库 `data/` 那份再追加
-e2e 专用的按键合成短语——`build_dev/data` 是构建时的拷贝，可能落后于短语改动），配置/数据/缓存全用 `XDG_*_HOME` 隔离，socket 走
-`AURORA_INPUT_RUNTIME_DIR`；fcitx5 以 `--disable=all --enable=keyboard,dbus,dbusfrontend,windinput`
-起，`FCITX_ADDON_DIRS` / `FCITX_DATA_DIRS` 指到构建目录；`e2e_client.py`（dbus-next）经
-`org.fcitx.Fcitx.InputContext1.ProcessKeyEvent` 送键，收 `CommitString` / `UpdateFormattedPreedit`
-信号断言。临时目录必须短（socket 路径 108 字节上限），默认 `/tmp/wi-linux/e2e.<pid>`。
-
-候选窗与浮层（X11）用例在私有 Xvfb 里跑（`AURORA_E2E_X11=0` 关掉）：打字后按 `WM_CLASS` 实例名
-`aurora-candidate` 找窗（`xdotool search --classname`，**不是** `--class`——后者匹配第二段
-`WindInput`），断言已映射、落在光标下方、截图里有内容、上屏/Esc/鼠标选词后隐藏、屏幕底边时
-翻到光标上方；鼠标选词因命中矩形只有服务端知道，沿窗口中线逐点点击直到有上屏。浮层用例：
-Shift 切中英 / Ctrl+Shift+E 切方案后等 `wind-status` 出现再等它自己消失；Toast 用
-`aurora_input ui toast`（控制 RPC 在 `$XDG_RUNTIME_DIR` 下，e2e 已把它指进临时目录）；tooltip 沿
-候选窗中线 `xdotool mousemove` 直到出现。截图存在 `$W/shots/`（`KEEP=1` 保留）。`AURORA_E2E_COMPOSITOR=1` 另起 xcompmgr 走 ARGB 路径。
-浮层交互用例：`xdotool mousedown / mousemove / mouseup` 拖气泡，数 fcitx5 日志里「状态气泡拖动松手」
-验 `pos.status_tip` 上报、读隔离目录的用户 `config.toml` 验落不落盘；剪贴板是假的
-`$W/fakebin/xclip`（写入记进 `$W/clipboard.log`）——为此 Xvfb 先于服务起，服务要继承 `DISPLAY`
-才会选 xclip 后端。e2e 把 `ui.status.duration` 调到 2 秒（出厂 800ms，来不及把指针挪上去）。
-
-设置程序用例：e2e 经包装脚本（`$W/svc/aurora_setting`，记下 argv 再 exec 真程序，真程序默认取
-`~/.cache/wi-tgt-setting-linux/debug/aurora_setting`，`AURORA_E2E_SETTING` 可覆盖，缺它 e2e 直接失败）
-设 `AURORA_INPUT_SETTING`，按 `Ctrl+Shift+]` 验「热键 → 信封 → 拉起 → 连上服务 → 再按一次转交首实例
-→ 退出」。设置窗口按 WM_CLASS 实例名 `aurora_setting` 找；映射早于首帧，截图要轮询到有内容。
-
-e2e 的坑，都踩过：
-
-- **服务 socket 起得比引擎早**。词库加载（首次还要建 `.wdat` 缓存，十几秒）完成前按键一律
-  PassThrough。客户端先用真实通路探活（按 `a` 直到被吃再 `Esc`），不要用 sleep 猜。
-- **`dbus` 模块依赖 `keyboard`**：`--enable` 里少了 keyboard，dbus 模块根本不加载，
-  `org.fcitx.Fcitx5` 这个名字永远没人持有。
-- **SDK 里的 Xvfb 在写死的 `/usr/bin` 找 xkbcomp**，没 root 装不进去，键盘初始化失败即退出。
-  bootstrap 复制一份 `Xvfb-wind`、把那个字符串原地改成同长的 `/tmp/wlx` 并软链到 SDK 的
-  `usr/bin`；xkb 数据走 `-xkbdir /usr/share/X11/xkb`。
-- **xcompmgr + Xvfb 下 `xwd -root` 截到的合成结果不可信**（候选窗整体错位、文字出彩边），
-  而 `xwd -id <候选窗>` 取到的窗口自身像素是对的。ARGB 路径因此只验到「窗口像素正确」，
-  屏幕上的合成效果要在真桌面上看。
-- **Fcitx5 出厂 `AltTriggerKeys=Shift_L`** 会在引擎之前截走 Shift 单击。addon 在 `PreInputMethod`
-  阶段先接管（`WindEngine::claimShiftTap`，条件与取舍见设计文档 §8），**用户不必改任何 Fcitx5 配置**；
-  e2e 的 fcitx 配置保留出厂值并带「键盘 + 清风」两个输入法，Shift 用例就是回归。
-
-## 协议用法（与 macOS 的异同）
+### 协议用法（与 macOS 的异同）
 
 - 按键：只发 **keydown**（`CMD_KEY_EVENT`），**同步**等响应再决定 `filterAndAccept`。Fcitx5 与
   IMKit 一样没有 TSF 那种「先决定吃不吃、再问服务」的前置闸门，所以「C++ 吃键集 ⊆ Rust
@@ -154,7 +141,7 @@ e2e 的坑，都踩过：
   SIGCONT 验（`stall_cases`）。
 - `reset`（宿主要求重置，如鼠标点击挪了光标）→ 收组合 + `CMD_COMPOSITION_TERMINATED`。
 
-## 候选窗（X11）
+### 候选窗（X11）
 
 与 macOS 同构：服务进程光栅化（BGRA 预乘 alpha）→ 写 POSIX SHM `/WindInput[Dev].<uid>` →
 push `CMD_HOST_RENDER_FRAME`（坐标 + flags）与 `CMD_CANDIDATE_RECTS`（命中矩形，晚于帧）。
@@ -183,9 +170,9 @@ addon 在主线程（经 EventDispatcher）按名只读打开 SHM、拷出一帧
 - 悬停只报候选下标（≥0）：命中表里 -1/-2 是翻页按钮，而悬停协议里 -1 表示「无」。点击翻页
   按钮直接发负下标的 `CMD_CANDIDATE_SELECT`（服务端按 -1 上页 / -2 下页处理）。滚轮 ±120。
 
-## 光栅浮层：状态气泡 / Toast / 悬停提示（X11）
+### 光栅浮层：状态气泡 / Toast / 悬停提示（X11）
 
-**与 macOS 同构**（2026-10 起 macOS 也改成这样，见 `docs/design/mac-overlay-raster.md`）：
+**与 macOS 同构**（2026-10 起 macOS 也改成这样）：
 本 addon 不排字，这三者与候选窗同构——服务进程按主题光栅化（`aurora-ui/src/overlay_host.rs`，
 真实字形走 `text/linux`），像素写进**各层自己的** SHM 段（`/WindInput[Dev].<uid>` + `_TIP` /
 `_STS` / `_TST`，`overlayShmName`），再推 `CMD_OVERLAY_FRAME`（0x0513，68 字节基础布局，macOS 版
@@ -230,9 +217,9 @@ addon 在主线程（经 EventDispatcher）按名只读打开 SHM、拷出一帧
 - **隐藏**：服务端对某层推 `FLAG_VISIBLE` 缺席的帧；候选窗隐藏时 tooltip 两端都会藏（服务推隐藏帧，
   `hide()` 也兜底藏）。`SERVICE_READY` 时关掉三层 SHM 映射并藏掉全部浮层。
 
-## 自绘菜单（X11）
+### 自绘菜单（X11）
 
-设计与关闭路径全表见 `docs/design/linux-port.md` §5c。本端要点：
+本端要点：
 
 - **每级一窗**：`wind-menu-0`…`wind-menu-5`（WM_CLASS 实例名，e2e 按它找窗），`OVERLAY_PLACE_EXACT`
   原样摆放、不夹回。只有**新映射**的一级才提到最上；已显示的级只换像素 / 位置、不重排 z 序——
@@ -269,7 +256,7 @@ addon 在主线程（经 EventDispatcher）按名只读打开 SHM、拷出一帧
   点状态区动作，听 `org.kde.kimpanel.inputmethod` 的 `UpdateProperty` 取当前输入法图标），故
   fcitx5 要 `--enable` 上 `kimpanel`。
 
-## 命令直通车按键合成
+### 命令直通车按键合成
 
 服务端（`ext_presenter`）不自己合成按键：`key.tap / seq / hold / release` 经
 `handle_cmdbar_macos.rs::CoordKeys` 编成 `CMD_KEY_TAP / SEQ / HOLD / RELEASE` 推给宿主，载荷是
@@ -320,41 +307,7 @@ forwardKey 对某类应用确实无效时才值得做，目前没有这样的证
 - 已知风险：GTK 等宿主在光标被程序挪动时也可能 reset IC——`hold` 之后紧跟的 `tap` 若让应用
   挪了光标，其 reset 会提前抬起按住的键（未在真实 GTK 应用里验）。
 
-## 与 Windows / macOS 的差距
-
-| 能力 | 现状 | 备注 |
-|---|---|---|
-| 候选窗显示（X11） | 已接 | 见上「候选窗（X11）」 |
-| 候选窗显示（Wayland 原生） | 已接（`WaylandPanel`），treeland 真机验过 | 跟着光标走的（候选、tooltip、跟随光标的状态气泡）走 `zwp_input_method_v2` 的 popup surface（KWin 只有 input-method-v1，走 `zwp_input_panel_v1` 的 overlay 面板：KWin 全局只认一个面板、角色拆不掉，故每个显示周期换新 surface，旧的经 `RetiredSurfaces` 延迟销毁，见 `docs/design/linux-kde-input-method-v1.md`），**由合成器按文本光标摆位**（客户端报的 `cursorRect()` 是窗口相对坐标，没法自己摆），合成进同一张位图（tooltip 按服务端落位相对候选窗摆）；按屏幕摆的（Toast、屏幕锚点 / 固定位置的状态气泡）在合成器有 wlr-layer-shell 时各开一个 OVERLAY 层 surface，按锚点 + 边距摆，在任务栏之上，且不论焦点在哪种应用都走这条（XWayland 窗口会被 treeland 压在任务栏下）。气泡右键菜单开在一张铺满输出的透明 layer 底板上（各级菜单是子 surface），坐标即输出坐标，菜单外的点击也由底板接住（代替抓指针；请求 2s 无菜单 / 60s 无点击 / 120s 上限三道兜底收起）。layer surface 收起时连角色对象一起销毁、下次重建（只摘 buffer 时 treeland 不再发 configure）；所有我们的 wl_surface 只建不毁并挂全零 user_data 占位（classicui 的指针回调会读它）。鼠标：点选、翻页、滚轮、悬停、右键菜单；layer 上的气泡可拖（relative-pointer 取位移，surface 自己在动，按 surface 坐标算会乱跳）、Toast 可点击关闭；popup 里只有候选与气泡收鼠标。跟随光标的气泡不能拖；菜单靠近屏幕下 / 右缘可能被合成器裁掉；锚在底 / 右边的 layer 气泡开始拖时可能跳一个任务栏厚度（合成器不告诉独占区）；候选窗落在任务栏处会被盖住（popup 层级归合成器）；GNOME 不支持 input-method-v2，应用走 X11 / XWayland 那条路（仅当 `XDG_CURRENT_DESKTOP` 分段含 `GNOME` 时按 §7.10 折光标，Shell 扩展见 `gnome-shell-extension/README.md`；非 GNOME 保持直通）；KDE Plasma（input-method v1）Kubuntu 26.04 / KWin 6.6.6 真机验过；多显示器 / 混合缩放只近似；arm64 上未实机验 |
-| 多显示器 | 未做 | 工作区取整个根窗口，不按 RandR 显示器切分：跨屏边缘的翻转/钳制按整块虚拟屏算 |
-| HiDPI（帧 `scale>1`） | 按物理像素原样贴 | X11 没有逻辑坐标，服务端在 Linux 上目前恒发 scale=1 |
-| 候选窗拖动 / 固定位置回报（`pos.candidate` / `pos.candidate.query`） | 未接 | 服务端问位置时不答 = 保留旧值（macOS 不可见时也不答，语义安全） |
-| 候选右键菜单 / 功能主菜单 | 已接（X11） | 见上「自绘菜单」。缺：Wayland；多显示器（工作区取整块根窗口）；点菜单外那一下被菜单吃掉（同 X11 原生菜单，Windows 会透传）；菜单开着时在候选上再右键只关菜单、不接着弹新菜单（Windows 会） |
-| tooltip / 状态气泡 / toast | 已接（X11），含鼠标交互 | 见上「光栅浮层」：悬停保持、气泡拖动与右键菜单、提示右键菜单（复制 / 上屏 / 截图）、Toast 点击关闭，e2e 逐项覆盖。缺：Wayland；多显示器（拖动夹回按整块根窗口）；「截图所有窗口到文件」（`TakeScreenshot` 的 `shot.panel`）仍只截候选窗（气泡 / 提示菜单里的「截图此窗口」已可用）；提示菜单开着时点在提示上只关菜单、不接着弹新菜单（Windows 会重新请求） |
-| 多显示器下的浮层锚点 | 未做 | 工作区取整个根窗口（同候选窗）：Toast / 锚点气泡落在整块虚拟屏的角上，而不是光标所在显示器 |
-| 命令直通车按键合成（`CMD_KEY_TAP/SEQ/HOLD/RELEASE`） | 已接（`forwardKey`） | 见上「命令直通车按键合成」。与 Windows（`SendInput`，系统级）/ macOS（CGEvent 发到会话）不同：**只打进当前输入上下文所在的应用**，窗口管理器级的全局快捷键（如 Super+E）不会触发；`hold` 不改变 X 服务器的真实修饰态；`capslock` 只是把键交给应用，不切换大写锁定。e2e（DBus 前端）逐条覆盖，XIM 手工探针验过；GTK / Qt 模块、Wayland 前端、真实应用里的行为未验 |
-| 出厂命令短语（`system.phrases.toml` 的 `$CC`） | 按平台取舍 | `cono` / `coca` 在 Linux 上是 `proc.any` 多候选（装了哪个编辑器 / 计算器就开哪个），`cohm` 走 `xdg-open`；`codl`（删行，`key.seq("Home", "Shift+End", "Backspace")`）经上一行的按键合成生效，e2e 断言了它的 ForwardKey 序列。审计清单与取舍见设计文档 §5e。e2e 仅在 `linux-host` 形态下验证（假程序放进 PATH）；各真实桌面上的程序名没有逐个验过 |
-| 模式指示 | 托盘 / 面板图标（`subModeIcon`）按模式主字运行时渲染，同 Windows 语言栏：中文为方案标签、英文「英」、大写锁定「A」，自定义方案标签 / `[ui.labels]` 同样上图 | 见设计文档 §5d（含 Windows 状态对照表、宿主图标缓存）。e2e 经 kimpanel 验了图标名与标签随 Shift / CapsLock / 切方案 / 菜单切换、换焦点不回退，并验文件在用户图标目录、是合法 PNG；notificationitem（SNI）取的是同一个值但未单独验，真机托盘（GNOME AppIndicator、KDE、Deepin dde-dock）的实际显示与图标缓存时序未验。缺：角标（全角 / 标点）；密码框里不换「英」；首次安装时若用户图标目录此前不存在，托盘要重启 Fcitx5 后才看得见运行时图标（之前显示种子） |
-| 系统输入法配置里的「配置」按钮 | ExternalOption → 设置程序 | e2e 验了 `Controller1.GetConfig` 的描述与命令可启动；fcitx5-configtool 5.1.6+ 直接启动，22.04（5.0.x）显示一页一个按钮；真机点按钮与 Deepin 配置界面未验 |
-| 非嵌入模式的占位组合 | 不写进应用（addon 过滤） | 见设计文档 §5d |
-| 工具栏 / 软键盘 | 已接（0.127，X11 与 Wayland） | addon 自绘、服务端出像素，见 [linux-toolbar-softkeyboard.md](../docs/design/linux-toolbar-softkeyboard.md)；已知限制见 linux-port.md |
-| 输入诊断 HUD | 不做 | 同 macOS；主菜单里按平台摘掉 |
-| 截图所有窗口到文件（主菜单「高级」） | 已接 | 候选窗与各浮层的像素都在服务进程，就地编码存盘（`manager_macos.rs` 的 `TakeScreenshot`，macOS 同一份）；不含菜单。此前因流程按「像素在宿主」写（`shot.panel`）而摘掉，现已不需要宿主回应 |
-| 按应用独立配置（compat） | 机制可用，真机验过（2026-10-09：两个应用分别默认中文 / 英文，切换焦点时正确切换）；**打包时不带 Windows 内置规则**（`scripts/lib/gen-compat.sh linux` 生成「字段说明 + 零规则」的 Linux 版系统层，各平台兼容策略不共用） | 服务按 `FOCUS_GAINED` 的 bundleId（= `InputContext::program()`）匹配规则，同 macOS；设置端的应用兼容性窗口保留 |
-| 打开设置（`settings.open` 扩展信封） | 已接 | `WindEngine::onExt` → `spawnDetached`（与拉起服务同一个：双 fork 不留僵尸、新会话、继承 fcitx5 的会话环境，但不继承它的 fd 与信号处置；`fcitx::startProcess` 只做前两样）。设置程序已开着时由它自己的单实例转发参数；但**转来的切页要等设置窗口下一次输入事件才显示**（auroraui Linux 后端，冷启动深链正常） |
-| 系统关联（`aurora-input://` 协议、`.wpkg` / `.wtheme`） | 已接（deb 声明 + 设置程序可按用户注册） | deb 装 `scripts/linux/pkg/` 下两个 `.desktop` 与 `windinput.xml`，类型图标在 `data/icons/hicolor/*/mimetypes/`（`scripts/linux/gen-mime-icons.py`）；便携 / tarball 在设置「高级 → 系统集成」按用户注册（写 `$XDG_DATA_HOME`，语义见 wind-setting README「系统关联」）。`scripts/linux/e2e-assoc.sh` 覆盖类型识别、默认处理者、`xdg-open` / `gio open` 拉起设置程序进导入确认、首实例已开时转参、注册/取消一圈。未验：真桌面文件管理器双击（Nautilus / Dolphin / Deepin）、KDE 的 ktraderclient 查询分支、snap / flatpak 浏览器点链接；用户级注册不装图标 |
-| 全局热键 | 不做（确定） | 设置端藏掉热键对话框的「全局」勾选；热键只在输入法激活、有焦点时经按键通路生效 |
-| 首启自动配置（开箱即用） | 已接（`src/fcitx/FirstRunSetup.cpp`，addon 加载后经 defer 事件执行） | 把「极光输入法」加进输入法组、`ShareInputState=All`、`ActiveByDefault=True`，三件原先要用户手动做的事一次配好；**只补不改**（组里已有极光就不动；两个 Behavior 仅在出厂默认值时才改），完成后写 `~/.config/fcitx5/aurorainput-setup-done` 标记，此后一律尊重用户现状（删掉标记可让下次重做）。前提：addon 的 `OnDemand=False`——`True` 时「极光不在组里 → addon 不加载 → 引导不跑」是死锁。代价是不用极光的 Fcitx5 用户也会加载本 addon 并拉起服务。实测：全新用户配置目录清空后启动 fcitx5，重启一次即能用 GNOME 原生应用打中文 |
-| Shift 单击切中英 | 已接（addon 接管 Fcitx5 的 `AltTriggerKeys`） | `claimShiftTap`，设计文档 §8；用户清空 `AltTriggerKeys` 或当前不是清风时不插手 |
-| 「Shift+鼠标拖选不算单击」 | 缺 | Windows 靠 ToggleTapPolicy 的四个鼠标信号；Fcitx5 引擎收不到鼠标事件 |
-| CapsLock 状态通知（`VK_CAPITAL` keyup） | 已发 | 松开时发，服务端同步镜像、弹状态气泡、托盘换「A」；另由每键 `toggles` 校准 |
-| 英文输入统计（`CMD_INPUT_STATS`） | 不发 | 同 macOS |
-| 小键盘 / 符号键映射 | keysym 走 US 布局反查 | 非 US 布局的 Shift 符号键（如德语 `§`）没有 VK，透传给宿主 |
-| 彩色 emoji | 已接（服务端文字后端） | CBDT（Noto Color Emoji）、COLR v0/v1、OpenType-SVG 实测可画；肤色 / ZWJ / 国旗 / 键帽按字体 GSUB 合成一个字形。依赖系统装彩色 emoji 字体（`.deb` Recommends `fonts-noto-color-emoji`），没有时画单色字形或方框。sbix 未实测、COLR v1 扫掠渐变降级为纯色，见 `aurora-ui/src/text/linux/mod.rs` 模块头 |
-| 非 X11 坐标（Wayland） | 已绕开 | 不用坐标：popup surface 交给合成器摆位。XWayland 应用仍走 X11 窗口 |
-| 界面缩放（DPI） | 已接 | Wayland 取 wl_output / xdg-output（分数缩放经 wp_viewporter），X11 取 `Xft.dpi`（回退 `GDK_SCALE`）；经 `host.display` 扩展信封上报，服务端 `aurora_ui::dpi::scale_for_point` 统一按它光栅化 |
-
-## 协议同步铁律
+### 协议同步铁律
 
 改 cmd id 或帧布局：`protocol.rs` + `codec.rs`（SSOT）→ `aurora_tsf/include/BinaryProtocol.h` →
 `aurora_macos/…/{ProtocolTypes,BinaryCodec}.swift` → **本目录的 `ExtProtocol.h` 与 `Codec.cpp`**。
@@ -369,8 +322,103 @@ forwardKey 对某类应用确实无效时才值得做，目前没有这样的证
 > `aurora_core/crates/aurora-ipc/testdata/wire_vectors.json`（Rust 真源重录），三端消费同一份。
 > 上面那句「帧布局它管不到」说的是 `gen_protocol`；改布局后本测试会红，除非有意重录并在
 > 提交里说明旧版前端会怎样。
->
-> 设计见 `docs/design/cross-platform-consistency.md`。
 
 新增下行 cmd 必须在 `ResponseRouter::apply` 显式接一臂（default = 消费按键但不出字）；判断接不接
 只看**谁产出**，不看名字像不像 Windows 专有（见 aurora_macos/AGENTS.md 同名条目）。
+
+## 构建与测试
+
+当前开发机：**Fedora 44 Workstation + GNOME 50.3 + Wayland**。
+
+### 用户前缀 SDK：只适用于 Debian / Ubuntu
+
+本机无 root 时先搭用户前缀 SDK（幂等，只写 `~/.local/opt/fcitx5-sdk`，不碰 `/usr`）：
+
+```bash
+scripts/linux/bootstrap-sdk.sh                  # apt-get download + dpkg -x fcitx5 全家、Xvfb、cmake(pip)、dbus-next(pip)
+eval "$(scripts/linux/bootstrap-sdk.sh env)"    # PATH / PKG_CONFIG_PATH / CMAKE_PREFIX_PATH / LD_LIBRARY_PATH
+```
+
+⚠️ 上面这个脚本走的是 **Debian/Ubuntu 路线**（`apt-get download` + `dpkg -x`，依赖 `apt-cache` /
+`dpkg-query`）：**Fedora 42+/44 上没有 apt / dpkg，它跑不了**。Fedora 侧请直接用系统包原生构建：
+
+```bash
+sudo dnf install rust cargo cmake ninja-build gcc gcc-c++ pkgconf-pkg-config \
+     fcitx5-devel libxcb-devel wayland-devel wayland-protocols-devel glib2-devel \
+     rpm-build rpmdevtools git curl        # 清单与 package-rpm.sh 头注释同源
+```
+
+出包 / 核对 / 冒烟走 Fedora 那三条：`scripts/linux/package-rpm.sh`（在本机 Fedora 上原生构建，
+rpm 的 ABI 基线随构建机的 fcitx5 / glibc 走）、`scripts/linux/verify-rpm.sh`（发布前硬门禁）、
+`scripts/linux/smoke-rpm.sh`（root 装真包 + 私有 fcitx5 会话真打字）。
+
+⚠️ `scripts/linux/e2e.sh` 的前置就是上面这份 SDK（脚本里 `eval bootstrap-sdk.sh env`，并用 SDK
+venv 里的 python 跑 dbus 客户端），故**在 Fedora 上跑 e2e 要先自备等价环境**（e2e 需要的 Xvfb /
+xdotool / xcompmgr / `xwd` / python3 + `dbus-next` 的 Fedora 包名未逐一核实）。这个脚本本身不要改。
+
+### 单测 / 本地构建 / 端到端
+
+```bash
+make -C aurora_linux test                      # 单测：不需要 cmake / Fcitx5，g++ 直接编
+cmake -S aurora_linux -B aurora_linux/build/cmake -G Ninja && cmake --build aurora_linux/build/cmake
+ctest --test-dir aurora_linux/build/cmake         # 同一批单测经 CMake 跑
+scripts/linux/e2e.sh                            # 端到端：真服务 + 真 fcitx5 + DBus 客户端打字
+```
+
+### e2e 的做法
+
+`e2e.sh` 的做法（改它之前先读脚本头注释）：`dbus-run-session` 起私有会话总线；服务二进制拷进
+临时目录、`data` 下逐项软链到 `build_dev/data`（`system.phrases.toml` 例外：取仓库 `data/` 那份再追加
+e2e 专用的按键合成短语——`build_dev/data` 是构建时的拷贝，可能落后于短语改动），配置/数据/缓存全用 `XDG_*_HOME` 隔离，socket 走
+`AURORA_INPUT_RUNTIME_DIR`；fcitx5 以 `--disable=all --enable=keyboard,dbus,dbusfrontend,windinput`
+起，`FCITX_ADDON_DIRS` / `FCITX_DATA_DIRS` 指到构建目录；`e2e_client.py`（dbus-next）经
+`org.fcitx.Fcitx.InputContext1.ProcessKeyEvent` 送键，收 `CommitString` / `UpdateFormattedPreedit`
+信号断言。临时目录必须短（socket 路径 108 字节上限），默认 `/tmp/wi-linux/e2e.<pid>`。
+
+候选窗与浮层（X11）用例在私有 Xvfb 里跑（`AURORA_E2E_X11=0` 关掉）：打字后按 `WM_CLASS` 实例名
+`aurora-candidate` 找窗（`xdotool search --classname`，**不是** `--class`——后者匹配第二段
+`WindInput`），断言已映射、落在光标下方、截图里有内容、上屏/Esc/鼠标选词后隐藏、屏幕底边时
+翻到光标上方；鼠标选词因命中矩形只有服务端知道，沿窗口中线逐点点击直到有上屏。浮层用例：
+Shift 切中英 / Ctrl+Shift+E 切方案后等 `wind-status` 出现再等它自己消失；Toast 用
+`aurora_input ui toast`（控制 RPC 在 `$XDG_RUNTIME_DIR` 下，e2e 已把它指进临时目录）；tooltip 沿
+候选窗中线 `xdotool mousemove` 直到出现。截图存在 `$W/shots/`（`KEEP=1` 保留）。`AURORA_E2E_COMPOSITOR=1` 另起 xcompmgr 走 ARGB 路径。
+浮层交互用例：`xdotool mousedown / mousemove / mouseup` 拖气泡，数 fcitx5 日志里「状态气泡拖动松手」
+验 `pos.status_tip` 上报、读隔离目录的用户 `config.toml` 验落不落盘；剪贴板是假的
+`$W/fakebin/xclip`（写入记进 `$W/clipboard.log`）——为此 Xvfb 先于服务起，服务要继承 `DISPLAY`
+才会选 xclip 后端。e2e 把 `ui.status.duration` 调到 2 秒（出厂 800ms，来不及把指针挪上去）。
+
+设置程序用例：e2e 经包装脚本（`$W/svc/aurora_setting`，记下 argv 再 exec 真程序，真程序默认取
+`~/.cache/wi-tgt-setting-linux/debug/aurora_setting`，`AURORA_E2E_SETTING` 可覆盖，缺它 e2e 直接失败）
+设 `AURORA_INPUT_SETTING`，按 `Ctrl+Shift+]` 验「热键 → 信封 → 拉起 → 连上服务 → 再按一次转交首实例
+→ 退出」。设置窗口按 WM_CLASS 实例名 `aurora_setting` 找；映射早于首帧，截图要轮询到有内容。
+
+### e2e 的坑（都踩过）
+
+- **服务 socket 起得比引擎早**。词库加载（首次还要建 `.wdat` 缓存，十几秒）完成前按键一律
+  PassThrough。客户端先用真实通路探活（按 `a` 直到被吃再 `Esc`），不要用 sleep 猜。
+- **`dbus` 模块依赖 `keyboard`**：`--enable` 里少了 keyboard，dbus 模块根本不加载，
+  `org.fcitx.Fcitx5` 这个名字永远没人持有。
+- **SDK 里的 Xvfb 在写死的 `/usr/bin` 找 xkbcomp**，没 root 装不进去，键盘初始化失败即退出。
+  bootstrap 复制一份 `Xvfb-wind`、把那个字符串原地改成同长的 `/tmp/wlx` 并软链到 SDK 的
+  `usr/bin`；xkb 数据走 `-xkbdir /usr/share/X11/xkb`。
+- **xcompmgr + Xvfb 下 `xwd -root` 截到的合成结果不可信**（候选窗整体错位、文字出彩边），
+  而 `xwd -id <候选窗>` 取到的窗口自身像素是对的。ARGB 路径因此只验到「窗口像素正确」，
+  屏幕上的合成效果要在真桌面上看。
+- **Fcitx5 出厂 `AltTriggerKeys=Shift_L`** 会在引擎之前截走 Shift 单击。addon 在 `PreInputMethod`
+  阶段先接管（`WindEngine::claimShiftTap`，条件与取舍见设计文档 §8），**用户不必改任何 Fcitx5 配置**；
+  e2e 的 fcitx 配置保留出厂值并带「键盘 + 清风」两个输入法，Shift 用例就是回归。
+
+## 依赖
+
+- **宿主框架**：Fcitx5 5.x（`InputMethodEngineV2`）；addon 与输入法描述模板在 `data/*.conf.in`，构建时生成到 `build/…/share/fcitx5/`。
+- **图形栈**：自建 xcb 连接（不借 Fcitx5 的 xcb 模块）+ XShape/XRender；X11 与原生 Wayland 双路径（`protocols/` 下的 `input-method-unstable-v1/v2`、`viewporter`、`wlr-layer-shell`、`relative-pointer`、`xdg-output`）；合成器可选（持有 `_NET_WM_CM_S<n>` 才走 32 位 ARGB 真透明，否则 XShape 抠形）；GNOME 光标折算要 gio（`src/fcitx/GnomeCaret.cpp` 只在 Wayland 且有 gio 时编进 addon）；Shell 侧要 `gnome-shell-extension/` 的扩展（声明 Shell 47–50）。
+- **跨目录依赖（本仓内）**：`aurora_tsf/include/BinaryProtocol.h`（**直接 include**，宏垫掉唯一的 Win32 依赖）；`aurora_core`——服务 `aurora_service --features linux-host`、`aurora-ui` 的 `manager_macos.rs` / `overlay_host.rs` / `text/linux`、`aurora-ipc` 的 `protocol.rs` 与 `testdata/*.json` 真值表；`aurora_core/apps/setting`（设置程序，路径由 `AURORA_INPUT_SETTING` 指定，缺省 `/usr/lib/aurora-input/aurora_setting`）。
+- **工具链**：g++（纯单测兜底构建，`-std=c++17`）、cmake ≥ 3.16 + Ninja（addon 本体；较新的 Fcitx5 头要求 C++20，配置时自动探测或 `-DCMAKE_CXX_STANDARD=20`）、python3（`gen-icons.py` / `gen-mime-icons.py`，以及 e2e 的 `dbus-next` 客户端）。
+- **平级伴生仓**：只有 `../aurora-ui-rust`（`auroraui` 的上游；已 vendored 进 `aurora_core/crates/auroraui`，`apps/setting` 指向仓内那份，本目录不直接依赖它）。
+
+## 全局约束
+
+- 仓库级约定（仓库地图、crate 与 app 索引、平台分层、跨组件硬约定、VK 常量、提交与格式化、日志规范、版本发布）**按需引用根 [`AGENTS.md`](../AGENTS.md)**，本节不复述。
+- `src/core` 与 `include` 不依赖 Fcitx5，能单独编、单独测——这条边界别破。
+- 协议面三张真值表见「协议同步铁律」：改 cmd id 或帧布局后，`make -C aurora_linux test` 里的 `protocol_sync_test` / `codec_test` / `wire_vectors_test` 必须一起绿。
+- 本目录的「与 Windows / macOS 的差距」表是能力对账的唯一清单：新增或修好一项能力时同步改它，别只改代码。
