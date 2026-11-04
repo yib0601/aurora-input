@@ -567,6 +567,115 @@ pub fn touch_cache(cache: &Path) {
     }
 }
 
+/// 槽位文件名拆成 `(stem, ext)`：`x.merged.wdat` → `("x.merged", ".wdat")`，无扩展名时
+/// `ext` 为空串。还原命名时直接 `format!("{stem}-{fp}{ext}")`（与 [`slot_content_path`] 同源）。
+fn slot_stem_ext(slot: &Path) -> Option<(String, String)> {
+    let name = slot.file_name()?.to_string_lossy().into_owned();
+    Some(match name.rsplit_once('.') {
+        Some((stem, ext)) => (stem.to_string(), format!(".{ext}")),
+        None => (name, String::new()),
+    })
+}
+
+/// 文件名是否为该槽位的内容寻址变体：`<stem>-<12 位十六进制><ext>`。
+///
+/// **与 [`slot_content_path`] 的命名规则同源**。两处各写一份判据就是「一处写、一处认」
+/// 的经典漂移点：认不出的文件会被当成别人的文件，永远清不掉，而清理逻辑看起来完全正常。
+fn is_content_variant(stem: &str, ext: &str, name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(stem).and_then(|r| r.strip_prefix('-')) else {
+        return false;
+    };
+    let Some(hex) = rest.strip_suffix(ext) else {
+        return false;
+    };
+    hex.len() == NAME_FP_LEN && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// 只看文件名：槽位目录里有没有**任何**内容寻址变体。不读源、不算指纹。
+fn slot_has_variant(slot: &Path) -> bool {
+    let (Some(dir), Some((stem, ext))) = (slot.parent(), slot_stem_ext(slot)) else {
+        return false;
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    rd.flatten().any(|e| {
+        e.file_name()
+            .to_str()
+            .is_some_and(|n| is_content_variant(&stem, &ext, n))
+    })
+}
+
+/// **只读探测**：这个槽位此刻该用的内容寻址文件是否已经在盘上（＝调用方可以「只 mmap
+/// 不构建」）。给「预热前先问一句缓存是否已存在」这类场景用（`EngineManager` 的
+/// 临时拼音探测），故它**刻意不重算指纹**：算指纹要读一遍源（拼音 23.8 MB），而探测的
+/// 全部价值就在于比构建便宜。
+///
+/// 三级判据：
+/// 1. `.st` 可信（源的 (存在, 长度, mtime, ino, ctime) 与记录逐项相同）⇒ 拿到当前指纹，
+///    直接问 `<stem>-<fp>.wdat` 在不在。**不写 `.st`**（[`resolve_slot_fp`] 会写，这里不）。
+/// 2. `.st` 不可信（首次安装 / 源刚被改 / racy 窗口）⇒ 退化成「槽位目录里有没有变体」，
+///    只看文件名。
+/// 3. 都没有 ⇒ `false`。
+///
+/// 第 2 级的两种误判**都往安全方向倒**：说「存在」而实际已陈旧 ⇒ 调用方按老行为构建一次；
+/// 说「不存在」而其实有 ⇒ 调用方不预热，真用的时候照常按需建（只少了预热那一跳）。
+/// 它**永不**在缓存真的不可用时说「存在」。
+pub fn slot_content_present(slot: &Path, sources: &[&Path], tag: &str) -> bool {
+    if let Some(now) = source_stamps(sources).as_deref()
+        && let Some(fp) = st_current_fp(slot, tag, sources, now)
+        && slot_content_path(slot, &fp).is_file()
+    {
+        return true;
+    }
+    slot_has_variant(slot)
+}
+
+/// 丢掉槽位下**全部**内容寻址的 wdat 本体，**保留两侧 sidecar**：实际文件旁的 `.fp`
+/// 与槽位上的 `.st`。返回 `(删掉的份数, 释放字节数, 删不掉份数)`。
+///
+/// 用途（`aurora-engine` 的拼音 merged 构建）：各 `import_tables` 子表那份 wdat 只是归并
+/// 用的**中间段**，稳态只 mmap merged，故 merged 落成之后它们纯占盘（雾凇拼音实测
+/// base 31.2 MB + ext 27.8 MB）。删之前必须确认：`.st` 是 [`resolve_slot_fp`] 的快路径，
+/// 删了下次判新鲜就得全量读源；`.fp` 是 [`cache_digest`] 的摘要来源，删了派生缓存退到
+/// 「大小:mtime」，而本体一没「大小」就变，等于派生物每次重建。
+///
+/// **不重算指纹、只按文件名认**：本函数问的是「槽位里还留着哪些本体」，与「当前该用哪
+/// 一份」无关——所以它在 `.st` 缺失、源刚更新等所有状态下都成立，且天然幂等（第二遍删
+/// 0 份）。删不掉的（Windows 上本体仍被 mmap）计入失败数交给调用方，属可接受失败。
+pub fn retire_slot_contents(slot: &Path) -> (usize, u64, usize) {
+    let (mut removed, mut bytes, mut failed) = (0usize, 0u64, 0usize);
+    let (Some(dir), Some((stem, ext))) = (slot.parent(), slot_stem_ext(slot)) else {
+        return (0, 0, 0);
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return (0, 0, 0);
+    };
+    let slot_name = slot.file_name().map(|n| n.to_string_lossy().into_owned());
+    for e in rd.flatten() {
+        let p = e.path();
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // 旧式非寻址文件（`x.wdat` 本身）与内容寻址变体都是本体；`.fp`/`.st` 由扩展名排除。
+        let is_body = slot_name.as_deref() == Some(name) || is_content_variant(&stem, &ext, name);
+        if !is_body {
+            continue;
+        }
+        // 大小先取：删完就问不出来了。
+        let len = e.metadata().map(|m| m.len()).unwrap_or(0);
+        match std::fs::remove_file(&p) {
+            Ok(()) => {
+                removed += 1;
+                bytes += len;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => failed += 1,
+        }
+    }
+    (removed, bytes, failed)
+}
+
 /// 同一槽位下只留最近 `keep` 份内容寻址文件（`current` 恒保留；按「最近使用」新者优先，
 /// 最近使用 = max(wdat mtime, `.fp` mtime)，命中时 [`touch_cache`] 推进后者），其余连同
 /// `.fp` 删掉；槽位旧式的非寻址文件（`x.wdat` 本身）一并清。写盘临时文件
@@ -582,24 +691,13 @@ pub fn prune_slot(slot: &Path, current: &Path, keep: usize) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
-    let slot_name = slot.file_name().map(|n| n.to_string_lossy().into_owned());
-    let Some(slot_name) = slot_name else {
+    let Some(slot_name) = slot.file_name().map(|n| n.to_string_lossy().into_owned()) else {
         return;
     };
-    let (stem, ext) = match slot_name.rsplit_once('.') {
-        Some((s, e)) => (s.to_string(), format!(".{e}")),
-        None => (slot_name.clone(), String::new()),
+    let Some((stem, ext)) = slot_stem_ext(slot) else {
+        return;
     };
-    let prefix = format!("{stem}-");
-    let is_variant = |name: &str| -> bool {
-        let Some(rest) = name.strip_prefix(&prefix) else {
-            return false;
-        };
-        let Some(hex) = rest.strip_suffix(&ext) else {
-            return false;
-        };
-        hex.len() == NAME_FP_LEN && hex.bytes().all(|b| b.is_ascii_hexdigit())
-    };
+    let is_variant = |name: &str| -> bool { is_content_variant(&stem, &ext, name) };
     let mut variants: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     for e in rd.flatten() {
         let p = e.path();
@@ -1400,5 +1498,70 @@ mod tests {
         remove_cache_fp(&cache);
         assert!(!st_sidecar(&cache).is_file());
         assert!(!fp_sidecar(&cache).is_file());
+    }
+
+    /// 本测试独占的临时目录（`tmp()` 用的是固定路径，不适合多文件场景）。
+    fn tmp_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("wind_fp_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// R2 的底层机制：`retire_slot_contents` 只丢**本体**（内容寻址变体 + 旧式非寻址文件），
+    /// `.fp` / `.st` 两个 sidecar 必须原样留着，且第二遍是空操作。
+    ///
+    /// 为什么 sidecar 一条都不能少：`.st` 是 [`resolve_slot_fp`] 的快路径（删了下次判新鲜
+    /// 退回全量读源），`.fp` 是 [`cache_digest`] 的摘要来源（删了派生缓存退到「大小:mtime」，
+    /// 本体一没「大小」就变 ⇒ 派生物每次重建）。幂等则决定它可以无条件挂在「merged 命中」
+    /// 那条路径上（每次启动都要跑）。
+    #[test]
+    fn retire_slot_contents_keeps_sidecars_and_is_idempotent() {
+        let dir = tmp_dir("retire");
+        let slot = dir.join("x.wdat");
+        let body = slot_content_path(&slot, "0123456789ab");
+        std::fs::write(&body, b"body").unwrap();
+        std::fs::write(fp_sidecar(&body), b"0123456789ab").unwrap();
+        std::fs::write(st_sidecar(&slot), b"st").unwrap();
+        // 旧式非寻址文件（升级遗留）也是本体
+        std::fs::write(&slot, b"legacy").unwrap();
+        // 不该被碰的：别的槽位、以及不是「12 位十六进制」的伪变体
+        std::fs::write(dir.join("y.wdat"), b"other slot").unwrap();
+        let fake = slot_content_path(&slot, "zzzzzzzzzzzz");
+        std::fs::write(&fake, b"not a fp").unwrap();
+
+        let (removed, bytes, failed) = retire_slot_contents(&slot);
+        assert_eq!((removed, failed), (2, 0), "本体（寻址变体 + 旧式）都该删");
+        assert_eq!(bytes, (b"body".len() + b"legacy".len()) as u64);
+        assert!(!body.exists(), "内容寻址本体应删掉");
+        assert!(!slot.exists(), "旧式本体应删掉");
+        assert!(fp_sidecar(&body).is_file(), "`.fp` 必须保留");
+        assert!(st_sidecar(&slot).is_file(), "`.st` 必须保留");
+        assert!(dir.join("y.wdat").exists(), "别的槽位不许碰");
+        assert!(fake.exists(), "非法指纹形态不算本槽位变体");
+
+        // 幂等：再跑一遍什么都不做（决定它可以无条件挂在每次命中的路径上）
+        assert_eq!(retire_slot_contents(&slot), (0, 0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 只读探测：没有本体判「不在」，有本体判「在」——**绝不写 `.st`**（探测的代价必须
+    /// 远小于构建，而 `resolve_slot_fp` 会在算完指纹后回写 `.st`，那是它不能用于探测的原因）。
+    #[test]
+    fn slot_content_present_is_read_only() {
+        let dir = tmp_dir("present");
+        let slot = dir.join("p.wdat");
+        let src = dir.join("p.dict.yaml");
+        std::fs::write(&src, b"x").unwrap();
+        set_mtime(&src, 1_700_000_000); // 不 racy，否则「没写 .st」会被 racy 窗口掩盖成假绿
+
+        assert!(!slot_content_present(&slot, &[&src], "t"), "空槽位判不在");
+        assert!(!st_sidecar(&slot).exists(), "探测不得写 .st");
+
+        // 放一份内容寻址变体：没有可信 `.st` 时走「目录里有没有变体」的兜底
+        std::fs::write(slot_content_path(&slot, "0123456789ab"), b"body").unwrap();
+        assert!(slot_content_present(&slot, &[&src], "t"));
+        assert!(!st_sidecar(&slot).exists(), "兜底路径同样不写 .st");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

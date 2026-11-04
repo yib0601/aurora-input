@@ -1,5 +1,6 @@
 //! 方案常驻策略（`schema.keep_all_loaded`，设计 `docs/design/memory-footprint.md` §5）端到端：
-//! 启动常驻集合、启动后台校验全部方案的派生缓存、闲置淘汰与保护名单、运行期两个方向的切换。
+//! 启动常驻集合、启动后台**只校验盘上已有缓存**的其余方案（缺的不预建，2026-11 起的契约）、
+//! 闲置淘汰与保护名单、运行期两个方向的切换。
 //!
 //! 整棵目录树经**便携标记**重定向到临时目录（`AURORA_INSTALL_ROOT` + `portable_mode`）：
 //! 词库缓存落在 `<root>/localdata/cache`（可观测、不碰真实缓存），`reload_user_config` 读
@@ -213,10 +214,58 @@ fn switch_and_type(c: &Coordinator, i: usize) -> Vec<String> {
     texts
 }
 
-/// `false`：启动只常驻当前方案 + 临拼目标；其余可用方案的缓存在启动后台建出，
-/// 建完即释放引擎；之后改过词库也由启动校验重建，切换时不再同步重建。
+/// 菜单切到 `available` 第 `menu_index` 项一次，让那个方案（及它的词库缓存）**落到盘上**。
+///
+/// 新契约（2026-11）下缓存只在**真正用到**时产生，于是「启动后应该常驻 / 应该被校验重建」
+/// 这类断言必须先有缓存。此前这些用例靠同进程其它用例留下的残留蒙对——顺序一变就飘，
+/// 所以这里显式造，不依赖别人。
+///
+/// ⚠️ 手切方案会把 `schema.active` **写进 config.toml**（`app_schema` 的既定行为），
+/// 故调用方必须在后面**重跑一次 `reset*()`** 把夹具配置写回去，否则本用例后续 `make()`
+/// 的当前方案就不是 `za` 了。
+fn prime_cache(menu_index: usize) {
+    let c = make();
+    c.debug_run_menu_cmd(MenuCmd::SchemaSelect(menu_index));
+}
+
+/// `<cache>/<id>/` 下的缓存产物计数：`(.wdat 本体, .wdat 的 .fp/.st sidecar)`。
+///
+/// **分开数，别用「目录非空 / 有文件」这种粗判据**：内容寻址缓存会在 `.wdat` 旁边留
+/// `.wdat.fp`（摘要）与 `.wdat.st`（源状态快照），于是「建了又删」（拼音 merged 那条
+/// 中间段回收）与「压根没建」在只看目录条目时长得一样——前者会留下 sidecar。本用例要
+/// 断言的是后者（**没建**），所以两个数都要为 0。
+fn cache_artifacts(id: &str) -> (usize, usize) {
+    let (mut bodies, mut sidecars) = (0usize, 0usize);
+    let Ok(rd) = std::fs::read_dir(cache_root().join(id)) else {
+        return (0, 0);
+    };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".wdat") {
+            bodies += 1;
+        } else if name.ends_with(".wdat.fp") || name.ends_with(".wdat.st") {
+            sidecars += 1;
+        }
+    }
+    (bodies, sidecars)
+}
+
+/// `false`（2026-11 起的契约）：启动只常驻**当前方案**；临拼目标与其余可用方案只**校验
+/// 盘上已有缓存**的方案，缓存不在的一律不预建，留到首次切换 / 首次按引导键。
+///
+/// ★ 契约为什么改了（本用例随之改名）：旧断言是「启动后台把**全部**可用方案的缓存都建
+/// 出来（含临拼目标 zc）」。那条契约的代价是每个新装用户都替可能永不使用的方案编译并
+/// 落盘词库——出厂默认方案是五笔，而 `available` 里的混输成员会把拼音词库带出来，实测
+/// 141 MB 盘 + 3.8 s CPU（runtime 审计 E3/E4/E10）。新契约把「建」这半个动作推给真实
+/// 使用，留着「校验 / 重建已有缓存」那半个。
+///
+/// 旧用例守的三件事一件没丢，第二条按新契约收窄到它**唯一还存在的形态**：
+/// ① `keep_all_loaded = false` 时只建常驻集合（当前方案；临拼目标缓存不在就不预热）；
+/// ② 缓存**存在但陈旧**（升级包刷新了词库）⇒ 启动后台仍然重建——现在是唯一还需要启动期
+///    重建的路径，强度不降，只是前置条件变成「先切过去一次让它有缓存」；
+/// ③ 闲置清扫 / 常驻集合语义由本文件其余用例守。
 #[test]
-fn startup_without_keep_all_loads_residents_and_refreshes_every_cache() {
+fn startup_without_keep_all_defers_missing_caches_and_repairs_existing() {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     reset(false);
     let _ = std::fs::remove_dir_all(cache_root());
@@ -224,18 +273,29 @@ fn startup_without_keep_all_loads_residents_and_refreshes_every_cache() {
     c.debug_desktop_startup_and_prewarm();
     assert_eq!(
         loaded(&c),
-        sorted(&["za", "zc"]),
-        "只常驻当前方案与临拼目标"
+        sorted(&["za"]),
+        "只常驻当前方案：临拼目标 zc 的缓存不在 ⇒ 也不预热（旧契约是 [za, zc]）"
     );
-    for id in ["za", "zb", "zc", "zd"] {
-        assert!(
-            wdat_of(id).is_some(),
-            "{id} 的词库缓存应在启动后台建出（zm 用 zb 的缓存）"
+    assert_eq!(cache_artifacts("za").0, 1, "当前方案的缓存照建");
+    // 新契约的核心断言：缓存不在的方案一条都不预建。两个数都为 0 才排除「建了又删」。
+    for id in ["zb", "zc", "zd", "zm"] {
+        assert_eq!(
+            cache_artifacts(id),
+            (0, 0),
+            "{id} 的缓存在启动时不该被建出来（缺的不预建，留到首次切换 / 首次按引导键）"
         );
     }
 
-    // 改 zd 的词库（缓存随之过期）后重启：启动校验重建它，切过去时不再同步重建。
+    // 切到 zd 一次：新契约下这是它第一次拿到缓存的唯一途径（旧契约里启动就建好了）。
+    assert_eq!(
+        switch_and_type(&c, 3).first().map(String::as_str),
+        Some("丁")
+    );
+    assert_eq!(cache_artifacts("zd").0, 1, "切过去之后 zd 才有缓存");
     drop(c);
+
+    // ② 缓存**已存在但陈旧**：改 zd 的词库后重启，启动后台必须重建它。这条路径不能丢，
+    // 否则升级包刷新词库后，用户首次切到该方案要现场等几秒。
     write_dict("zd", "戊");
     let before = std::fs::read(wdat_of("zd").unwrap()).unwrap();
     let c = make();
@@ -244,7 +304,7 @@ fn startup_without_keep_all_loads_residents_and_refreshes_every_cache() {
     assert_ne!(
         std::fs::read(&rebuilt).unwrap(),
         before,
-        "词库变了，启动校验应重建 zd 的缓存"
+        "缓存陈旧 ⇒ 启动后台应重建（新增的那把尺子只拦「缓存不在」，不拦「陈旧」）"
     );
     let stamp = std::fs::metadata(&rebuilt).unwrap().modified().unwrap();
     assert_eq!(
@@ -311,6 +371,11 @@ fn idle_sweep_releases_caches_even_when_keep_all() {
 fn idle_eviction_spares_protected_and_in_use_indexes() {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     reset(false);
+    // 临拼目标 zc 要「启动即常驻」，新契约下得先让它的缓存存在（见 `prime_cache`），
+    // 再重写一遍夹具配置把手切写盘的 schema.active 恢复成 za。
+    prime_cache(2);
+    reset(false);
+    assert!(wdat_of("zc").is_some(), "夹具前置：zc 的缓存应已落盘");
     let c = make();
     c.debug_desktop_startup_and_prewarm();
     let em = c.engine_mgr();
@@ -406,6 +471,13 @@ fn dirty_reload_restores_resident_set() {
         (false, sorted(&["za", "zc"])),
     ] {
         reset(keep_all);
+        // keep_all=false 那一支要断言「保护名单（当前方案 + 临拼目标）回来了」，而新契约下
+        // 临拼目标只在缓存已存在时才预热——先造出 zc 的缓存，断言才守得住这条语义。
+        // 手切会写盘 schema.active，故造完再 reset 一次恢复夹具配置。
+        if !keep_all {
+            prime_cache(2);
+            reset(keep_all);
+        }
         let c = make();
         c.debug_desktop_startup_and_prewarm();
         assert_eq!(loaded(&c), want);
@@ -426,6 +498,14 @@ fn dirty_reload_restores_resident_set() {
 fn validation_releases_shared_english_when_no_consumer() {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     reset_with(false, "[schema.mix]\nenable_english = true\n");
+    // 新契约下「启动校验」只对**已有缓存**的方案跑；本用例要的正是那一步把共享英文取走，
+    // 故先让 zm 有缓存——它自己是混输、不带词库，缓存落在主码表成员 zb 上。
+    prime_cache(4);
+    reset_with(false, "[schema.mix]\nenable_english = true\n");
+    assert!(
+        wdat_of("zb").is_some(),
+        "夹具前置：zm 的成员 zb 缓存应已落盘"
+    );
     let c = make();
     c.debug_desktop_startup_and_prewarm();
     assert!(!loaded(&c).contains(&"zm".to_string()), "zm 校验完即释放");
@@ -441,6 +521,9 @@ fn validation_releases_shared_english_when_no_consumer() {
 #[test]
 fn turning_keep_all_on_respects_eager_prewarm_off() {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    reset(false);
+    // 断言里的 zc 是「常驻的临拼目标」：新契约下它得先有缓存（见 `prime_cache`）。
+    prime_cache(2);
     reset(false);
     let c = make();
     c.set_eager_prewarm(false);

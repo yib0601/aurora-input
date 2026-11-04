@@ -14,15 +14,15 @@ use crate::encoder;
 use crate::engine::{BoundaryResolution, ConvertOptions, ConvertResult, Engine, EngineType};
 use crate::freq_rerank::ProtectPolicy;
 use crate::pinyin::{Config as PinyinConfig, PinyinEngine};
+use aurora_candidate::CandidateSource;
+use aurora_config::Config;
+use aurora_config::schema::{DictSpec, Schema, merge_toml};
+use aurora_dict::cached::{CachedDict, ReverseIndex};
 pub use dict_stats::{DictStatsLayer, SystemDictStats};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
-use aurora_candidate::CandidateSource;
-use aurora_config::Config;
-use aurora_config::schema::{DictSpec, Schema, merge_toml};
-use aurora_dict::cached::{CachedDict, ReverseIndex};
 
 // 方案定义已统一到 aurora_config::schema::Schema（取代此前的私有 SchemaFile）。
 // 引擎只消费该共享类型；构建逻辑（build_engine）保持不变。
@@ -745,6 +745,17 @@ static CACHE_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::O
 const COMBINED_CACHE_TAG: &str = "combined/v1";
 /// rime_pinyin 主表+import_tables 合并缓存（`merged.wdat`）的指纹 tag。
 const MERGED_CACHE_TAG: &str = "merged/v1";
+
+/// 「临时拼音词库后台准备」是否已经在跑（进程内去重）。
+///
+/// 为什么需要它：`temp_pinyin_target()` 现在遇到「缓存不在」会把构建推给后台线程
+/// （见该方法的 R5 说明），而引导键是**连按就可能连发**的——去不掉重就会连按几次起几个
+/// 线程（`ensure_loaded` 的 single-flight 只保证不重复**构建**，线程照样堆）。
+///
+/// 复位时机：**无论成败都复位**。失败（词库缺、IO 错、构建被放弃）必须允许下一次触发
+/// 重试，否则一次偶发失败会让临时拼音在本进程内永久不可用，而用户看到的只是「按了没反应」。
+static TEMP_PINYIN_BUILD_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// 反查索引「小到可以直接读进内存」的上限（3 MB）。
 ///
@@ -2335,7 +2346,10 @@ impl EngineManager {
         let attempt = match (cache.as_deref(), digests.as_deref()) {
             (Some(c), Some(dg)) => match aurora_dict::build_guard::begin(
                 c,
-                &aurora_dict::cache_fp::derived_build_key(dg, aurora_dict::cache_fp::REVERSE_INDEX_TAG),
+                &aurora_dict::cache_fp::derived_build_key(
+                    dg,
+                    aurora_dict::cache_fp::REVERSE_INDEX_TAG,
+                ),
             ) {
                 aurora_dict::build_guard::Gate::Proceed(a) => Some(a),
                 aurora_dict::build_guard::Gate::Skip { reason } => {
@@ -4931,7 +4945,10 @@ impl EngineManager {
         };
         let or = |v: usize, d: usize| if v > 0 { v } else { d };
         (
-            or(exact, aurora_config::config::default_english_exact_position()),
+            or(
+                exact,
+                aurora_config::config::default_english_exact_position(),
+            ),
             or(
                 complete,
                 aurora_config::config::default_english_complete_position(),
@@ -5055,11 +5072,110 @@ impl EngineManager {
 
     /// 临时拼音目标方案 id：开关读 input.temp_pinyin.enabled，方案读 schema.primary_pinyin
     /// （空=全拼 "pinyin"），且仅码表/混输方案适用（见 resolve_temp_pinyin_target）。
-    /// 启用、适用且目标方案可加载时返回 Some(target)，否则 None。
     ///
     /// **所有临时拼音进入点的公共门卫**（引导键 / 字母触发 / 直达热键 / 顶屏进模式 /
     /// z-fallback 均先问它），故适用范围判据必须落在这里，放任一调用点都会漏网。
+    ///
+    /// 返回 `Some(target)` = 目标可用（引擎已就绪）；`None` = 这个触发不生效。
+    ///
+    /// # R5：词库缓存不在时**绝不在调用线程上建**
+    ///
+    /// 调用线程是 bridge 的按键线程（Windows TSF 侧 `CMD_KEY_EVENT` 是**同步等待**，
+    /// 窗口约 1500 ms，见 `aurora-bridge/AGENTS.md` 的「同步路径不得阻塞」铁律），而拼音
+    /// 词库首建实测 3.8 s（pinyin-cold 口径，审计 E3）——在按键线程上建会直接超窗，表现为
+    /// 那个引导键被吞或合成态错位。故：
+    ///
+    /// - **缓存已在**（绝大多数情况：用过一次之后就在）⇒ 原样 `ensure_loaded`，只是 mmap +
+    ///   建外壳，毫秒级；
+    /// - **缓存不在**（新装 / 清过缓存）⇒ 起后台线程准备词库缓存，**本次返回 `None`**
+    ///   （各进入点的既有语义：不夺取、不吞键，按键落回它原本的身份——码表输入/标点）。
+    ///   用户等几秒再按一次即可进入，那时走上面那条毫秒路径。
+    /// - 只是「不阻塞」还不够：连按不能起 N 个线程，故用 [`TEMP_PINYIN_BUILD_IN_FLIGHT`]
+    ///   做进程内去重，且**失败也复位**（允许下次重试，不把功能永久标记成不可用）。
+    ///
+    /// ⚠️ 已知取舍（本轮刻意不做）：① 这一次触发**没有任何用户提示**——`aurora-engine`
+    /// 拿不到 UI 通道（提示要由协调器发，属另一层），故只留一条 `info!`；
+    /// ② **切方案路径仍是同步的**（`switch_schema` → `ensure_loaded`）：那是用户显式切换、
+    /// 等待可接受，实测首次切到混输 3.8 s（release 口径），本次刻意不动它。
+    ///
+    /// 只想问「目标是哪个」而不想建词库的场合（启动预热的探测）用
+    /// [`Self::temp_pinyin_target_id`]；启动预热自己那个后台线程需要**阻塞建**时走
+    /// `temp_pinyin_target_id` + `prewarm_schema`（见 `schema_residency::prewarm_all_schemas`）。
     pub fn temp_pinyin_target(&self) -> Option<String> {
+        let target = self.temp_pinyin_target_id()?;
+        if self.schema_cache_present(&target) {
+            return self.ensure_loaded(&target).then_some(target);
+        }
+        self.spawn_temp_pinyin_cache_build(&target);
+        None
+    }
+
+    /// 后台把临时拼音目标的词库缓存（`merged.wdat`）准备好；本次触发不生效。
+    ///
+    /// 只建**词库缓存**，不建引擎外壳：`load_rime_pinyin_dict` 是静态函数、只要一份路径，
+    /// 而 `prewarm_schema(&self)` 需要 `&self` 跨线程——`EngineManager` 在协调器里是**值**
+    /// （`engine_mgr: EngineManager`，不是 `Arc`），拿不到 `'static` 的自引用。缓存建好后，
+    /// 下一次触发走 `ensure_loaded`，剩下的只有 mmap + 建外壳（毫秒级）。
+    fn spawn_temp_pinyin_cache_build(&self, schema_id: &str) {
+        use std::sync::atomic::Ordering;
+        if TEMP_PINYIN_BUILD_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+            debug!("临时拼音词库已在后台准备中，本次触发不再起新线程");
+            return;
+        }
+        let Some(dict_path) = self.pinyin_main_dict_path(schema_id) else {
+            TEMP_PINYIN_BUILD_IN_FLIGHT.store(false, Ordering::SeqCst);
+            warn!(
+                "临时拼音目标 {} 没有可用的 rime_pinyin 主词库，无法后台准备（本次触发不生效）",
+                schema_id
+            );
+            return;
+        };
+        let spawned = std::thread::Builder::new()
+            .name("temp-pinyin-prewarm".into())
+            .spawn(move || {
+                let t0 = std::time::Instant::now();
+                let built = Self::load_rime_pinyin_dict(&dict_path).is_some();
+                // 先复位再记日志：失败也允许下一次触发重试。
+                TEMP_PINYIN_BUILD_IN_FLIGHT.store(false, Ordering::SeqCst);
+                if built {
+                    info!(
+                        "临时拼音词库已在后台准备完成（{:?}）：{}。再次按引导键即可进入",
+                        t0.elapsed(),
+                        dict_path.display()
+                    );
+                } else {
+                    warn!(
+                        "临时拼音词库后台准备失败（{}），下次按引导键会重试",
+                        dict_path.display()
+                    );
+                }
+            });
+        if let Err(e) = spawned {
+            TEMP_PINYIN_BUILD_IN_FLIGHT.store(false, Ordering::SeqCst);
+            warn!("无法启动临时拼音词库预热线程: {e}（本次触发不生效）");
+        }
+    }
+
+    /// 某方案主词库（第一个 `rime_pinyin` 词库）的解析路径；不是拼音族返回 `None`。
+    ///
+    /// 与 `load_rime_pinyin_dict` 的取词库口径一致（`enabled_dict_specs` 里第一个
+    /// `dict_type == "rime_pinyin"`），供后台准备线程手里只留一份 `PathBuf` 用。
+    fn pinyin_main_dict_path(&self, schema_id: &str) -> Option<std::path::PathBuf> {
+        let data_dir = self.data_dir.as_deref()?;
+        let schema = Self::read_schema(schema_id, Some(data_dir), self.override_dir.as_deref())?;
+        let schemas_dir = data_dir.join("schemas");
+        let spec = Self::enabled_dict_specs(&schema)
+            .into_iter()
+            .find(|e| e.dict_type == "rime_pinyin")?;
+        Some(Self::resolve_dict_file(&spec.path, &schemas_dir))
+    }
+
+    /// 与 [`Self::temp_pinyin_target`] 同一套门卫判据，但**不加载引擎**。
+    ///
+    /// 拆出来的唯一理由是启动预热要判断「要不要现在建」——那条路必须在**碰词库之前**
+    /// 拿到 id，用 `temp_pinyin_target()` 探路本身就先把引擎建了（它自己会 ensure_loaded），
+    /// 探了等于白探。两处共用 `resolve_temp_pinyin_target`，判据不会漂移。
+    pub fn temp_pinyin_target_id(&self) -> Option<String> {
         let enabled = self
             .temp_pinyin
             .lock()
@@ -5070,13 +5186,122 @@ impl EngineManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let target =
-            Self::resolve_temp_pinyin_target(enabled, self.current_engine_type(), &primary)?;
-        if self.ensure_loaded(&target) {
-            Some(target)
-        } else {
-            None
+        Self::resolve_temp_pinyin_target(enabled, self.current_engine_type(), &primary)
+    }
+
+    /// 临时拼音目标的词库缓存（`merged.wdat`）**是否已经在盘上**——只读探测，
+    /// 不构建任何东西、不拿任何构建锁。
+    ///
+    /// 给协调器的启动预热用（`schema_residency::prewarm_resident_schemas`）：缓存已在时
+    /// 预热只是 mmap（毫秒级，保住「首次按引导键不卡」）；缓存不在时不预热，等用户真的
+    /// 按引导键时按原路径同步建一次。
+    ///
+    /// # 为什么这不是「提前建了也没关系」
+    ///
+    /// 临时拼音是**码表用户的旁路功能**：出厂的默认方案是五笔，绝大多数用户一辈子不按
+    /// 引导键，却要为它编译并落盘一份拼音词库（雾凇拼音实测 base 31.2 MB、ext 27.8 MB、
+    /// merged 82 MB，合计 ≈141 MB 盘、3.8 s CPU、峰值 ~341 MB 内存）。所以「缓存不在就
+    /// 先不建」是**刻意**的取舍，代价是「装完第一次按 backtick 要等一次词库编译」——
+    /// 约 3.8 s（pinyin-cold 实测口径），那一次与今天首次按 backtick 的路径完全一致，
+    /// 只是不再提前替所有人付。
+    ///
+    /// # 为什么不做成配置开关
+    ///
+    /// 开关的值域只有两种，而「该不该建」的正确取值取决于**用户接下来会不会用**——
+    /// 那是程序拿不准、用户也答不上来的问题（没人会去配置页里勾「我以后可能按反引号」）。
+    /// 探测式按需恰好把这个问题交给实际行为回答：用了就建，不用就不建。反过来，多一个
+    /// 开关就多一份「设了不生效 / 生效了看不懂」的排查面（本仓配置项定位的老问题）。
+    pub fn temp_pinyin_cache_present(&self) -> bool {
+        let Some(target) = self.temp_pinyin_target_id() else {
+            return false;
+        };
+        self.schema_cache_present(&target)
+    }
+
+    /// 某方案的**主词库缓存是否已在盘上**——只读探测，不构建、不拿构建锁（理由与误判方向见
+    /// [`Self::temp_pinyin_cache_present`]）。
+    ///
+    /// 判据与 `load_dictionary` **同源**（同一份 `enabled_dict_specs` → `resolve_dict_file` →
+    /// `cache_path`，同一组源与 tag），否则就会出现「探测说没有、构建说早就有」的双份判据。
+    /// 混输方案沿 `primary_schema` / `secondary_schema` 递归：它自己不带词库，词库全在成员
+    /// 方案里（出厂 `wubi86_pinyin` → 五笔 + 拼音），只看顶层会永远得到「不在」。
+    ///
+    /// 判不出（没有 data_dir / 方案读不到 / 词库表为空）一律返回 `false`：调用方据此
+    /// **不预建**，退到与今天一样的按需路径，是安全方向。
+    pub fn schema_cache_present(&self, schema_id: &str) -> bool {
+        // 深度上限只求「override 造出的怪环不把栈打穿」；真环由 build_engine 的环检测处理。
+        self.schema_cache_present_at(schema_id, 0)
+    }
+
+    fn schema_cache_present_at(&self, schema_id: &str, depth: u8) -> bool {
+        if depth >= 4 {
+            return false;
         }
+        let Some(data_dir) = self.data_dir.as_deref() else {
+            return false;
+        };
+        let Some(schema) =
+            Self::read_schema(schema_id, Some(data_dir), self.override_dir.as_deref())
+        else {
+            return false;
+        };
+        if schema.engine.engine_type.eq_ignore_ascii_case("mixed") {
+            let m = &schema.engine.mixed;
+            // 任一成员有缓存就算「这方案用得到的东西在盘上」：refresh 的意义是校验已有缓存，
+            // 不是把缺的补齐（缺的留给真正切过去那一刻）。
+            let has = |id: &str| !id.is_empty() && self.schema_cache_present_at(id, depth + 1);
+            return has(&m.primary_schema) || has(&m.secondary_schema);
+        }
+        let schemas_dir = data_dir.join("schemas");
+        let enabled = Self::enabled_dict_specs(&schema);
+        let Some(first) = enabled.first() else {
+            return false;
+        };
+        let dtype = |e: &DictSpec| -> String {
+            if e.dict_type.is_empty() {
+                "rime_codetable".to_string()
+            } else {
+                e.dict_type.clone()
+            }
+        };
+        let resolve = |rel: &str| Self::resolve_dict_file(rel, &schemas_dir);
+        // 拼音族多库走分层，主库那份 merged 就是缓存存在的证据。
+        if enabled.len() > 1 && enabled.iter().all(|e| dtype(e) == "rime_pinyin") {
+            return Self::pinyin_merged_cache_present(&resolve(&first.path));
+        }
+        // 多库合并成一份 combined.wdat（槽位 = 首库 + `.combined.wdat`）。
+        if enabled.len() > 1 {
+            let sources: Vec<(std::path::PathBuf, String)> = enabled
+                .iter()
+                .map(|e| (resolve(&e.path), dtype(e)))
+                .collect();
+            let expanded: Vec<std::path::PathBuf> = sources
+                .iter()
+                .flat_map(|(p, t)| Self::rime_source_paths(p, t))
+                .collect();
+            let refs: Vec<&Path> = expanded.iter().map(|p| p.as_path()).collect();
+            let slot = cache_path(&sources[0].0, "combined.wdat");
+            return aurora_dict::cache_fp::slot_content_present(&slot, &refs, COMBINED_CACHE_TAG);
+        }
+        let full = resolve(&first.path);
+        if dtype(first) == "rime_pinyin" {
+            return Self::pinyin_merged_cache_present(&full);
+        }
+        let tag = aurora_dict::cache_fp::dict_tag(dtype(first) == "english");
+        aurora_dict::cache_fp::slot_content_present(
+            &cache_path(&full, "wdat"),
+            &[full.as_path()],
+            tag,
+        )
+    }
+
+    /// 一份 `rime_pinyin` 主表的 merged 缓存在不在（判据与 `load_rime_pinyin_dict` 同源：
+    /// 同一槽位、同一组源（含 `import_tables` 子表）、同一个 tag）。
+    fn pinyin_merged_cache_present(dict_path: &Path) -> bool {
+        let merged_slot = cache_path(dict_path, "merged.wdat");
+        let subs = Self::rime_source_paths(dict_path, "rime_pinyin");
+        let src_refs: Vec<&Path> = subs.iter().map(|p| p.as_path()).collect();
+        aurora_dict::cache_fp::slot_content_present(&merged_slot, &src_refs, MERGED_CACHE_TAG)
     }
 
     /// 活跃方案的**有效**码表行为配置：全局 `schema.codetable` 经该方案 `.schema.toml` 的
@@ -6350,7 +6575,11 @@ impl EngineManager {
 
     /// 用指定方案的引擎枚举码表首 `limit` 条候选（特殊模式「进入即展示」浏览）。
     /// 方案未加载或引擎无浏览语义（如拼音）时返回空。
-    pub fn enumerate_with(&self, schema_id: &str, limit: usize) -> Vec<aurora_candidate::Candidate> {
+    pub fn enumerate_with(
+        &self,
+        schema_id: &str,
+        limit: usize,
+    ) -> Vec<aurora_candidate::Candidate> {
         if !self.ensure_loaded(schema_id) {
             return Vec::new();
         }
@@ -7359,10 +7588,11 @@ impl EngineManager {
     /// 兄弟关系」埋进一个反推里，本仓已在这类隐式契约上栽过。user/custom 两层与 data
     /// 目录参数无关（分别来自 `%APPDATA%` 与安装根下的清单），故取 `None` 那一支。
     fn dict_layers(schemas_dir: &Path) -> Vec<aurora_config::ResourceLayer> {
-        let mut layers: Vec<aurora_config::ResourceLayer> = Config::resource_layers_named_with(None)
-            .into_iter()
-            .map(|l| l.sub("schemas"))
-            .collect();
+        let mut layers: Vec<aurora_config::ResourceLayer> =
+            Config::resource_layers_named_with(None)
+                .into_iter()
+                .map(|l| l.sub("schemas"))
+                .collect();
         layers.push(aurora_config::ResourceLayer::new(
             "data",
             schemas_dir.to_path_buf(),
@@ -8421,6 +8651,59 @@ impl EngineManager {
         Some(d)
     }
 
+    /// merged 落成（或命中）之后，回收各 `import_tables` 子表的**中间段 wdat**。
+    ///
+    /// # 为什么可以删
+    ///
+    /// 子表的 wdat 只作 k 路归并的输入（唯一消费点就是 [`Self::load_merge_segment`]）：归并
+    /// 完、merged 一写，它就是个纯死重——稳态只 mmap merged 一份。雾凇拼音实测
+    /// `cn_dicts/base-*.wdat` 31.2 MB + `cn_dicts/ext-*.wdat` 27.8 MB 白占盘，
+    /// `merged` 仅 82 MB（E10）。删掉这些段**不改变任何查询语义**：查询层从来只挂 merged。
+    ///
+    /// # 为什么下次重建也不怕
+    ///
+    /// merged 是**内容寻址**的（文件名带全部源的指纹）：源 yaml 一变就换出另一个文件名，
+    /// 旧 merged 自然不复用。届时缺的只是「省一次解析」的中间产物 —— 重新解析整份 yaml，
+    /// 实测 3.8 s（pinyin-cold 口径），且只发生在**源真的变了**那一次（升级包更新词库 /
+    /// 用户换词库），不是每次启动。
+    ///
+    /// # 为什么 `.fp` / `.st` 一个都不能删
+    ///
+    /// - `.st`（槽位上）是 `cache_fp::resolve_slot_fp` 的快路径：源的
+    ///   (存在, 长度, mtime, inode, ctime) 与它一致时**不读源内容**就能判新鲜。删了，
+    ///   下一次判新鲜退回全量算指纹（拼音这一族是 23.8 MB 的读盘）。
+    /// - `.fp`（本体旁）是 `cache_fp::cache_digest` 的摘要来源，派生缓存（`.wridx` / 英文
+    ///   词组索引）靠它判「输入没变」。删了摘要退到 `sz:<len>:<mtime>`，而本体一没
+    ///   「len」就变 —— 等于派生物每次启动重建一次。
+    ///
+    /// 回收走 `cache_fp::retire_slot_contents`（按文件名认本体，不重算指纹），因此幂等：
+    /// 第二遍删 0 份。删不掉的（Windows 上仍被映射）只记一条 debug，**绝不失败退出** ——
+    /// 这是磁盘优化，不是功能路径。
+    fn retire_pinyin_segments(sub_paths: &[std::path::PathBuf]) {
+        let (mut removed, mut bytes, mut failed) = (0usize, 0u64, 0usize);
+        for p in sub_paths {
+            let (n, b, f) = aurora_dict::cache_fp::retire_slot_contents(&cache_path(p, "wdat"));
+            removed += n;
+            bytes += b;
+            failed += f;
+        }
+        if removed > 0 {
+            info!(
+                "回收拼音中间段缓存 {} 份（{:.1} MB）：merged 是唯一查询层，子表 .wdat 已无用；\
+                 保留 .fp/.st sidecar（新鲜度与派生缓存摘要都靠它们）",
+                removed,
+                bytes as f64 / (1024.0 * 1024.0)
+            );
+        }
+        if failed > 0 {
+            // 典型：Windows 上本体仍被 mmap 着。留给下次（本就幂等）。
+            debug!(
+                "{} 份拼音中间段缓存本次删不掉（多为仍被映射），留到下次启动",
+                failed
+            );
+        }
+    }
+
     /// 一张 import_tables 子表的**归并输入段**：内容寻址缓存（改了哪张只重建哪张）。
     /// 返回 `(段, 若写在临时目录则其路径)`：落不了盘时写到临时目录当一次性段，调用方归并完
     /// 即删；连临时目录都写不了就放弃这张表（记 warn）。
@@ -8550,6 +8833,12 @@ impl EngineManager {
                         reader.key_count()
                     );
                     aurora_dict::cache_fp::touch_cache(path);
+                    // 存量用户的一次性回收：merged 已在且能 mmap ⇒ 各子表的中间段 wdat 全是
+                    // 死重（见 `retire_pinyin_segments` 的说明）。放在命中分支而不只放在建成
+                    // 分支，是因为**升级上来的用户不会再有「建成」那一刻**——只有在这里擦一次，
+                    // 那 59 MB 才真的还给他们。判据强度与建成分支相同：merged 这份内容寻址
+                    // 文件存在且能打开，就说明它的输入早已归并完毕。
+                    Self::retire_pinyin_segments(&sub_paths);
                     return Some(CachedDict::Mmap(reader));
                 }
                 Err(e) => warn!("Stale merged cache ({}), regenerating", e),
@@ -8730,7 +9019,8 @@ impl EngineManager {
         }
         // 指纹是建段之前算的；期间任一源被改写，按旧指纹命名的 merged 就会装着新内容。
         // 这时只写临时副本（不进正式路径、不写 .fp），下次启动按新指纹重来。
-        let content = if aurora_dict::cache_fp::stamps_of(&src_refs).unchanged_since(&stamps_before) {
+        let content = if aurora_dict::cache_fp::stamps_of(&src_refs).unchanged_since(&stamps_before)
+        {
             content
         } else {
             warn!(
@@ -8794,6 +9084,9 @@ impl EngineManager {
                             target.display(),
                             reader.key_count()
                         );
+                        // ★ 本次 merged 是**新写成的正式文件**（不是临时回退副本）⇒ 各子表
+                        // 的中间段 wdat 从此只剩死重，就地回收（见 `retire_pinyin_segments`）。
+                        Self::retire_pinyin_segments(&sub_paths);
                     }
                     return Some(CachedDict::Mmap(reader));
                 }
@@ -11032,7 +11325,10 @@ enabled = false
 
         let inline = mgr.active_behavior();
         assert_eq!(inline.punct, aurora_config::PunctIntent::English);
-        assert_eq!(inline.candidate_layout, aurora_config::LayoutIntent::Vertical);
+        assert_eq!(
+            inline.candidate_layout,
+            aurora_config::LayoutIntent::Vertical
+        );
         assert!(!inline.phrases.enabled);
 
         // 用户 override：只改布局，不提另外两段。
@@ -11939,6 +12235,165 @@ input_chars = \"a-z;\"
         std::fs::write(&dict, "---\nname: py\n...\n你好\tni hao\t200\n").unwrap();
         assert!(EngineManager::load_rime_pinyin_dict(&dict).is_some());
         assert!(!marker.exists());
+    }
+
+    /// R2（省盘）：merged 落成之后，各 `import_tables` 子表的**中间段** `.wdat` 必须被回收，
+    /// 而 `.fp` / `.st` sidecar 一个都不能少，且第二次加载必须命中 merged 不重建。
+    ///
+    /// 三条同等重要：
+    /// - 中间段只是归并输入（稳态只 mmap merged，雾凇拼音实测白占 31.2 + 27.8 MB）；
+    /// - `.st` 是 `cache_fp::resolve_slot_fp` 的快路径（删了下次判新鲜要全量读源 23.8 MB）；
+    /// - `.fp` 是 `cache_fp::cache_digest` 的摘要来源（删了派生缓存退回「大小:mtime」，
+    ///   而本体一没「大小」就变 ⇒ 派生物每次重建）。
+    ///
+    /// 第三条断言同时钉住「回收不能变成每次启动重建的代价」——它是这个优化成立的前提。
+    #[test]
+    fn merged_build_retires_segment_wdats_but_keeps_sidecars() {
+        struct Cleanup(Vec<std::path::PathBuf>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                for p in &self.0 {
+                    let _ = std::fs::remove_dir_all(p);
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+        // 唯一目录名：`cache_fp` 的命名空间取源路径的父目录名，同名会让并发用例互踩。
+        let uniq = format!(
+            "wind_eng_r2-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let dir = std::env::temp_dir().join(&uniq);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // mtime 往前拨 60 s，跨过 `cache_fp` 的 2 s racy 窗口：否则 `.st` 根本不会被写，
+        // 下面「sidecar 必须保留」就断不出来了（假绿）。
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        let put = |name: &str, text: String| -> std::path::PathBuf {
+            let p = dir.join(name);
+            std::fs::write(&p, text).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&p)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            p
+        };
+        let sub_sources: Vec<std::path::PathBuf> = vec![
+            put(
+                "sub_a.dict.yaml",
+                "---\nname: sub_a\n...\n你好\tni hao\t100\n".into(),
+            ),
+            put(
+                "sub_b.dict.yaml",
+                "---\nname: sub_b\n...\n世界\tshi jie\t50\n".into(),
+            ),
+        ];
+        let main = put(
+            "rime_r2.dict.yaml",
+            "---\nname: rime_r2\nimport_tables:\n  - sub_a\n  - sub_b\n...\n".into(),
+        );
+        let merged_slot = cache_path(&main, "merged.wdat");
+        let sub_slots: Vec<std::path::PathBuf> =
+            sub_sources.iter().map(|p| cache_path(p, "wdat")).collect();
+        // 只清自己的缓存命名空间目录：CACHE_DIR 可能指向真实用户缓存根，
+        // 万一命名空间为空，`parent()` 就是缓存根本身——删错一层是灾难。
+        let ns_dir = merged_slot
+            .parent()
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy() == uniq))
+            .map(|p| p.to_path_buf());
+        let _cleanup = Cleanup(vec![dir.clone()].into_iter().chain(ns_dir).collect());
+
+        // 某槽位目录里的**本体**（内容寻址变体与旧式非寻址文件），不含 `.fp` / `.st`。
+        let bodies = |slot: &std::path::Path| -> Vec<std::path::PathBuf> {
+            let (Some(parent), Some(stem)) = (
+                slot.parent(),
+                slot.file_stem().map(|s| s.to_string_lossy().into_owned()),
+            ) else {
+                return Vec::new();
+            };
+            let Ok(rd) = std::fs::read_dir(parent) else {
+                return Vec::new();
+            };
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        n.ends_with(".wdat")
+                            && (n == format!("{stem}.wdat") || n.starts_with(&format!("{stem}-")))
+                    })
+                })
+                .collect()
+        };
+
+        assert!(
+            EngineManager::load_rime_pinyin_dict(&main).is_some(),
+            "首次加载应建出 merged"
+        );
+        assert_eq!(
+            bodies(&merged_slot).len(),
+            1,
+            "merged 应落成一份内容寻址文件"
+        );
+        for slot in &sub_slots {
+            assert!(
+                bodies(slot).is_empty(),
+                "中间段 wdat 应已回收：{}",
+                slot.display()
+            );
+            let st = {
+                let mut s = slot.clone().into_os_string();
+                s.push(".st");
+                std::path::PathBuf::from(s)
+            };
+            assert!(
+                st.is_file(),
+                "子表 `.st` 不能删（resolve_slot_fp 的快路径）：{}",
+                st.display()
+            );
+            let stem = slot.file_stem().unwrap().to_string_lossy().into_owned();
+            let has_fp = slot.parent().is_some_and(|d| {
+                std::fs::read_dir(d).is_ok_and(|rd| {
+                    rd.flatten().any(|e| {
+                        e.file_name().to_str().is_some_and(|n| {
+                            n.starts_with(&format!("{stem}-")) && n.ends_with(".wdat.fp")
+                        })
+                    })
+                })
+            });
+            assert!(
+                has_fp,
+                "子表 `.fp` 不能删（cache_digest 的摘要来源）：{}",
+                slot.display()
+            );
+        }
+
+        // 第二次加载必须命中 merged：内容寻址文件被原样复用（重建会重写同一路径、mtime 变）。
+        let merged_body = bodies(&merged_slot).pop().expect("merged 本体");
+        let before = std::fs::metadata(&merged_body).unwrap();
+        assert!(
+            EngineManager::load_rime_pinyin_dict(&main).is_some(),
+            "第二次加载应命中 merged"
+        );
+        let after = std::fs::metadata(&merged_body).unwrap();
+        assert_eq!(
+            (before.len(), before.modified().ok()),
+            (after.len(), after.modified().ok()),
+            "第二次不该重建 merged"
+        );
+        assert_eq!(bodies(&merged_slot).len(), 1, "不该多出另一份 merged 变体");
+        for slot in &sub_slots {
+            assert!(
+                bodies(slot).is_empty(),
+                "第二次也不该把中间段建回来：{}",
+                slot.display()
+            );
+        }
     }
 
     /// 分层视图（主库 + 细胞库各一层）与「主表 import 细胞库合成一份 merged」查询结果逐项

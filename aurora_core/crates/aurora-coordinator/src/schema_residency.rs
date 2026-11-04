@@ -6,6 +6,11 @@
 //!   （[`EngineManager::refresh_schema_cache`]，过期即重建、建完即释放），切过去时现建；
 //!   清扫拍子每分钟一次，30 分钟没用的方案引擎摘掉（[`EngineManager::evict_idle`]）。
 //!
+//! **「用得着」里唯一带条件的是临拼目标**：它的词库缓存已经存在才预热，不存在就不建
+//! （见 [`Coordinator::prewarm_resident_schemas`]）；后台校验那一圈同理，只校验盘上本就有
+//! 缓存的方案，缺的留到真正切过去那一刻（见 [`Coordinator::refresh_schema_caches_on_start`]）。
+//! 合起来的效果：新装用户不再为「可能永不使用的方案」付首启的盘与 CPU。
+//!
 //! 「用过」的记录打在引擎侧取引擎的公共入口（`EngineManager::ensure_loaded`），本模块只管
 //! 何时预热、何时清扫。30 分钟与 1 分钟不进配置（R1：「多久算不常用」程序能定）。
 //!
@@ -49,11 +54,15 @@ impl Coordinator {
         // 实测首次按引导键进临拼时才同步加载 52 万词条的拼音库 + 英文库，用户感到
         // 顿一下。两者都只在启用时才预热，不给没开这些功能的用户白付内存。
         let mut targets: Vec<String> = self.engine_mgr.available_schemas().to_vec();
-        // ⚠ `temp_pinyin_target()` **自身就会 `ensure_loaded`**（它的语义是「可用才
-        // 返回」），故这一行本身即完成了临拼引擎的加载，下面循环里那次只是复查跳过。
-        // 看着绕，但比在此复制一份「开关 + 方案适用性 + 目标解析」的判据强——那套判据
-        // 是所有临拼入口的公共门卫，抄一份必然漂移。
-        if let Some(t) = self.engine_mgr.temp_pinyin_target() {
+        // ⚠ 这里**不用** `temp_pinyin_target()`：它现在对「缓存不在」改成「后台准备 + 本次
+        // 返回 None」（R5，为了让按键线程不被 3.8 s 的拼音首建卡住），而本函数**本身就在
+        // 后台预热线程上**、语义就是「现在把全部方案建好」——借它那套门卫会把临拼目标漏掉
+        // （`keep_all_loaded = true` 的用户切换前就要求它已就绪）。
+        // 故走同一套门卫的**只取 id** 版本 + 就地阻塞建：判据仍只在
+        // `resolve_temp_pinyin_target` 一处，不复制「开关 + 方案适用性 + 目标解析」。
+        if let Some(t) = self.engine_mgr.temp_pinyin_target_id()
+            && self.engine_mgr.prewarm_schema(&t)
+        {
             targets.push(t);
         }
         if self.rt().config.input.temp_english.show_candidates {
@@ -80,8 +89,31 @@ impl Coordinator {
 
     /// `keep_all_loaded = false`：只建常驻集合（当前方案已在构造时建好）。
     fn prewarm_resident_schemas(&self) {
-        // 与 `prewarm_all_schemas` 同一个门卫（它自己会 ensure_loaded）。
-        let _ = self.engine_mgr.temp_pinyin_target();
+        // ★ 临时拼音目标**只在词库缓存已经存在时**才预热，缓存不在就**不建**。
+        //
+        // 为什么（行为改变，2026-11）：
+        // - 临时拼音是**码表用户的旁路功能**，出厂默认方案是五笔，绝大多数用户一辈子不按
+        //   引导键；而此前这里无条件走 `temp_pinyin_target()`（它的语义是「可用才返回」，
+        //   自身就会 ensure_loaded），于是每个新装用户都要替一个可能永不使用的模式编译并
+        //   落盘一份拼音词库：实测 base 31.2 MB + ext 27.8 MB + merged 82 MB ≈ 141 MB 盘、
+        //   3.8 s CPU、峰值内存 ~341 MB（runtime 审计 E3/E4/E10）。
+        // - 现在：缓存已在 ⇒ 预热只是 mmap（毫秒级），**「首次按引导键不卡」照旧成立**；
+        //   缓存不在 ⇒ 什么都不做，等用户真的按引导键时按**同一条既有路径**同步建一次
+        //   ——与今天首次按 backtick 的路径逐字一致，只是不再提前替所有人付。
+        // - **代价**：装完第一次按 backtick 会等一次词库编译（实测约 3.8 s，pinyin-cold
+        //   口径；键盘上的表现是那次按键仍被 DeferredHandler 直通给宿主，不吞键）。
+        // - **为什么不做成配置开关**：该不该建取决于「用户以后会不会按反引号」，程序拿不准、
+        //   用户也答不上来（没人会去配置页勾「我以后可能用临时拼音」）。探测式按需让实际
+        //   行为自己回答这个问题；多一个开关只是多一份「设了不生效」的排查面。
+        // - **探测不能写成 `temp_pinyin_target()`**：那个门卫自己会 ensure_loaded，探一下
+        //   等于先把词库建了（探了白探）。用 `temp_pinyin_cache_present()`——只读判据，
+        //   不构建、不拿构建锁，判不出时一律按「缓存不存在」处理（退回按需，安全方向）。
+        if self.engine_mgr.temp_pinyin_cache_present() {
+            // 与 `prewarm_all_schemas` 同一个门卫（它自己会 ensure_loaded）。
+            let _ = self.engine_mgr.temp_pinyin_target();
+        } else {
+            debug!("临时拼音目标的词库缓存不存在，本次不预热（首次按引导键时按需构建）");
+        }
         if self.rt().config.input.temp_english.show_candidates {
             let _ = self.engine_mgr.prewarm_schema("english");
         }
@@ -93,14 +125,34 @@ impl Coordinator {
     /// 必须在启动后台做，不能留到用户切换那一刻：缓存过期时重建是秒级（雾凇 merged 实测
     /// 4 秒、峰值 491 MB），挪到这里之后切换只剩 mmap + 建外壳。排在反查索引之后：那是
     /// 打字马上要用的，这一步只为以后的切换。构建期峰值是一次性的，校验完整理一次堆落回。
+    ///
+    /// ★ **只校验「盘上本来就有缓存」的方案，缺的不在这里现建**（2026-11，与
+    /// [`Self::prewarm_resident_schemas`] 同一把尺子）。不这么改，「不预热临拼」那条是白做
+    /// 的：出厂的 `available` 含 `wubi86_pinyin`（混输，成员 = 五笔 + 拼音），这里一圈
+    /// ensure_loaded 就会把拼音 merged 建出来——141 MB 一样落盘，只是换了个线程。
+    ///
+    /// 两条判据各有明确职责：
+    /// - 缓存**在**（含「陈旧」——旧变体还在也算在）⇒ 校验 / 重建。升级包刷新了词库时，
+    ///   陈旧缓存正是在这一步被修好的，这条路径必须保留。
+    /// - 缓存**不在** ⇒ 不预建。代价与上一条相同：首次真切到这个方案时现建（雾凇拼音
+    ///   3.8 s），而省下的是「绝大多数用户根本不切的方案」的那份盘与首启 CPU。
     pub(crate) fn refresh_schema_caches_on_start(&self) {
         if self.rt().config.schema.keep_all_loaded {
             return;
         }
         let t0 = std::time::Instant::now();
         let mut checked = 0usize;
+        let mut deferred = 0usize;
         for id in self.engine_mgr.available_schemas() {
             if self.engine_mgr.is_loaded(&id) {
+                continue;
+            }
+            if !self.engine_mgr.schema_cache_present(&id) {
+                debug!(
+                    "跳过预建 {} 的词库缓存（盘上还没有 ⇒ 等真正切过去时按需建）",
+                    id
+                );
+                deferred += 1;
                 continue;
             }
             if self.engine_mgr.refresh_schema_cache(&id) {
@@ -113,10 +165,11 @@ impl Coordinator {
         self.engine_mgr.release_shared_english_if_unused();
         crate::heap_trim::release_free_heap();
         info!(
-            "方案按需加载：常驻 {:?}，校验 {} 个方案的词库缓存用时 {:?}",
+            "方案按需加载：常驻 {:?}，校验 {} 个方案的词库缓存用时 {:?}（{} 个无缓存、留待首次切换）",
             self.engine_mgr.loaded_schemas(),
             checked,
-            t0.elapsed()
+            t0.elapsed(),
+            deferred
         );
     }
 

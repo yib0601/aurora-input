@@ -311,6 +311,19 @@ impl Coordinator {
         self.prewarm_indexes();
         // 常驻关着时，其余方案只校验派生缓存（排在索引之后，见该函数文档）。
         self.refresh_schema_caches_on_start();
+
+        // 预热收尾整理一次堆。
+        //
+        // 分配器（glibc malloc / Windows 进程堆）在释放后**不主动归还**，于是首启那批一次性
+        // 大分配（索引构建、词库解析、65 万条词库的归并）会把私有内存钉在历史峰值上：实测
+        // 冷启 30 s 后 RSS 仍 97.7 MB，其中 anon 37 MB，而稳态 anon 只有 12–15 MB
+        // （runtime 审计 E3/E4）。这一次 `malloc_trim(0)`（Linux）/ `HeapCompact`（Windows）
+        // 只动空闲块，在后台线程里跑，不在按键路径上。
+        //
+        // `refresh_schema_caches_on_start` 末尾也有同样一次，但那条在
+        // `keep_all_loaded = true` 时**整个提前返回**；而这条预热线程两条分支都要跑
+        // （`prewarm_schemas_on_start` 的「全部常驻」分支建得更多）。放在这里才两条都覆盖。
+        crate::heap_trim::release_free_heap();
     }
 
     /// 无头构造器（测试用）：跳过 UI 线程，不做词频持久化（避免污染真实文件）。
