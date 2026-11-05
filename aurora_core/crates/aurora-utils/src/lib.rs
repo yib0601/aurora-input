@@ -16,3 +16,6 @@
 //! 按领域分模块（`text`、将来的 `fs` 等），不要在根上平铺一堆自由函数。
 
 pub mod text;
+
+#[cfg(feature = "testing")]
+pub mod testing;

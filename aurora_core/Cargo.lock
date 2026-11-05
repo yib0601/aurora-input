@@ -107,6 +107,7 @@ version = "0.1.0"
 dependencies = [
  "aurora-candidate",
  "aurora-utils",
+ "tempfile",
  "tracing",
 ]
 
@@ -116,8 +117,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aurora-ipc",
+ "aurora-utils",
  "bytes",
  "libc",
+ "tempfile",
  "thiserror",
  "tracing",
  "windows 0.58.0",
@@ -129,6 +132,7 @@ version = "0.1.0"
 dependencies = [
  "aurora-utils",
  "serde",
+ "tempfile",
  "unicode-segmentation",
 ]
 
@@ -159,6 +163,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror",
  "toml 0.8.23",
  "tracing",
@@ -199,6 +204,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.8.23",
  "tracing",
  "unicode-segmentation",
@@ -218,6 +224,7 @@ dependencies = [
  "memmap2",
  "serde",
  "serde_yaml",
+ "tempfile",
  "thiserror",
  "toml 0.8.23",
  "tracing",
@@ -237,6 +244,7 @@ dependencies = [
  "memmap2",
  "serde",
  "serde_yaml",
+ "tempfile",
  "thiserror",
  "toml 0.8.23",
  "tracing",
@@ -286,7 +294,9 @@ dependencies = [
  "aurora-phrase",
  "aurora-store",
  "aurora-ui-types",
+ "aurora-utils",
  "chrono",
+ "tempfile",
  "toml 0.8.23",
  "tracing",
 ]
@@ -298,8 +308,10 @@ dependencies = [
  "aurora-cmdbar",
  "aurora-config",
  "aurora-quick-input",
+ "aurora-utils",
  "chrono",
  "serde",
+ "tempfile",
  "toml 0.8.23",
  "tracing",
 ]
@@ -325,8 +337,10 @@ name = "aurora-quick-input"
 version = "0.1.0"
 dependencies = [
  "aurora-ids",
+ "aurora-utils",
  "chrono",
  "serde",
+ "tempfile",
  "toml 0.8.23",
  "tracing",
 ]
@@ -348,6 +362,7 @@ version = "0.1.0"
 dependencies = [
  "aurora-dict",
  "aurora-utils",
+ "tempfile",
  "tracing",
 ]
 
@@ -358,8 +373,10 @@ dependencies = [
  "anyhow",
  "aurora-config",
  "aurora-ipc",
+ "aurora-utils",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 0.8.23",
  "tracing",
  "windows 0.58.0",
@@ -391,6 +408,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror",
  "toml 0.8.23",
  "tracing",
@@ -402,7 +420,9 @@ name = "aurora-theme"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aurora-utils",
  "serde",
+ "tempfile",
  "thiserror",
  "toml 0.8.23",
  "tracing",
@@ -414,7 +434,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aurora-candidate",
+ "aurora-utils",
  "serde",
+ "tempfile",
  "toml 0.8.23",
 ]
 
@@ -440,6 +462,8 @@ name = "aurora-transform"
 version = "0.1.0"
 dependencies = [
  "aurora-config",
+ "aurora-utils",
+ "tempfile",
  "tracing",
 ]
 
@@ -466,6 +490,7 @@ dependencies = [
  "aurora-keys",
  "aurora-theme",
  "aurora-ui-types",
+ "aurora-utils",
  "base64 0.22.1",
  "core-foundation",
  "core-foundation-sys",
@@ -479,6 +504,7 @@ dependencies = [
  "objc2-foundation",
  "resvg 0.44.0",
  "rustybuzz",
+ "tempfile",
  "thiserror",
  "tiny-skia 0.11.4",
  "tracing",
@@ -509,6 +535,7 @@ dependencies = [
  "memmap2",
  "serde",
  "serde_yaml",
+ "tempfile",
  "toml 0.8.23",
  "tracing",
  "uuid",
@@ -544,10 +571,12 @@ dependencies = [
  "aurora-store",
  "aurora-theme",
  "aurora-transfer",
+ "aurora-utils",
  "chrono",
  "flate2",
  "fontdb 0.22.0",
  "serde_json",
+ "tempfile",
  "toml 0.8.23",
  "tracing",
  "zip",
@@ -592,6 +621,7 @@ dependencies = [
  "aurora-punct",
  "aurora-rpc",
  "aurora-transform",
+ "aurora-utils",
  "auroraui",
  "chrono",
  "dirs",
@@ -600,6 +630,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tiny_http",
  "toml 0.8.23",
  "tracing",
@@ -617,6 +648,7 @@ name = "auroraui"
 version = "0.31.0"
 dependencies = [
  "ab_glyph_rasterizer",
+ "aurora-utils",
  "bytemuck",
  "embed-resource",
  "log",
@@ -632,6 +664,7 @@ dependencies = [
  "resvg 0.48.1",
  "rfd",
  "serde",
+ "tempfile",
  "tiny-skia 0.12.0",
  "toml 1.1.2+spec-1.1.0",
  "ttf-parser 0.25.1",

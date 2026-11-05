@@ -23,5 +23,9 @@ aurora-dict = { path = "../aurora-dict" }
 aurora-candidate = { path = "../aurora-candidate" }
 aurora-userdata = { path = "../aurora-userdata" }
 
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 [lints]
 workspace = true

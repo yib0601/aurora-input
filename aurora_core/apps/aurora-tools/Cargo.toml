@@ -43,5 +43,9 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 [lints]
 workspace = true

@@ -6,5 +6,11 @@ edition.workspace = true
 # ⚠️ 这里**刻意为空**，见 lib.rs 的「零依赖」约定。要加依赖之前先读那段。
 [dependencies]
 
+[features]
+# 测试专用（`pub mod testing`）：测试线程托管的临时目录。**零依赖**——只用 std，
+# 所以不破坏上面的「零依赖」约定；生产构建不启用则该模块根本不编译。
+# 消费方写法：dev-dependencies 里 `aurora-utils = { workspace = true, features = ["testing"] }`
+testing = []
+
 [lints]
 workspace = true

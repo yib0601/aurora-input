@@ -22,5 +22,9 @@ windows = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 [lints]
 workspace = true

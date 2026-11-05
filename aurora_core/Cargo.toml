@@ -149,6 +149,14 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # 「从内嵌 HTTP webapi 回退而来」）；rand 是更早的遗留。要加依赖先证明有消费者，
 # 别把它们当"以后可能用到"的预留位。
 
+# 测试用临时目录（**测试代码专用**，dev-dependency）。测试里一律用它，不要
+# `std::env::temp_dir()` —— 后者只能靠手写 `remove_dir_all` 收尾，panic / 提前
+# return / Ctrl-C 全都会漏；在本机 /tmp 是 tmpfs 的情况下，漏出来的 wdat/redb
+# 会直接吃内存，攒够 20G 就是 ENOSPC。TempDir 是 RAII，drop（含 unwind）即删。
+tempfile = "3"
+# 见 crates/aurora-utils/src/testing.rs：测试线程托管的临时目录（零依赖，feature 开启）。
+aurora-utils = { path = "crates/aurora-utils" }
+
 [profile.release]
 opt-level = 3
 lto = true

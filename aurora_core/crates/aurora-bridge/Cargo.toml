@@ -20,5 +20,9 @@ libc = "0.2"
 # Linux 上作为外部宿主（Fcitx5 addon）的服务端：见 build.rs 的 `ext_presenter` 别名。默认关。
 linux-host = []
 
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 [lints]
 workspace = true

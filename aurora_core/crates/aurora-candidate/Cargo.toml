@@ -8,5 +8,9 @@ serde = { workspace = true }
 aurora-utils = { path = "../aurora-utils" }
 unicode-segmentation = { workspace = true }
 
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 [lints]
 workspace = true

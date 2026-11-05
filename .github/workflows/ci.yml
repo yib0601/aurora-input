@@ -45,8 +45,13 @@ jobs:
           workspaces: aurora_core
 
       # fmt --check + clippy(msvc target) + test(本机)
+      # 测试临时目录指到 runner 的磁盘目录，别落在 /tmp：测试历史上会漏出 wdat/redb
+      # 临时目录，攒够就 ENOSPC（本机 /tmp 是 tmpfs 时直接吃内存）。主修是测试代码
+      # 统一用 tempfile::TempDir，这里只是兜底。
       - name: dev.sh ci
-        run: ./scripts/dev.sh ci
+        env:
+          TMPDIR: ${{ runner.temp }}/aurora-test
+        run: mkdir -p "$TMPDIR" && ./scripts/dev.sh ci
 
       # 协议常量对账：Rust 真源 ↔ C++ 两侧镜像 ↔ Swift。
       #
@@ -177,4 +182,6 @@ jobs:
 
       - name: Test aurora_core (Rust core, darwin)
         working-directory: aurora_core
-        run: cargo test --workspace --no-fail-fast
+        env:
+          TMPDIR: ${{ runner.temp }}/aurora-test
+        run: mkdir -p "$TMPDIR" && cargo test --workspace --no-fail-fast

@@ -61,6 +61,8 @@ desktop-ui = ["dep:aurora-ui"]
 linux-host = ["desktop-ui", "aurora-ui/linux-host", "aurora-bridge/linux-host"]
 
 [dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 # tests/ 的数据域 RPC 断言经 aurora-webdata（dev 环允许）
 aurora-webdata = { path = "../aurora-webdata" }
 aurora-config = { path = "../aurora-config" }

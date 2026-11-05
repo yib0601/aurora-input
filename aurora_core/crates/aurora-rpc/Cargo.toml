@@ -16,6 +16,8 @@ tracing = { workspace = true }
 windows = { workspace = true }
 
 [dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 # 集成测试（tests/*.rs 各占一个进程，OnceLock 才隔离得开）看不到本 crate 的普通依赖。
 aurora-ipc = { path = "../aurora-ipc" }
 aurora-config = { path = "../aurora-config" }

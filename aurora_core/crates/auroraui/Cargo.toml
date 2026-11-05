@@ -292,3 +292,7 @@ name = "image"
 required-features = ["svg"]
 
 # 仅作用于本 crate 的独立构建（examples）；作为依赖时 profile 由宿主决定。
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }

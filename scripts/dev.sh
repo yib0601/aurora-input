@@ -90,6 +90,23 @@ PORTABLE_DIR="$(cd "$PRODUCT_ROOT/.." && pwd)/wind-portable"
 # wind-installer: 通用安装器生成器（兄弟仓库, app.toml 驱动）。默认值与覆盖用的环境变量
 # 都与 pack-installer.sh 的 AURORA_INSTALLER_DIR 保持一致, 免得两个脚本各找各的安装器。
 INSTALLER_DIR="${AURORA_INSTALLER_DIR:-$(cd "$PRODUCT_ROOT/.." && pwd)/wind-installer}"
+
+# 测试用临时目录。本机 /tmp 是 tmpfs，测试漏出来的 wdat/redb 直接吃内存；历史上攒到
+# 20G 就让 /tmp 报 ENOSPC。主修是测试代码统一用 tempfile::TempDir（RAII），这里只是
+# 兜底：跑测试时把 TMPDIR 指到磁盘上的 ~/.cache，漏网的那份也不进内存。
+# 覆盖：AURORA_TEST_TMPDIR=/path/to/dir ./scripts/dev.sh t
+AURORA_TEST_TMPDIR="${AURORA_TEST_TMPDIR:-$HOME/.cache/aurora-test}"
+disk_tmp() {
+    mkdir -p "$AURORA_TEST_TMPDIR" || return 0
+    # 清掉 2 小时前的陈旧目录：TempDir 之外还有两类东西活不到进程结束——
+    # ① 进程级夹具（`OnceLock<&'static Path>` + set_var，一次性建 79M 的 pinyin
+    #    wdat 缓存，进程退出没人删）；② 生产侧异步折回线程在 TempDir 删目录**之后**
+    #    又把 `<x>.redb.state/` 写回来。两者都不归测试代码管，靠这里兜底封顶。
+    find "$AURORA_TEST_TMPDIR" -mindepth 1 -maxdepth 1 -mmin +120 \
+        -exec rm -rf {} + 2>/dev/null || true
+    export TMPDIR="$AURORA_TEST_TMPDIR"
+    gray "  TMPDIR=$TMPDIR"
+}
 VERSION="$(tr -d '[:space:]' < "$PRODUCT_ROOT/docs/VERSION" 2>/dev/null || echo '?')"
 # 发布产物目录在【项目根】（内容 == 安装到 Program Files 的内容，无中间产物）
 BUILD_DIR="$PRODUCT_ROOT/build"
@@ -302,6 +319,7 @@ do_clippy() {
 }
 
 do_test() {
+    disk_tmp
     # --no-fail-fast: 默认首个失败的 test binary 就停, 排在它后面的整个不跑。本机
     # Windows 有 113 个 test binary, CI 的 Linux job 曾在第 84 个(aurora-ui)停下 ——
     # 中间 29 个在 CI 上从未执行过。代价是失败时更慢, 换来一次看全所有失败点。
@@ -342,6 +360,7 @@ do_setting_test() {
         err "只想验证编不编得过, 用 sk (setting-check, 不需要 wine)。"
         return 1
     fi
+    disk_tmp
     say "\n正在运行 aurora_setting 测试 ($TARGET, 经 wine)..."
     export AURORA_APP_VERSION="$VERSION"
     cd "$SETTING_DIR" && cargo_xwin test --target "$TARGET"
@@ -408,6 +427,7 @@ do_proto_check() {
 #
 # 与 CI 同一条命令。
 do_wire_check() {
+    disk_tmp
     say "\n[wire] 线格式真值表..."
     ( cd "$PROJECT_ROOT" && cargo test -q -p aurora-ipc --test wire_vectors )
 }

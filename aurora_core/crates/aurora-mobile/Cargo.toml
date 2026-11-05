@@ -27,5 +27,9 @@ tracing = { workspace = true }
 # 宿主侧也已有解析器，用同一种表示就不需要第二套映射。
 toml = { workspace = true }
 
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 [lints]
 workspace = true

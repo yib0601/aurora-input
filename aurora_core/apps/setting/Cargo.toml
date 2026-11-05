@@ -39,6 +39,8 @@ zip = { version = "2", default-features = false, features = ["deflate-flate2", "
 flate2 = { workspace = true }
 
 [dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 # 仅测试用：core 的 capability 生成器与配置真相源，供守护 capabilities.snapshot.json
 # 与 mockdata/config.json 不与 core 漂移。
 # core 仓已因 aurora-ipc 成为硬依赖，此处不引入新的路径前提。

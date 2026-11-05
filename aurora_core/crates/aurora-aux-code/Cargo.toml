@@ -8,5 +8,9 @@ aurora-candidate = { path = "../aurora-candidate" }
 tracing = { workspace = true }
 aurora-utils = { path = "../aurora-utils" }
 
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 [lints]
 workspace = true

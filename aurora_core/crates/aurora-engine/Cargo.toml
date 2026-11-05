@@ -25,6 +25,8 @@ memmap2 = "0.9"
 windows = { workspace = true }
 
 [dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 aurora-config = { path = "../aurora-config" }
 # 供集成测试按**生产同源**的规则算缓存路径（`cache_ns`）——手工拼 namespace/stem
 # 已经错过一次：把随包分发的 `<源>.dict.wdat` 当成了运行时缓存，测试因此测了个空。

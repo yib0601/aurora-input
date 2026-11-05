@@ -8,5 +8,9 @@ aurora-utils = { path = "../aurora-utils" }
 aurora-dict = { path = "../aurora-dict" }
 tracing = { workspace = true }
 
+
+[dev-dependencies]
+aurora-utils = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
 [lints]
 workspace = true
