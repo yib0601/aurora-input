@@ -68,7 +68,7 @@ cargo test             # 运行测试
 ```
 
 - **Windows**：原生构建；图标、版本信息与 DPI 感知 manifest 通过 `winresource` 在构建期嵌入
-- **Linux**：原生构建，也可用 `scripts/dev.sh` 交叉编译 Windows 产物
+- **Linux**：原生构建；交叉编 Windows 产物用主仓库的 `scripts/dev.sh m3`（检查用 `sk`）
 - **macOS**：由主仓库的 `scripts/mac/dev.sh` 一并构建并打进 `.pkg`
 
 没有运行中的输入法服务时，可以用 `AURORA_RPC_MOCK=1` 以模拟数据预览界面（改动不会保存）：
