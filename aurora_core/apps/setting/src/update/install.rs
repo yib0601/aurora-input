@@ -246,11 +246,13 @@ fn shell_execute(_exe: &Path, _args: &str) -> Result<(), UpdateError> {
 mod tests {
     use super::*;
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let d =
-            std::env::temp_dir().join(format!("wind_install_test_{}_{tag}", std::process::id()));
+    /// 返回 `TempDir` 一并交给调用方持有：它一旦 drop 就删掉整个临时目录，
+    /// 只返回 `PathBuf` 的话调用方拿到的是已被删掉的路径。
+    fn temp_dir(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!("wind_install_test_{tag}"));
         std::fs::create_dir_all(&d).unwrap();
-        d
+        (tmp, d)
     }
 
     fn plan_for(dir: &Path) -> InstallPlan {
@@ -263,7 +265,7 @@ mod tests {
 
     #[test]
     fn standard_install_is_detected_by_uninstaller_presence() {
-        let dir = temp_dir("std");
+        let (_tmp, dir) = temp_dir("std");
         std::fs::write(dir.join(UNINSTALLER), b"x").unwrap();
 
         assert!(!is_portable_install(&dir));
@@ -274,7 +276,7 @@ mod tests {
 
     #[test]
     fn portable_marker_forces_interactive_wizard() {
-        let dir = temp_dir("marker");
+        let (_tmp, dir) = temp_dir("marker");
         std::fs::write(dir.join(UNINSTALLER), b"x").unwrap();
         std::fs::write(dir.join(crate::mode::PORTABLE_MARKER_NAME), b"portable=1\n").unwrap();
 
@@ -291,7 +293,7 @@ mod tests {
     /// 只看标记文件会误判成标准安装并静默升级，故必须两个信号取或。
     #[test]
     fn missing_uninstaller_alone_also_forces_wizard() {
-        let dir = temp_dir("ghost");
+        let (_tmp, dir) = temp_dir("ghost");
         // 既无 uninstall.exe 也无 portable_mode
         assert!(is_portable_install(&dir));
         assert!(!plan_for(&dir).unattended());
@@ -355,7 +357,8 @@ mod tests {
 
     #[test]
     fn plan_uses_own_exe_directory() {
-        let installer = std::env::temp_dir().join("Setup.exe");
+        let tmp = tempfile::tempdir().unwrap();
+        let installer = tmp.path().join("Setup.exe");
         let p = plan(&installer).unwrap();
         let expected = std::env::current_exe()
             .unwrap()

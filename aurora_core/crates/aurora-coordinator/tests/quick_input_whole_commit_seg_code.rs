@@ -8,13 +8,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SEMICOLON: u32 = 0xBA;
 const VK_NEXT: u32 = 0x22;
@@ -53,7 +53,7 @@ fn cfg(pinyin: &str) -> Config {
 }
 
 fn open(tag: &str, c: Config) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
-    let db = std::env::temp_dir().join(format!(
+    let db = aurora_utils::testing::scratch(tag).join(format!(
         "wind_quick_seg_code_{tag}_{}.redb",
         std::process::id()
     ));

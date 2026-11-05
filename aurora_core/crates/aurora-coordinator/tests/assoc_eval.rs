@@ -127,7 +127,7 @@ fn events(dict: &HashMap<String, String>) -> Vec<(String, String, String)> {
 }
 
 fn coord(tag: &str, seed: impl FnOnce(&aurora_store::Store)) -> Arc<Coordinator> {
-    let dir = std::env::temp_dir().join("wind_assoc_eval");
+    let dir = aurora_utils::testing::scratch(tag).join("wind_assoc_eval");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{tag}.redb"));
     let _ = std::fs::remove_file(&path);

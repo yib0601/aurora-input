@@ -43,12 +43,12 @@
 //! 词典缺失时自动跳过 —— ⚠️ `build_dev/data` 不存在时**整族静默跳过而计数照绿**，
 //! 判据是耗时（正常 1s 量级 vs 跳过 0.0x s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -98,7 +98,7 @@ fn wubi_config() -> Config {
 /// 每个用例一个目录（内容虽同，但并发写同一文件会撕裂），返回值直接喂
 /// `new_headless_with_override`。
 fn override_with_level(tag: &str, level: usize) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_scy_ov_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_scy_ov_{tag}"));
     std::fs::create_dir_all(&dir).expect("建 override 目录失败");
     std::fs::write(
         dir.join("wubi86.toml"),
@@ -283,7 +283,7 @@ fn char_without_shortcode_top_does_not_yield() {
 
 /// 建一个独立的空 store（每个用例一个文件，避免相互污染）。
 fn fresh_store(name: &str) -> (Arc<aurora_store::Store>, PathBuf) {
-    let path = std::env::temp_dir().join(name);
+    let path = aurora_utils::testing::scratch(name).join(name);
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(aurora_store::Store::open(&path).unwrap());
     (store, path)

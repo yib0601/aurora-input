@@ -26,9 +26,9 @@
 //! 以及给简码条目换上**它自己全码位置的权重**（那才是真实词频量纲）。
 
 use crate::pinyin::viterbi::{ViterbiDecoder, ViterbiResult, WordNode};
-use std::collections::HashMap;
 use aurora_dict::DictManager;
 use aurora_dict::cached::CachedDict;
+use std::collections::HashMap;
 
 /// 词频归一化基准——**标定系数，非精确的词库总权重**（同 `pinyin::lattice::DICT_TOTAL`
 /// 的性质，理由见那里的长注释）。

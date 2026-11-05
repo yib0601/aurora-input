@@ -895,7 +895,10 @@ mod tests {
 
     #[test]
     fn scans_only_yaml_and_in_a_stable_order() {
-        let dir = std::env::temp_dir().join(format!("charsets_scan_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("charsets_scan_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("b.yaml"), "key: b\n").unwrap();
@@ -912,7 +915,10 @@ mod tests {
     /// 一个写坏的文件不该让整层失效。
     #[test]
     fn a_broken_file_does_not_kill_the_layer() {
-        let dir = std::env::temp_dir().join(format!("charsets_broken_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("charsets_broken_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("ok.yaml"), "key: ok\n").unwrap();

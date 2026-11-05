@@ -277,7 +277,7 @@ mod tests {
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("wind-reader-pool-{}-{}", std::process::id(), tag))
+        aurora_utils::testing::scratch(&format!("wind-reader-pool-{}-{}", std::process::id(), tag))
     }
 
     /// 把 `path` 的 mtime 拨回 `before` 那一刻，并断言「大小 + mtime」与之逐字段相同。

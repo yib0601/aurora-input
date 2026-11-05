@@ -8,11 +8,11 @@
 //! 缓存，env 必须在任何初始化之前就位。⚠️ 全文件仅此一个 `#[test]`。
 //! ⚠️ 不依赖 `build_dev/data`：主题夹具全自造。
 
-use serde_json::{Value, json};
-use std::path::Path;
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_webdata::WebDataRpc;
+use serde_json::{Value, json};
+use std::path::Path;
 
 const THEME: &str = r##"
 [meta]
@@ -54,7 +54,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) {
 
 #[test]
 fn preview_template_contract() {
-    let tmp = std::env::temp_dir().join(format!(
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join(format!(
         "wind_webdata_preview_template-{}",
         std::process::id()
     ));

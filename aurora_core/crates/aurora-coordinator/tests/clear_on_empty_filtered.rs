@@ -4,11 +4,11 @@
 //! 数据前提（`wubi86_jidian.dict.yaml`）：`lynn` 只有生僻字「甿」「軶」；`aaad` 只有词组「工期」；
 //! `aaab` 码表里不存在。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

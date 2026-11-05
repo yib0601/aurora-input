@@ -6,9 +6,9 @@
 use crate::pinyin::dag::{MaskCheck, SegGraph};
 use crate::pinyin::fuzzy::{FuzzyConfig, FuzzyMatcher};
 use crate::pinyin::syllable::SyllableTrie;
-use std::collections::{BTreeMap, HashMap};
 use aurora_dict::cached::CachedDict;
 use aurora_dict::manager::DictManager;
+use std::collections::{BTreeMap, HashMap};
 
 /// 虚词表：**字形 → 该字作虚词时的读音**（无调全拼）。
 ///

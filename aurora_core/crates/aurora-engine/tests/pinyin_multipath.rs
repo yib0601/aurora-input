@@ -12,9 +12,9 @@
 //! 的 `boundary` 恒为 0，边界校验一律降级放行，等于没设防——测不出本文件关心的任何东西。
 //! 词典缺失时自动跳过。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

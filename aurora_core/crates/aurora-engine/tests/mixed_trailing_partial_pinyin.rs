@@ -9,7 +9,6 @@
 //! - 编码栏：`preedit_pinyin`（高亮跟随用的拆分形态）在单音节 + 残码时也须给出 `nun'l`；
 //! - 清空：两道拼音守护同受 `auto_commit_block_on_pinyin` 支配，开则守住、关则清空。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::codetable::CodetableDict;
 use aurora_dict::{DictManager, SystemDictLayer};
@@ -17,6 +16,7 @@ use aurora_engine::codetable::{CodeTableEngine, CommitOptions};
 use aurora_engine::mixed::{MixConfig, MixedEngine};
 use aurora_engine::pinyin::Config as PinyinConfig;
 use aurora_engine::{Engine, PinyinEngine};
+use std::sync::Arc;
 
 /// 五笔侧：只放与 `nunl` 无关的词条，保证该串在码表无候选、无更长后继（满码空码清空的前提）。
 fn wubi_engine() -> Box<dyn Engine> {

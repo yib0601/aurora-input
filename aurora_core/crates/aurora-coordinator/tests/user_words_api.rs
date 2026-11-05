@@ -29,7 +29,8 @@ fn dict_ready() -> bool {
 
 /// 无词库的协调器 + 临时 redb。⚠️ 文件名带 pid：多会话并行跑测试时固定名会互删夹具。
 fn bare(tag: &str) -> Arc<Coordinator> {
-    let path = std::env::temp_dir().join(format!("wind_uwapi_{tag}_{}.redb", std::process::id()));
+    let path = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_uwapi_{tag}_{}.redb", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(aurora_store::Store::open(&path).unwrap());
     Coordinator::new_headless_with_store(Config::default(), None, store)
@@ -119,7 +120,10 @@ fn remove_by_display_code_and_clear_counts() {
 /// 只读模式（meta 版本高于本版本）store 不打开：读写都报错而不是假装成功。
 #[test]
 fn readonly_storage_rejects_reads_and_writes() {
-    let user = std::env::temp_dir().join(format!("wind_uwapi_ro_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let user = tmp
+        .path()
+        .join(format!("wind_uwapi_ro_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&user);
     std::fs::create_dir_all(&user).unwrap();
     std::fs::write(
@@ -139,7 +143,8 @@ fn readonly_storage_rejects_reads_and_writes() {
 // ── 以下要 build_dev 词库 ─────────────────────────────────────────────
 
 fn with_data(tag: &str, active: &str) -> Arc<Coordinator> {
-    let path = std::env::temp_dir().join(format!("wind_uwapi_{tag}_{}.redb", std::process::id()));
+    let path = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_uwapi_{tag}_{}.redb", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(aurora_store::Store::open(&path).unwrap());
     let mut cfg = Config::default();

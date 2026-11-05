@@ -12,14 +12,14 @@
 //! 命令栏 display 侧只用纯函数（无需宿主服务）；`$CC` 的副作用动作需平台服务（按键/剪贴板/
 //! 进程注入），Rust 端平台层尚缺，故当前仅显现 display 候选，动作执行待平台服务补齐。
 
-use chrono::{DateTime, Datelike, Local, Timelike};
-use std::collections::HashMap;
-use std::path::Path;
-use tracing::{debug, warn};
 use aurora_cmdbar::{
     Phrase, PhraseEval, Services, default_registry, evaluate, evaluate_phrase, is_cmdbar_grammar,
     parse,
 };
+use chrono::{DateTime, Datelike, Local, Timelike};
+use std::collections::HashMap;
+use std::path::Path;
+use tracing::{debug, warn};
 
 /// 一条短语（同 code 下按 weight 降序、position 升序排列）
 #[derive(Debug, Clone, Default)]
@@ -1027,7 +1027,10 @@ mod tests {
     /// 直接建层的 `load` 不收（没有库可记开关的场合，关着就是没有）。
     #[test]
     fn disabled_entries_are_synced_off_and_skipped_by_load() {
-        let dir = std::env::temp_dir().join(format!("wind_phrase_off_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_phrase_off_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("system.phrases.toml");
         std::fs::write(
@@ -1074,7 +1077,10 @@ mod tests {
     /// 两个加载入口（建层的 `load` 与入库同步的 `parse_system_entries`）用同一个过滤。
     #[test]
     fn both_loaders_apply_the_platform_filter() {
-        let dir = std::env::temp_dir().join(format!("wind_phrase_plat_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_phrase_plat_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("system.phrases.toml");
         std::fs::write(

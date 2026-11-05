@@ -29,7 +29,7 @@ use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 /// 才能被观测到（`nhao` 应只留你好）。
 /// 「西安宁」与「先拧」共用**扁平码** `xianning` 而切分不同 —— 音节数过滤的支点。
 fn fixture(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_mixed_abbrev_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_mixed_abbrev_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -291,7 +291,8 @@ fn disabling_abbrev_also_disables_mixed() {
 /// 故这条路径只可能由混合判据放行 —— 它同时验证了 step6 的入口条件确实取了「或」。
 #[test]
 fn user_word_mixed_abbrev_hits() {
-    let dir = std::env::temp_dir().join("wind_mixed_abbrev_user");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("wind_mixed_abbrev_user");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -301,7 +302,8 @@ fn user_word_mixed_abbrev_hits() {
     w.write(&wdat).unwrap();
     let dict = CachedDict::load_at(&dir.join("t.dict.yaml"), &wdat).expect("夹具");
 
-    let p = std::env::temp_dir().join("wind_mixed_abbrev_user.redb");
+    let tmp2 = tempfile::tempdir().unwrap();
+    let p = tmp2.path().join("wind_mixed_abbrev_user.redb");
     let _ = std::fs::remove_file(&p);
     let store = std::sync::Arc::new(aurora_store::Store::open(&p).unwrap());
     store

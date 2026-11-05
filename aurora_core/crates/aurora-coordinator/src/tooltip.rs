@@ -512,8 +512,10 @@ mod tests {
         // 每次调用独占一个目录：测试并行跑，共用目录会被别的用例的 remove_dir_all 删掉。
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("wind-tooltip-fixture-{}-{seq}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!(
+            "wind-tooltip-fixture-{}-{seq}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let chaizi = dir.join("chaizi.txt");
         std::fs::write(

@@ -3,13 +3,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{CaretData, KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::FreeInputMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_ALT, MOD_CTRL, MOD_SHIFT, caret_source};
 use aurora_ui_types::UiCommand;
+use std::path::PathBuf;
 
 const VK_SEMICOLON: u32 = 0xBA;
 const VK_NEXT: u32 = 0x22;
@@ -83,7 +83,7 @@ fn enter_quick(coord: &Coordinator) {
 
 /// 独立 redb（置顶落 shadow 规则要有 store）。文件名带 pid：并行跑测试时固定名会互删。
 fn fresh_store(tag: &str) -> (std::sync::Arc<aurora_store::Store>, PathBuf) {
-    let path = std::env::temp_dir().join(format!(
+    let path = aurora_utils::testing::scratch(tag).join(format!(
         "wind_quick_select_{tag}_{}.redb",
         std::process::id()
     ));

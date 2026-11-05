@@ -9,10 +9,10 @@ use crate::engine::{ConvertResult, Engine, EngineType, ExtendedEngine};
 // 组合区里两段编码之间的分隔符，与码表整句、拼音音节分隔**共用**同一个字符：
 // 用户不必为逆切分再学一套符号。
 use super::sentence::SPLIT_SEPARATOR;
-use std::collections::HashMap;
-use std::sync::Arc;
 use aurora_candidate::{Candidate, CandidateSource, better, by_natural, cmp_exact_first};
 use aurora_dict::DictManager;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// 基础排序（`[engine.codetable].base_sort`）：候选**主排序维度**。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2338,8 +2338,10 @@ mod tests {
 
     /// 目录名带 pid：并发会话 / 并行的两次 `cargo test` 共用 temp 时不互相删库。
     fn split_store(tag: &str) -> (TempRoot, Arc<aurora_store::Store>) {
-        let root =
-            std::env::temp_dir().join(format!("wind_split_shadow_{tag}_{}", std::process::id()));
+        let root = aurora_utils::testing::scratch(&format!(
+            "wind_split_shadow_{tag}_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let store = Arc::new(aurora_store::Store::open(root.join("user_data.db")).unwrap());

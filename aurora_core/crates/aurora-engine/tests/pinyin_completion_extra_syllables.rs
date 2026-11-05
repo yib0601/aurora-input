@@ -31,7 +31,7 @@ use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 /// **单靠它们断言「应上浮」恒真**，把上浮判据整个删掉也测不出来。丙的 50 落在 FLOOR
 /// 之下，与甲乙构成一上一下的对照，判据这才被真正钉住。
 fn fixture(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_comp_extra_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_comp_extra_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

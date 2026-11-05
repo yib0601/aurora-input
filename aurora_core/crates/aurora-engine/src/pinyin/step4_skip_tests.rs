@@ -66,7 +66,7 @@ fn letter_strings(max_len: usize) -> Vec<String> {
 
 fn yaml_engine(tag: &str, cfg: Config, entries: &[(&str, &str, i32)]) -> PinyinEngine {
     use std::io::Write;
-    let path = std::env::temp_dir().join(format!("wind_a314_{tag}.dict.yaml"));
+    let path = aurora_utils::testing::scratch("a314").join(format!("wind_a314_{tag}.dict.yaml"));
     {
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, "---\nname: py\n...").unwrap();

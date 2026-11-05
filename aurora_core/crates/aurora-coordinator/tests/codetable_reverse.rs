@@ -1,11 +1,11 @@
 //! 反查模式端到端（docs/design/codetable-reverse-mode.md §3）。真实数据：build_dev/data 的 wubi86 / wubi86_pinyin。
 //! ⚠️ 数据缺失时整族静默跳过而计数照绿，判据是耗时（≥1s）与输出里有没有「跳过」。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
+use std::path::PathBuf;
 
 const VK_BACKSLASH: u32 = 0xDC;
 const VK_ESCAPE: u32 = 0x1B;
@@ -611,7 +611,10 @@ fn stale_schema_override_leaks_nowhere_real_data() {
         eprintln!("跳过：五笔词库不存在");
         return;
     }
-    let ov = std::env::temp_dir().join(format!("wind_rev_stale_ov_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let ov = tmp
+        .path()
+        .join(format!("wind_rev_stale_ov_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).unwrap();
     // 覆盖文件按 `<override_dir>/<方案 id>.toml` 命名（`EngineManager::persist_schema_override`）。

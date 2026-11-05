@@ -12,9 +12,9 @@
 //! ⚠️ 依赖 `build_dev/data`（整句解码要真实词库与词频），缺失时静默跳过——判据是耗时与
 //! eprintln。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -36,7 +36,7 @@ fn candidates(active: &str, input: &str) -> Option<Vec<(String, bool)>> {
         "wubi86_pinyin".to_string(),
     ];
     cfg.schema.active = active.to_string();
-    let root = std::env::temp_dir().join(format!("wind_mix_pf_scope_{active}_{input}"));
+    let root = aurora_utils::testing::scratch(&format!("wind_mix_pf_scope_{active}_{input}"));
     let _ = std::fs::remove_dir_all(&root);
     let mgr =
         EngineManager::with_store_override(&cfg, Some(&dir), None, Some(root.join("overrides")));

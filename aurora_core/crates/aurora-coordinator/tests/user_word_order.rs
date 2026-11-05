@@ -9,12 +9,12 @@
 //! ⚠️ 词典缺失时整族静默跳过（判据是**耗时 0.00s**，不是通过条数）。worktree 里需自备
 //! `build_dev` 链接。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     // 三级：crates/aurora-coordinator → crates → aurora_input → 仓库根（build_dev 在仓库根）。
@@ -79,7 +79,8 @@ fn user_words_appear_in_import_order() {
     if !has_pinyin() {
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_e2e_user_word_order.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_e2e_user_word_order.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = Arc::new(aurora_store::Store::open(&store_path).unwrap());
 
@@ -123,7 +124,8 @@ fn user_words_follow_import_order_not_lexicographic() {
     if !has_pinyin() {
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_e2e_user_word_order_rev.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_e2e_user_word_order_rev.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = Arc::new(aurora_store::Store::open(&store_path).unwrap());
 

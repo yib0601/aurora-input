@@ -206,7 +206,8 @@ mod tests {
     use crate::record::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_jnl-{}", std::process::id()));
+        let d =
+            aurora_utils::testing::scratch(name).join(format!("wind_jnl-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         let p = d.join(name);
         let _ = std::fs::remove_file(&p);

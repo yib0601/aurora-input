@@ -11,9 +11,9 @@
 //! ⚠️ 两个环境变量都**必须**设：漏掉 `AURORA_DATADIR_CONF` 时 `prune_user_config()`
 //! 会真写用户的 `%APPDATA%\AuroraInput\config.toml`（本仓已有前科）。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_config::app_compat::{AppCompat, FirstShowMode};
+use std::path::{Path, PathBuf};
 
 /// 在 `dir/rel` 写一个带内容的文件（父目录按需创建）。
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
@@ -25,7 +25,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
 
 #[test]
 fn custom_layer_sits_between_system_and_user() {
-    let tmp = std::env::temp_dir().join("wind_custom_layer_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_custom_layer_e2e");
     let root = tmp.join("install");
     let data = root.join("data");
     let custom = root.join("data_custom");

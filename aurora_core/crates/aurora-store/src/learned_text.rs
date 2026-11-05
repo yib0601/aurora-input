@@ -1,10 +1,10 @@
 //! 学到的数据的文本绑定规则（设计 §2.1 / §2.4，P5）：temp / draft / freq / assoc 落在
 //! `data/<schema>/` 下的表格文本，由引擎按规则自动绑定。
 
-use std::path::Path;
 use aurora_userdata::engine::{TextBinding, TextFormat};
 use aurora_userdata::record::Target;
 use aurora_userdata::text::codec;
+use std::path::Path;
 
 pub(crate) const LEARNED_TARGETS: [Target; 4] =
     [Target::Temp, Target::Draft, Target::Freq, Target::Assoc];

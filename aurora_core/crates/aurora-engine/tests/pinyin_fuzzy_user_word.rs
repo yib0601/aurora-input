@@ -44,7 +44,7 @@ fn manager_s2(
     fuzzy: bool,
     s2: bool,
 ) -> EngineManager {
-    let root = std::env::temp_dir().join(format!("wind_pinyin_fuzzy_user_{tag}"));
+    let root = aurora_utils::testing::scratch(&format!("wind_pinyin_fuzzy_user_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));

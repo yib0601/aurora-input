@@ -984,7 +984,10 @@ mod tests {
     /// ⚠️ 样本在代码里构造，不要改用仓库里的 fixture（git core.autocrlf 会改行尾）。
     #[test]
     fn line_endings_do_not_change_the_result() {
-        let dir = std::env::temp_dir().join(format!("wind-common-eol-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-common-eol-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for lf in ["李\n樱\n河\n", "# 我的常用字表\n李\n樱\n河\n"] {
             for (tag, text) in [

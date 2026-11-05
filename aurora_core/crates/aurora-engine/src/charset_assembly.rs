@@ -22,9 +22,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use tracing::warn;
 use aurora_candidate::{CharsetRegistry, ClassSpec, Scope};
-use aurora_config::charset_def::{Commonality, DEFAULT_ORDER, MergedClass, ScopeKind, parse_ranges};
+use aurora_config::charset_def::{
+    Commonality, DEFAULT_ORDER, MergedClass, ScopeKind, parse_ranges,
+};
+use tracing::warn;
 
 /// 外部引用：配置里**按名字**指向字符类的那两个键。
 ///
@@ -558,7 +560,10 @@ order: 900
     /// ⚠️ 样本在代码里构造，不要改用仓库 fixture（git core.autocrlf 会按平台改行尾）。
     #[test]
     fn member_file_line_endings_do_not_change_the_result() {
-        let dir = std::env::temp_dir().join(format!("wind-memberfile-eol-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-memberfile-eol-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("schemas")).unwrap();
         for lf in ["的一是\n了我不\n", "# 我的字表\n的一是\n了我不\n"] {
             for (tag, text) in [

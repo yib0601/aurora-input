@@ -20,13 +20,13 @@
 //! 反向对照（`..._when_disabled`）不可省：没有它，「恒不记」与「按开关记」两种实现都能让
 //! 正向断言通过——本仓 `english_commit_space` 的缺陷形态正是「代码看着对、通路走不到」。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SPACE: u32 = 0x20;
 const VK_RETURN: u32 = 0x0D;
@@ -83,7 +83,7 @@ fn english_schema_config(freq_enabled: bool, strategy: &str) -> Config {
 }
 
 fn store_at(tag: &str) -> Arc<Store> {
-    let path = std::env::temp_dir().join(format!("wind_te_freq_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_te_freq_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     Arc::new(Store::open(&path).unwrap())
 }

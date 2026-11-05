@@ -14,13 +14,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -62,7 +62,8 @@ impl Drop for TempRoot {
 /// 并发会话 / 并行的两次 `cargo test` 共用 temp 时不互相删库。
 /// `extra` 追加到 `[engine.codetable]` 段。
 fn coord_with(tag: &str, extra: &str) -> (Arc<Coordinator>, Arc<Store>, TempRoot) {
-    let root = std::env::temp_dir().join(format!("wind_split_e2e_{tag}_{}", std::process::id()));
+    let root = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_split_e2e_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let ov = root.join("overrides");
     std::fs::create_dir_all(&ov).unwrap();
@@ -272,7 +273,8 @@ fn coord_xy_with(
     extra_dict: &str,
     tweak: impl FnOnce(&mut Config),
 ) -> (Arc<Coordinator>, TempRoot) {
-    let root = std::env::temp_dir().join(format!("wind_split_xy_{tag}_{}", std::process::id()));
+    let root = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_split_xy_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let schemas = root.join("data/schemas");
     std::fs::create_dir_all(schemas.join("xy")).unwrap();

@@ -9,9 +9,9 @@
 //!
 //! ⚠️ 词库缺失时静默跳过（同 `english_engine_is_shared.rs` 的约定）。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::{Path, PathBuf};
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -26,7 +26,7 @@ fn has_data() -> bool {
 
 /// 每个用例一个独立 override 目录（带进程号 + 用例名：并发会话同跑时不互删）。
 fn override_dir(tag: &str, files: &[(&str, &str)]) -> PathBuf {
-    let ov = std::env::temp_dir().join(format!("wind_mixcycle_{}_{tag}", std::process::id()));
+    let ov = aurora_utils::testing::scratch(&format!("wind_mixcycle_{}_{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).unwrap();
     for (id, body) in files {

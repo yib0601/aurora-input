@@ -16,9 +16,9 @@
 //!
 //! ⚠️ 词库缺失时静默跳过（同 `english_engine_is_shared.rs` 的约定）。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 const MIXED: &str = "wubi86_pinyin";
 /// 混输的 primary（见 `schemas/wubi86_pinyin.schema.toml` 的 `[engine.mixed]`）。
@@ -52,7 +52,8 @@ fn manager_with(tag: &str, enable_english: bool) -> Option<(EngineManager, PathB
     cfg.schema.available = vec![MIXED.into(), "english".into()];
     cfg.schema.active = MIXED.into();
     cfg.schema.mix.enable_english = enable_english;
-    let ov = std::env::temp_dir().join(format!("wind_inv_cascade_{tag}_{}", std::process::id()));
+    let ov =
+        aurora_utils::testing::scratch(&format!("wind_inv_cascade_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).ok()?;
     let mgr = EngineManager::with_store_override(&cfg, Some(&dir), None, Some(ov.clone()));

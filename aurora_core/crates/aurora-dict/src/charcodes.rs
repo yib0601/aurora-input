@@ -201,7 +201,8 @@ mod tests {
 
     #[test]
     fn write_then_read_from_disk() {
-        let dir = std::env::temp_dir().join("wind_wscc_rt");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_wscc_rt");
         let p = dir.join("t.wscc");
         let _ = std::fs::remove_file(&p);
         write(&p, &serialize(&sample())).unwrap();

@@ -3,10 +3,10 @@
 //! 引擎把分库登记成方案的扩展词库（id `user:<名>`），这里只管文件。
 
 use crate::store::Store;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use aurora_userdata::issues::{self, IssueKind};
 use aurora_userdata::text::{banner, fold};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// 分库目录名（相对数据方案目录）。
 pub const LIBS_DIR: &str = "dicts";
@@ -740,7 +740,8 @@ mod tests {
     }
 
     fn store(tag: &str) -> Store {
-        let p = std::env::temp_dir().join(format!("wind_udl_{tag}-{}.redb", std::process::id()));
+        let p = aurora_utils::testing::scratch(tag)
+            .join(format!("wind_udl_{tag}-{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_dir_all(crate::store::derived_text_dir(&p));
         Store::open(&p).unwrap()

@@ -5,8 +5,8 @@
 //!
 //! 测试会在词典文件存在时运行；缺失时自动跳过（CI 无数据环境）。
 
-use std::path::PathBuf;
 use aurora_dict::cached::CachedDict;
+use std::path::PathBuf;
 
 /// 仓库内 build_dev 数据目录。
 ///
@@ -42,7 +42,8 @@ fn stage(rel: &str) -> Option<PathBuf> {
     }
     let name = src.file_name()?.to_string_lossy().into_owned();
     let stem = name.split('.').next().unwrap_or("dict").to_string();
-    let dir = std::env::temp_dir().join(format!("wind-real-dict-{}-{stem}", std::process::id()));
+    let dir =
+        aurora_utils::testing::scratch(&format!("wind-real-dict-{}-{stem}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).ok()?;
     let dst = dir.join(&name);
@@ -128,7 +129,8 @@ fn test_real_pinyin_candidates() {
 /// 解析层修对了而缓存层再吃掉，症状只在第二次启动（命中缓存）时复现，最难排查。
 #[test]
 fn test_mongolian_trailing_space_survives_cache_pipeline() {
-    let dir = std::env::temp_dir().join(format!("wind-toli-{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(format!("wind-toli-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("建临时目录");
     let path = dir.join("toli.dict.yaml");

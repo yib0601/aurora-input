@@ -205,7 +205,7 @@ fn copy_dir(src: &Path, dst: &Path) {
 
 /// 便携根目录：用户层复制自 `repro`，缓存目录跨运行保留。
 fn setup_root(repro: &Path) -> PathBuf {
-    let root = std::env::temp_dir().join("wi-s5-root");
+    let root = aurora_utils::testing::scratch("setup_root").join("wi-s5-root");
     let _ = std::fs::remove_dir_all(root.join("userdata"));
     std::fs::create_dir_all(root.join("data")).unwrap();
     copy_dir(repro, &root.join("userdata"));

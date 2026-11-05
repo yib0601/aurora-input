@@ -20,10 +20,10 @@
 //! `restores_the_users_own_preference_not_a_hardcoded_chinese` 那条先把全局态改成英文标点
 //! 再走一遍，两条一起才把「还原的是**用户自己设的值**」钉住。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::MessageHandler;
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

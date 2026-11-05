@@ -7,10 +7,10 @@
 //! 候选也给不出（`wi` 不成音节），于是英文一断档整个候选窗就空掉。五笔下码表仍在出
 //! 候选，这个闪烁被掩盖，所以只有拼音方案报得出来。
 
-use std::path::PathBuf;
 use aurora_candidate::CandidateSource;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

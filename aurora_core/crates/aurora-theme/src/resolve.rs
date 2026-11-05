@@ -660,7 +660,10 @@ mod tests {
     /// 子主题覆盖 `_base` 的 token，未覆盖的那个仍继承 `_base`；引用链可用。
     #[test]
     fn langbar_text_theme_overrides_base() {
-        let root = std::env::temp_dir().join(format!("wt-langbar-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp
+            .path()
+            .join(format!("wt-langbar-{}", std::process::id()));
         let dir = root.join("lbtest");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(

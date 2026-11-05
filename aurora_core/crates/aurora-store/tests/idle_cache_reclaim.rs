@@ -24,7 +24,8 @@ const TICK: Duration = Duration::from_millis(20);
 const IDLE: Duration = Duration::from_millis(100); // = 5 拍
 
 fn store(tag: &str) -> (Arc<Store>, std::path::PathBuf) {
-    let p = std::env::temp_dir().join(format!("wind_idle_{}_{tag}.redb", std::process::id()));
+    let p = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_idle_{}_{tag}.redb", std::process::id()));
     let _ = std::fs::remove_file(&p);
     (Arc::new(Store::open(&p).expect("开库")), p)
 }

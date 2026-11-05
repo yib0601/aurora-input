@@ -6698,7 +6698,7 @@ mod dynamic_candidate_shadow_tests {
     use std::sync::Arc;
 
     fn store_at(name: &str) -> Arc<Store> {
-        let p = std::env::temp_dir().join(name);
+        let p = aurora_utils::testing::scratch("store").join(name);
         let _ = std::fs::remove_file(&p);
         Arc::new(Store::open(&p).unwrap())
     }
@@ -7931,8 +7931,10 @@ mod expand_stop_tests {
         dict: impl FnOnce(&[char], &[char]) -> String,
     ) -> (Arc<Coordinator>, Cleanup) {
         let id = format!("zz_expand_{tag}_{}", std::process::id());
-        let dir =
-            std::env::temp_dir().join(format!("wind_expand_stop_{tag}_{}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!(
+            "wind_expand_stop_{tag}_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let guard = Cleanup {
             id: id.clone(),

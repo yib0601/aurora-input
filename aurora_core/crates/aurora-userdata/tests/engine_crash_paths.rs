@@ -3,7 +3,8 @@ use aurora_userdata::engine::{Dirs, UserData};
 use aurora_userdata::record::{OpKind, Payload, Target};
 
 fn dirs(name: &str) -> Dirs {
-    let d = std::env::temp_dir().join(format!("wind_ud_{name}-{}", std::process::id()));
+    let d =
+        aurora_utils::testing::scratch(name).join(format!("wind_ud_{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     Dirs {
         state_dir: d,

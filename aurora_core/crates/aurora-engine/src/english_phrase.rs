@@ -35,11 +35,11 @@ use aurora_candidate::{Candidate, CandidateSource};
 /// （t153 要拿它作模糊万能键），两者将来要一起定，在那之前多一个旋钮只是多一处要同步的真相。
 pub const PHRASE_SEPARATOR: char = '\'';
 
+use aurora_dict::DictManager;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, RwLock};
-use aurora_dict::DictManager;
 
 /// 索引里的一条词组：**只存偏移，不存字符串**。
 ///
@@ -1277,9 +1277,9 @@ mod tests {
     /// 反向验证（变异）：删掉 `get` 里 `generation != started_at` 那段比对即红。
     #[test]
     fn a_build_that_started_before_invalidate_must_not_win() {
+        use aurora_dict::{DictLayer, DictManager, LayerType};
         use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
         use std::sync::{Mutex, mpsc};
-        use aurora_dict::{DictLayer, DictManager, LayerType};
 
         /// 测试层的共享状态：测试线程与层各持一份 `Arc`。
         struct Gate {
@@ -1684,7 +1684,7 @@ mod tests {
 
     /// 每个用例一个干净的临时目录（`TMPDIR` 下，进程号 + 用例名区分，可并行）。
     fn tmp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_wphr_{}_{tag}", std::process::id()));
+        let d = aurora_utils::testing::scratch(&format!("wind_wphr_{}_{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

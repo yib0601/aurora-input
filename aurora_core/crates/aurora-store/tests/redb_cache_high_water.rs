@@ -55,7 +55,7 @@ const K: CompletionKind = CompletionKind::QuickHistory;
 const N: usize = 190_000;
 
 fn db_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("wind_redb_high_water.redb")
+    aurora_utils::testing::scratch("redb_high_water").join("wind_redb_high_water.redb")
 }
 
 /// 本进程常驻集（MB）。Linux 专用；本用例只在本机手动跑。

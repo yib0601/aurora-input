@@ -11,9 +11,9 @@
 //!
 //! ⚠️ 词库缺失时静默跳过（同 `english_phrase_index.rs` 的约定）。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 const MIXED: &str = "wubi86_pinyin";
 

@@ -1,11 +1,12 @@
 //! 文本目标（设计 §3.5 / §11 文本层）。
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use aurora_userdata::engine::{Dirs, TextBinding, UserData};
 use aurora_userdata::record::{OpKind, Payload, Target};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 fn setup(name: &str) -> (PathBuf, Arc<UserData>, PathBuf) {
-    let d = std::env::temp_dir().join(format!("wind_txt_{name}-{}", std::process::id()));
+    let d = aurora_utils::testing::scratch(name)
+        .join(format!("wind_txt_{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     let ud = Arc::new(
         UserData::open(Dirs {
@@ -418,7 +419,10 @@ fn text_bad_lines_are_reported_to_issues() {
     )
     .unwrap();
     ud.sync_text(Target::User, "py").unwrap();
-    assert!(aurora_userdata::issues::list_under(&d).is_empty(), "修好就清");
+    assert!(
+        aurora_userdata::issues::list_under(&d).is_empty(),
+        "修好就清"
+    );
     std::fs::write(&file, b"\xff\xfe").unwrap();
     assert!(ud.sync_text(Target::User, "py").is_err());
     assert_eq!(

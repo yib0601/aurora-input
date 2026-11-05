@@ -5,14 +5,14 @@
 //! 让 `din` 可纠成 `dian`，in/ing 模糊让它同时读作 `ding`；用户词「点」(dian) 权重极高。
 //! 真实词库在 `build_dev/data`，缺失时跳过。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{CaretData, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_coordinator::web_host::WebDataHost;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, caret_source};
 use aurora_ui_types::UiCommand;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SEMICOLON: u32 = 0xBA;
 const VK_BACKSLASH: u32 = 0xDC;
@@ -45,7 +45,10 @@ fn quick_input_pinyin_member_applies_d6() {
     if !has_data() {
         return;
     }
-    let dir = std::env::temp_dir().join(format!("wind_corr_overlay_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp
+        .path()
+        .join(format!("wind_corr_overlay_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let store = Arc::new(aurora_store::Store::open(dir.join("u.redb")).unwrap());
@@ -84,7 +87,10 @@ fn rare_char_mode_over_pinyin_applies_d6() {
     if !has_data() {
         return;
     }
-    let dir = std::env::temp_dir().join(format!("wind_corr_rare_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp
+        .path()
+        .join(format!("wind_corr_rare_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut c = Config::default();

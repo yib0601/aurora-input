@@ -1,12 +1,13 @@
 //! 学到的数据的表格文本目标（设计 §2.4 / §2.5 / P5）。
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use aurora_userdata::engine::{Dirs, TextBinding, TextFormat, UserData};
 use aurora_userdata::record::{OpKind, Payload, Target};
 use aurora_userdata::text::codec::{self, TableSpec};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 fn root(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("wind_learned_{name}-{}", std::process::id()));
+    let d = aurora_utils::testing::scratch(name)
+        .join(format!("wind_learned_{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     d
 }

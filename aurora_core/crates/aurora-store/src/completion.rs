@@ -549,9 +549,17 @@ impl Store {
 mod tests {
     use super::*;
 
+    /// `store` / `reopen` 必须落在同一个文件上，故两者共用本线程的一个 scratch 目录。
+    fn root() -> std::path::PathBuf {
+        thread_local! {
+            static ROOT: std::path::PathBuf = aurora_utils::testing::scratch("completion");
+        }
+        ROOT.with(|r| r.clone())
+    }
+
     /// 每个测试独立文件：redb 是单写者，共用文件会让并发测试互相阻塞。
     fn store(tag: &str) -> Store {
-        let p = std::env::temp_dir().join(format!(
+        let p = root().join(format!(
             "wind_completion_test_{}_{}_{:?}.redb",
             std::process::id(),
             tag,
@@ -563,7 +571,7 @@ mod tests {
 
     fn reopen(tag: &str, s: Store) -> Store {
         drop(s);
-        let p = std::env::temp_dir().join(format!(
+        let p = root().join(format!(
             "wind_completion_test_{}_{}_{:?}.redb",
             std::process::id(),
             tag,
@@ -988,7 +996,10 @@ mod tests {
     /// 不起落盘线程，释放 Store 时同步落盘，重开后记录在。
     #[test]
     fn completion_survives_drop_without_flusher() {
-        let p = std::env::temp_dir().join(format!("wind_cmp_drop_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_cmp_drop_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         {
             let s = Store::open(&p).unwrap();

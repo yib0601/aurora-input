@@ -7,13 +7,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const DATE_TEMPLATE: &str = "$Y年$M月$D日";
 const VK_BACKSLASH: u32 = 0xDC;
@@ -87,8 +87,8 @@ fn open_main(
     text: &str,
     codetable_toml: &str,
 ) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
-    let base =
-        std::env::temp_dir().join(format!("wind_tmpl_freq_exits_{tag}_{}", std::process::id()));
+    let base = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_tmpl_freq_exits_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let ov = base.join("override");
     std::fs::create_dir_all(&ov).unwrap();
@@ -172,8 +172,8 @@ fn open_special(
     text: &str,
     codetable_toml: &str,
 ) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
-    let base =
-        std::env::temp_dir().join(format!("wind_tmpl_freq_exits_{tag}_{}", std::process::id()));
+    let base = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_tmpl_freq_exits_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let ov = base.join("override");
     std::fs::create_dir_all(&ov).unwrap();

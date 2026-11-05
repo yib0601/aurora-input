@@ -7,12 +7,12 @@
 //! 仲裁口径与 `leading_chars` 的跨层仲裁相同：全局层绑定让位，方案级 `[key_actions]` 显式
 //! 绑定仍优先（同层冲突，显式优先）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_OEM_3: u32 = 0xC0; // 反引号
 
@@ -50,7 +50,8 @@ fn coord_key(
     wildcard_key: &str,
     schema_key_actions: &str,
 ) -> (Arc<Coordinator>, PathBuf) {
-    let ov = std::env::temp_dir().join(format!("wind_wc_lead_{tag}_{}", std::process::id()));
+    let ov = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_wc_lead_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).unwrap();
     if !schema_key_actions.is_empty() {

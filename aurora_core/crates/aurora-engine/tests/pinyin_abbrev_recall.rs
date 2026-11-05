@@ -27,7 +27,7 @@ use aurora_engine::{ConvertOptions, Engine};
 /// `hao` 码下另塞 20 个同音字：它们经 step 3 子短语进候选，把 `max_candidates` 占满，
 /// 从而复现「简拼候选恒沉底 ⇒ 总数一涨就被整批截掉」。权重取真实量级（`cn_dicts` 口径）。
 fn fixture(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_abbrev_recall_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_abbrev_recall_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

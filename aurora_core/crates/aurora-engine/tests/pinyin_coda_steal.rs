@@ -14,7 +14,7 @@ use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 
 /// `with_ningbo`：是否放进「宁」「宁波人」。不放时，抢韵尾是组句的唯一读法。
 fn fixture(tag: &str, with_ningbo: bool) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_coda_steal_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_coda_steal_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

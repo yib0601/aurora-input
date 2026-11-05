@@ -13,13 +13,13 @@
 //! headless 构造不预热，非活跃方案都是**冷**的 ⇒ 焦点切入走「后台加载、完成后再切」那条路，
 //! 每次切入后 `debug_wait_app_schema_load` 等它落定。
 
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
 use aurora_bridge::handler::{FocusData, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_CTRL, MOD_SHIFT};
 use aurora_ui_types::MenuCmd;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -27,9 +27,9 @@ static LOCK: Mutex<()> = Mutex::new(());
 fn root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
     ROOT.get_or_init(|| {
-        // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-        let root = std::env::temp_dir().join(format!("wind_app_schema-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        // 进程级托管：目录活到进程退出（unix 由 atexit 删）。不能换 `scratch()`——
+        // 它归首个 test 线程，线程一结束就删，而下面的 OnceLock 还缓存着这个路径。
+        let root = aurora_utils::testing::process_scratch("app_schema");
         let schemas = root.join("data/schemas");
         for (id, name, word) in [("za", "甲方案", "甲"), ("zb", "乙方案", "乙"), ("zc", "丙方案", "丙")]
         {

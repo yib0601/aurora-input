@@ -20,11 +20,11 @@
 //! 压不过跨 5 个数量级的词频差：真实词库实测 `zaij` 的「再加上」(3 音节，折后 w=5278)
 //! 稳压「再加」(2 音节，1461)、「再见」(1419)。详见 `aurora_candidate::cmp_completion_extra`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

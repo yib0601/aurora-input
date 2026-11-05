@@ -2,7 +2,7 @@
 use aurora_store::Store;
 
 fn open(tag: &str) -> Store {
-    let p = std::env::temp_dir().join(format!(
+    let p = aurora_utils::testing::scratch(tag).join(format!(
         "wind_store_gen_of_{tag}_{}.redb",
         std::process::id()
     ));

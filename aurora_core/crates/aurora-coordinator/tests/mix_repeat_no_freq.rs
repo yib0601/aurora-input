@@ -17,13 +17,13 @@
 //! 都绿。之所以不补：两条臂现在共用 `commit_mix_repeat` 这**一个**方法，封顶写在里面，
 //! 已经不存在「一处改了另一处没改」的漂移面；真要测它得读统计库，机械量与收益不相称。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -47,7 +47,7 @@ fn key(key_code: u32) -> KeyEventData {
 }
 
 fn store_at(tag: &str) -> Arc<Store> {
-    let path = std::env::temp_dir().join(format!("wind_mix_repeat_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_mix_repeat_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     Arc::new(Store::open(&path).unwrap())
 }
@@ -62,9 +62,9 @@ fn config() -> Config {
     cfg.schema.codetable.frequency.enabled = true; // 出厂 false，不开等于没测
     cfg.schema.english.frequency.enabled = true;
     cfg.schema.pinyin.frequency.enabled = true;
-    cfg.schema.mix_modes[0]
-        .members
-        .retain(|m| !aurora_quick_input::is_quick_member(m) || m == aurora_quick_input::MEMBER_REPEAT);
+    cfg.schema.mix_modes[0].members.retain(|m| {
+        !aurora_quick_input::is_quick_member(m) || m == aurora_quick_input::MEMBER_REPEAT
+    });
     cfg
 }
 

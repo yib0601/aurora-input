@@ -5,9 +5,9 @@
 //!
 //! ⚠️ 词库缺失时静默跳过，判据是耗时而非通过条数（同 `engine_manager.rs` 的教训）。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

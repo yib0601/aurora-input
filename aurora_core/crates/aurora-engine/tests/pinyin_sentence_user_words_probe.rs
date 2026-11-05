@@ -7,9 +7,9 @@
 //! `#[ignore]`：依赖 `build_dev/data`（不随仓库分发）。
 //! 跑法：`cargo test -p aurora-engine --test pinyin_sentence_user_words_probe -- --ignored --nocapture`
 
-use std::sync::Arc;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::sync::Arc;
 
 /// 真机场景（t134「盖伦」）。
 ///
@@ -72,7 +72,8 @@ fn user_word_changes_the_sentence_on_real_dict() {
     let mut changed_at: Option<i32> = None;
     let mut baseline: Vec<String> = Vec::new();
     for &w in WEIGHTS {
-        let db = std::env::temp_dir().join(format!("wind_s2_probe_{w}.redb"));
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join(format!("wind_s2_probe_{w}.redb"));
         let _ = std::fs::remove_file(&db);
         let store = Arc::new(aurora_store::Store::open(&db).unwrap());
         if w > 0 {
@@ -121,7 +122,8 @@ fn store_node_lookup_cost_on_real_dict() {
         eprintln!("跳过：找不到 build_dev/data");
         return;
     };
-    let db = std::env::temp_dir().join("wind_s2_cost.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_s2_cost.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(aurora_store::Store::open(&db).unwrap());
     // 放一批用户词，模拟用得久了的词库。
@@ -206,7 +208,10 @@ fn temp_word_in_abbrev_sentence_on_real_dict() {
         ("关（有临时词）", &cfg_off, true),
         ("开（有临时词，露3算5）", &cfg_on, true),
     ] {
-        let db = std::env::temp_dir().join(format!("wind_bcx_probe_{}.redb", learn as u8));
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp
+            .path()
+            .join(format!("wind_bcx_probe_{}.redb", learn as u8));
         let _ = std::fs::remove_file(&db);
         let store = Arc::new(aurora_store::Store::open(&db).unwrap());
         if learn {
@@ -259,7 +264,8 @@ fn fuzzy_store_node_cost_on_real_dict() {
         eprintln!("跳过：找不到 build_dev/data");
         return;
     };
-    let db = std::env::temp_dir().join("wind_s2_fz_cost.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_s2_fz_cost.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(aurora_store::Store::open(&db).unwrap());
 

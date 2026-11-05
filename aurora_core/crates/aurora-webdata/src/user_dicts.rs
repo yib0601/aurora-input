@@ -290,7 +290,7 @@ mod tests {
             format!("zz_wdudl_ct_{tag}_{pid}"),
             format!("zz_wdudl_py_{tag}_{pid}"),
         );
-        let dir = std::env::temp_dir().join(format!("wind_wdudl_{tag}_{pid}"));
+        let dir = aurora_utils::testing::scratch(&format!("wind_wdudl_{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         let s = dir.join("schemas");
         for (id, ty, dty, body) in [

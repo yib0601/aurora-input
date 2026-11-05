@@ -9,13 +9,13 @@
 //! ★ 判据是**两条路径的结果必须逐字相同**，不只是「预热那条快」。预热若改变了取值，
 //!   那就不是预热而是另一套解码——快也没有意义。
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::{DictManager, SystemDictLayer};
 use aurora_engine::Engine;
 use aurora_engine::codetable::{CodeTableEngine, CommitOptions};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const MAX_CODE_LEN: usize = 4;
 

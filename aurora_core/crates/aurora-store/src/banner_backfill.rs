@@ -7,9 +7,9 @@
 //! 不动：用户自放的分库（`dicts/` 下）、带 BOM 的、已有说明行的、词库 / 表格文本第一行是别的注释的
 //! （用户自己写的）、解析不了的。
 
+use aurora_userdata::text::{banner, fold};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use aurora_userdata::text::{banner, fold};
 
 /// 说明行的统一开头（见 `banner.rs` 的格式测试）。
 const BANNER_PREFIX: &str = "# 极光输入法 · ";
@@ -186,7 +186,10 @@ mod tests {
     /// 文案改过的旧说明行换成当前的，其余字节不动。
     #[test]
     fn outdated_banner_is_replaced() {
-        let d = std::env::temp_dir().join(format!("wind_bf_old-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_bf_old-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("pinyin")).unwrap();
         let f = d.join("pinyin/temp.dict.yaml");
@@ -206,7 +209,10 @@ mod tests {
     /// 没有换行 ⇒ 不动。
     #[test]
     fn long_first_line_is_replaced_whole() {
-        let d = std::env::temp_dir().join(format!("wind_bf_long-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_bf_long-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let f = d.join("quick_format.toml");
@@ -225,7 +231,10 @@ mod tests {
     /// CRLF 文件补的行也用 CRLF。
     #[test]
     fn crlf_file_gets_crlf_banner() {
-        let d = std::env::temp_dir().join(format!("wind_bf_crlf-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_bf_crlf-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("quick_format.toml"), "a = 1\r\n").unwrap();

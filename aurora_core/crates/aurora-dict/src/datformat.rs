@@ -2235,7 +2235,7 @@ mod tests {
     use super::*;
 
     fn build(tmp_name: &str, data: &[(&str, &[(&str, i32)])]) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(tmp_name);
+        let p = aurora_utils::testing::scratch(tmp_name).join(tmp_name);
         let mut w = WdatWriter::new();
         for (code, ents) in data {
             let v: Vec<(String, i32)> = ents.iter().map(|(t, wt)| (t.to_string(), *wt)).collect();
@@ -2249,7 +2249,7 @@ mod tests {
     /// → `with_local_order`，即 order = code 内序号——与 `export_to_writer` / combined
     /// 合并路径同语义，单条 code 时 order 恒 0（等权即全打平，最坏 tie-break 场景）。
     fn build_owned(tmp_name: &str, data: &[(String, Vec<(String, i32)>)]) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(tmp_name);
+        let p = aurora_utils::testing::scratch(tmp_name).join(tmp_name);
         let mut w = WdatWriter::new();
         for (code, ents) in data {
             w.add(code.clone(), ents.clone());
@@ -2543,7 +2543,8 @@ mod tests {
         data.push(("shishishi".into(), vec![("长无界".into(), 5000, 0, 0)]));
         data.sort_by(|a, b| a.0.cmp(&b.0));
         data.dedup_by(|a, b| a.0 == b.0);
-        let p = std::env::temp_dir().join("wdat_capped_len.wdat");
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("wdat_capped_len.wdat");
         let mut w = WdatWriter::new();
         for (code, ents) in data {
             w.add_with_boundary(code, ents);
@@ -2840,7 +2841,8 @@ mod tests {
     /// 排列，而非退化为编码字母序。构造 order 与字母序相反以区分两者。
     #[test]
     fn prefix_no_weight_sorts_by_global_order_not_code() {
-        let p = std::env::temp_dir().join("wdat_global_order_test.wdat");
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("wdat_global_order_test.wdat");
         let mut w = WdatWriter::new();
         // 出现顺序 za → ma → aa（order 0,1,2），编码字母序则相反 aa < ma < za；权重全 0。
         w.add_with_order("za".to_string(), vec![("Z".to_string(), 0, 0)]);
@@ -2866,7 +2868,8 @@ mod tests {
                 ("二".to_string(), 0, 1),
             ],
         );
-        let p2 = std::env::temp_dir().join("wdat_global_order_test2.wdat");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let p2 = tmp2.path().join("wdat_global_order_test2.wdat");
         w2.write(&p2).expect("write wdat");
         let r2 = WdatReader::open(&p2).unwrap();
         let t2: Vec<String> = r2
@@ -2919,7 +2922,9 @@ mod tests {
             e.iter().map(|(t, w)| (t.to_string(), *w)).collect()
         };
 
-        let wdb_path = std::env::temp_dir().join("wdat_parity.wdb");
+        let tmp = tempfile::tempdir().unwrap();
+
+        let wdb_path = tmp.path().join("wdat_parity.wdb");
         let mut dw = DictWriter::new();
         for (c, e) in &data {
             dw.add(c.to_string(), to_owned(e));
@@ -2927,7 +2932,9 @@ mod tests {
         dw.write(&wdb_path).unwrap();
         let wdb = DictReader::open(&wdb_path).unwrap();
 
-        let wdat_path = std::env::temp_dir().join("wdat_parity.wdat");
+        let tmp2 = tempfile::tempdir().unwrap();
+
+        let wdat_path = tmp2.path().join("wdat_parity.wdat");
         let mut ww = WdatWriter::new();
         for (c, e) in &data {
             ww.add(c.to_string(), to_owned(e));
@@ -3072,7 +3079,8 @@ mod tests {
     /// `DictEntry::text` 现在装的是码，调用方拿它去主表装配候选。
     #[test]
     fn abbrev_section_roundtrip() {
-        let p = std::env::temp_dir().join("wdat_abbrev_test.wdat");
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("wdat_abbrev_test.wdat");
         let mut w = WdatWriter::new();
         w.add("nihao".into(), vec![("你好".into(), 1200)]);
         w.add("beijing".into(), vec![("北京".into(), 2000)]);
@@ -3124,7 +3132,8 @@ mod tests {
         let data: Vec<(String, Vec<(String, i32)>)> = (0..200)
             .map(|i| (format!("code{i:03}"), vec![(format!("词{i}"), i)]))
             .collect();
-        let p = std::env::temp_dir().join("wdat_branch_test.wdat");
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("wdat_branch_test.wdat");
         let mut w = WdatWriter::new();
         for (c, e) in &data {
             w.add(c.clone(), e.clone());
@@ -3184,7 +3193,9 @@ mod tests {
             data.push((code, vec![(format!("词{i}"), i as i32)]));
         }
 
-        let p = std::env::temp_dir().join("wdat_large_scale_test.wdat");
+        let tmp = tempfile::tempdir().unwrap();
+
+        let p = tmp.path().join("wdat_large_scale_test.wdat");
         let start = std::time::Instant::now();
         let mut w = WdatWriter::new();
         for (c, e) in &data {
@@ -3249,7 +3260,8 @@ mod tests {
             );
         }
         batch.set_meta(b"meta-bytes".to_vec());
-        let pb = std::env::temp_dir().join("wind_stream_eq_batch.wdat");
+        let tmp = tempfile::tempdir().unwrap();
+        let pb = tmp.path().join("wind_stream_eq_batch.wdat");
         batch.write(&pb).unwrap();
 
         let mut sorted = data.clone();
@@ -3264,7 +3276,8 @@ mod tests {
             sw.push_abbrev_sorted(ab, ents.iter().map(|(c, w)| (*c, *w)));
         }
         sw.set_meta(b"meta-bytes".to_vec());
-        let ps = std::env::temp_dir().join("wind_stream_eq_stream.wdat");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ps = tmp2.path().join("wind_stream_eq_stream.wdat");
         sw.build().emit(&ps).unwrap();
 
         assert_eq!(
@@ -3284,7 +3297,8 @@ mod tests {
         let mut batch = WdatWriter::new();
         batch.add("a".into(), big.clone());
         batch.add("b".into(), vec![("乙".into(), 9)]);
-        let pb = std::env::temp_dir().join("wind_stream_cap_batch.wdat");
+        let tmp = tempfile::tempdir().unwrap();
+        let pb = tmp.path().join("wind_stream_cap_batch.wdat");
         batch.write(&pb).unwrap();
         let mut sw = WdatStreamWriter::new();
         sw.push_code(
@@ -3294,7 +3308,8 @@ mod tests {
                 .map(|(i, (t, w))| (t.as_str(), *w, i as u32, 0)),
         );
         sw.push_code("b", [("乙", 9, 0, 0)]);
-        let ps = std::env::temp_dir().join("wind_stream_cap_stream.wdat");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ps = tmp2.path().join("wind_stream_cap_stream.wdat");
         sw.build().emit(&ps).unwrap();
         assert_eq!(std::fs::read(&pb).unwrap(), std::fs::read(&ps).unwrap());
         let r = WdatReader::open(&ps).unwrap();

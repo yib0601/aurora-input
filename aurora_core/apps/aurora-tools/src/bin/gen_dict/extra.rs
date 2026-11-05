@@ -343,7 +343,8 @@ mod tests {
 
     #[test]
     fn custom_emoji_weights_descend_from_200() {
-        let p = std::env::temp_dir().join("gen_dict_emoji_test.txt");
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("gen_dict_emoji_test.txt");
         std::fs::write(&p, "😂\n# 注释\n🤣\n😊\n").unwrap();
         let v = load_custom_emoji(Some(&p)).unwrap();
         assert_eq!(v.len(), 3, "注释行不计入");
@@ -353,7 +354,8 @@ mod tests {
 
     #[test]
     fn custom_emoji_weight_never_drops_below_one() {
-        let p = std::env::temp_dir().join("gen_dict_emoji_many.txt");
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("gen_dict_emoji_many.txt");
         let content: String = (0..250).map(|_| "😀\n").collect();
         std::fs::write(&p, content).unwrap();
         let v = load_custom_emoji(Some(&p)).unwrap();
@@ -384,15 +386,18 @@ mod tests {
         m
     }
 
-    fn write_tmp(name: &str, content: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(name);
+    /// 返回 `TempDir` 一并交给调用方持有：它一旦 drop 就会删掉整个临时目录，
+    /// 只返回 `PathBuf` 的话调用方拿到的是已被删掉的路径。
+    fn write_tmp(name: &str, content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(name);
         std::fs::write(&p, content).unwrap();
-        p
+        (tmp, p)
     }
 
     #[test]
     fn named_emoji_reverses_code_and_ranks_tts_above_keyword() {
-        let p = write_tmp(
+        let (_tmp, p) = write_tmp(
             "gen_dict_named_ok.txt",
             "# 注释\n⚽\t足球\ttts\n⚽\t球\tkw\n",
         );
@@ -414,7 +419,7 @@ mod tests {
     #[test]
     fn named_emoji_skips_unreversible_names_without_producing_wrong_code() {
         // 「饕餮」不在反查表里 → 整条跳过，绝不产出错码
-        let p = write_tmp("gen_dict_named_skip.txt", "🍖\t饕餮\ttts\n⚽\t足球\ttts\n");
+        let (_tmp, p) = write_tmp("gen_dict_named_skip.txt", "🍖\t饕餮\ttts\n⚽\t足球\ttts\n");
         let mut msgs = Vec::new();
         let mut log = |s: String| msgs.push(s);
         let v = load_named_emoji(Some(&p), &wubi_codes(), &mut log).unwrap();
@@ -428,7 +433,7 @@ mod tests {
 
     #[test]
     fn named_emoji_tolerates_malformed_lines() {
-        let p = write_tmp(
+        let (_tmp, p) = write_tmp(
             "gen_dict_named_bad.txt",
             "只有一列\n\t足球\ttts\n⚽\t\ttts\n⚽\t足球\ttts\n",
         );

@@ -7,14 +7,14 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
 use aurora_store::stats::CommitSource;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_BACKSLASH: u32 = 0xDC;
 const VK_SEMICOLON: u32 = 0xBA;
@@ -65,7 +65,8 @@ fn open(tag: &str) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
 }
 
 fn open_with(tag: &str, edit: impl FnOnce(&mut Config)) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
-    let base = std::env::temp_dir().join(format!("wind_special_acct_{tag}_{}", std::process::id()));
+    let base = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_special_acct_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let ov = base.join("override");
     std::fs::create_dir_all(&ov).unwrap();
@@ -171,7 +172,8 @@ fn auto_commit_records_freq_and_history() {
 fn rare_char_punct_top_commit_records_history_only() {
     skip_without_data!();
     // 生僻字模式不经 overlay 方案：主方案五笔、z 直进（headless 短语层空，z 不是活码前缀）。
-    let db = std::env::temp_dir().join(format!(
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join(format!(
         "wind_special_acct_rare_{}.redb",
         std::process::id()
     ));

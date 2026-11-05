@@ -55,7 +55,7 @@ fn commit_word(c: &Coordinator, code: &str) -> String {
 }
 
 fn setup(tag: &str) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
-    let db = std::env::temp_dir().join(format!(
+    let db = aurora_utils::testing::scratch(tag).join(format!(
         "wind_learning_suspended_{tag}_{}.redb",
         std::process::id()
     ));

@@ -549,7 +549,7 @@ mod tests {
 
     /// 走生产加载路径（`load_layered`）：带 class / title 的规则只能从 TOML 来。
     fn load_rules(tag: &str, text: &str) -> AppCompat {
-        let d = std::env::temp_dir().join(format!("wind_cwm_{tag}_{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(&format!("wind_cwm_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join(aurora_config::app_compat::COMPAT_FILE_NAME), text).unwrap();
@@ -1356,7 +1356,10 @@ password_force_english = true
     /// 会因「集合变了」被当成切进来，把用户手切的中英态冲掉。
     #[test]
     fn compat_reload_refreshes_the_entry_window_set() {
-        let dir = std::env::temp_dir().join(format!("wind_cwm_reload_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_cwm_reload_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join(aurora_config::app_compat::COMPAT_FILE_NAME);
@@ -1397,7 +1400,7 @@ password_force_english = true
 
     /// 带用户层 compat.toml 的协调器（菜单写回要落盘）。返回 (协调器, 用户目录)。
     fn coord_with_user_rules(tag: &str, text: &str) -> (Arc<Coordinator>, std::path::PathBuf) {
-        let user = std::env::temp_dir().join(format!(
+        let user = aurora_utils::testing::scratch(&format!(
             "wind_menu_wb_{tag}_{}_{:?}",
             std::process::id(),
             std::thread::current().id()

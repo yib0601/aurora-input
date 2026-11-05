@@ -507,7 +507,8 @@ mod tests {
 
     #[test]
     fn save_to_path_overwrites_existing_config() {
-        let dir = std::env::temp_dir().join(format!("wind_setting_test_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_setting_test");
         let path = dir.join("aurora_setting.toml");
 
         fs::create_dir_all(&dir).unwrap();

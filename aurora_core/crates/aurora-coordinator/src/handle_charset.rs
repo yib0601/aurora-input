@@ -467,7 +467,7 @@ mod tests {
     }
 
     fn tmp_user_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
+        let d = aurora_utils::testing::scratch(&format!(
             "wind_charset_settings_{}_{tag}",
             std::process::id()
         ));

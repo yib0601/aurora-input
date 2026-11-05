@@ -6,9 +6,9 @@
 //! **必须用真实词库**（build_dev/data）：要验的是「词库真值读音能被切分器走到」，内存词典测不到。
 //! 词库缺失时跳过。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

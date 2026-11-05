@@ -48,7 +48,8 @@ mod tests {
     use aurora_userdata::record::{OpKind, Payload, Target};
 
     fn dir(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_retire_{name}-{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(name)
+            .join(format!("wind_retire_{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

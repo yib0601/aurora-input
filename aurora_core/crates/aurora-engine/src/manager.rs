@@ -9276,7 +9276,10 @@ mod tests {
     /// 用户数据目录（`<userdata>/data`）下的 `pinyin_misread.yaml` 与内置表合并，同键覆盖内置。
     #[test]
     fn load_misread_merges_user_table() {
-        let dir = std::env::temp_dir().join(format!("wind_misread_user_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_misread_user_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (data, user) = (dir.join("install"), dir.join("userdata").join("data"));
         std::fs::create_dir_all(data.join("schemas")).unwrap();
@@ -9302,7 +9305,10 @@ mod tests {
     /// 每次同步都重读误读表：表文件改了 ⇒ 要重建（「误读」开着时）。
     #[test]
     fn sync_correction_rereads_misread_table() {
-        let dir = std::env::temp_dir().join(format!("wind_misread_sync_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_misread_sync_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("schemas")).unwrap();
         let file = dir
@@ -9591,7 +9597,7 @@ mod tests {
     /// `Config::user_config_dir()/schemas`（真实用户目录），开发机上那里可能就装着快符方案。
     /// 故所有断言都写成「我造的这几个的相对关系」，不写绝对数量。
     fn make_overlay_data_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("wind_overlay_data_{tag}"));
+        let dir = aurora_utils::testing::scratch(&format!("wind_overlay_data_{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
@@ -9759,8 +9765,10 @@ mod tests {
 
     /// 码表设置每次按键要取好几次（单字过滤、建候选、短语自动上屏），不能每次都重读方案文件。
     fn codetable_cache_fixture(name: &str, auto_commit: bool) -> std::path::PathBuf {
-        let base =
-            std::env::temp_dir().join(format!("wind_eng_ct_cache-{name}-{}", std::process::id()));
+        let base = aurora_utils::testing::scratch(&format!(
+            "wind_eng_ct_cache-{name}-{}",
+            std::process::id()
+        ));
         let schemas = base.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         std::fs::write(
@@ -9892,7 +9900,8 @@ mod tests {
     #[test]
     fn schema_level_frequency_overrides_baseline() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_schema_freq");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_schema_freq");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -10029,7 +10038,10 @@ mod tests {
     fn read_dict_head_parses_name_and_imports() {
         //! 取自朗月拼音 `rime_frost.dict.yaml` 的真实形态：`import_tables` 块里混着
         //! 行内注释与整行注释，而带 `comment` 列的 `cn_dicts/corrections` 就在其中。
-        let dir = std::env::temp_dir().join(format!("wind-dicthead-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-dicthead-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("rime_frost.dict.yaml");
@@ -10079,7 +10091,10 @@ mod tests {
     /// 才需要额外的 wdbOnlyHint 参数。
     #[test]
     fn resolve_dict_file_priority_order() {
-        let base = std::env::temp_dir().join(format!("wind-resolve-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind-resolve-{}", std::process::id()));
         let user = base.join("user/schemas");
         let sys = base.join("sys/schemas");
         std::fs::create_dir_all(user.join("s")).unwrap();
@@ -10149,7 +10164,10 @@ mod tests {
     /// `.wdat`（预编译词库的产物）是很自然的做法，加了 custom 层后这类组合只会更多。
     #[test]
     fn resolve_dict_file_three_layers_keeps_two_pass_semantics() {
-        let base = std::env::temp_dir().join(format!("wind-resolve3-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind-resolve3-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let user = base.join("user/schemas");
         let custom = base.join("custom/schemas");
@@ -10343,7 +10361,8 @@ mod tests {
     #[test]
     fn resolve_codetable_reads_schema_inline_behavior() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_inline_data");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_inline_data");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         let mut f = std::fs::File::create(schemas.join("wb_test.schema.toml")).unwrap();
@@ -10366,7 +10385,8 @@ mod tests {
             ..Default::default()
         };
         // override_dir 指向空目录：证明无 override 文件也能读到内联行为。
-        let ov_dir = std::env::temp_dir().join("wind_eng_inline_empty_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_inline_empty_ov");
         let _ = std::fs::remove_dir_all(&ov_dir);
         let eff =
             EngineManager::resolve_codetable("wb_test", Some(&base_dir), &global, Some(&ov_dir));
@@ -10385,7 +10405,8 @@ mod tests {
     #[test]
     fn overlay_schema_does_not_inherit_global_codetable() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_special_baseline");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_special_baseline");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -10410,7 +10431,8 @@ mod tests {
             top_code_commit: !def.top_code_commit,
             ..Default::default()
         };
-        let ov = std::env::temp_dir().join("wind_eng_special_baseline_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov = tmp2.path().join("wind_eng_special_baseline_ov");
         let _ = std::fs::remove_dir_all(&ov);
 
         let sp =
@@ -10440,7 +10462,8 @@ mod tests {
     #[test]
     fn wildcard_folds_from_schema_and_overlay_does_not_inherit() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_wildcard_fold");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_wildcard_fold");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -10460,7 +10483,8 @@ mod tests {
             wildcard: true,
             ..Default::default()
         };
-        let ov = std::env::temp_dir().join("wind_eng_wildcard_fold_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov = tmp2.path().join("wind_eng_wildcard_fold_ov");
         let _ = std::fs::remove_dir_all(&ov);
         let key = |id: &str| {
             EngineManager::resolve_codetable(id, Some(&base_dir), &global, Some(&ov))
@@ -10481,7 +10505,8 @@ mod tests {
     #[test]
     fn factory_stroke_schema_opts_out_of_wildcard() {
         let data = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../data");
-        let ov = std::env::temp_dir().join("wind_eng_wildcard_stroke_ov");
+        let tmp = tempfile::tempdir().unwrap();
+        let ov = tmp.path().join("wind_eng_wildcard_stroke_ov");
         let _ = std::fs::remove_dir_all(&ov);
         let global = aurora_config::CodetableGlobal {
             wildcard: true,
@@ -10507,7 +10532,8 @@ mod tests {
     #[test]
     fn codetable_baseline_keys_on_overlay_section_not_hidden() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_baseline_offdiag");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_baseline_offdiag");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -10533,7 +10559,8 @@ mod tests {
             z_key_repeat: !def.z_key_repeat,
             ..Default::default()
         };
-        let ov = std::env::temp_dir().join("wind_eng_baseline_offdiag_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov = tmp2.path().join("wind_eng_baseline_offdiag_ov");
         let _ = std::fs::remove_dir_all(&ov);
 
         // 有 [overlay] 但没写 hidden：仍取内置基线（旧判据在这里会去继承全局）。
@@ -10571,7 +10598,8 @@ mod tests {
     #[test]
     fn effective_codetable_matches_resolve_and_splits_by_overlay() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_effective_ct");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_effective_ct");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -10975,7 +11003,10 @@ mod tests {
     /// 不会被加载。只看清单就跳过，用户目录里那张同名细胞库就两头落空。
     #[test]
     fn dict_head_resolved_keeps_only_imports_present_beside_main() {
-        let dir = std::env::temp_dir().join(format!("wind-headres-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-headres-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("cells")).unwrap();
         let main = dir.join("main.dict.yaml");
@@ -11000,7 +11031,10 @@ mod tests {
     /// 目录名取一个用户目录里不可能有的，免得本机真实的用户层混进来。
     #[test]
     fn read_schema_registers_dir_dicts_and_applies_override() {
-        let root = std::env::temp_dir().join(format!("wind-dirdicts-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp
+            .path()
+            .join(format!("wind-dirdicts-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let data = root.join("data");
         let schemas = data.join("schemas");
@@ -11060,7 +11094,8 @@ mod tests {
     #[test]
     fn active_session_actions_merges_per_key_and_union_drops_none() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_sa_data");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_sa_data");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         let mut f = std::fs::File::create(schemas.join("sa.schema.toml")).unwrap();
@@ -11072,7 +11107,8 @@ mod tests {
         .unwrap();
         drop(f);
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_sa_overrides");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_sa_overrides");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let mut cfg = Config::default();
@@ -11121,7 +11157,8 @@ mod tests {
     #[test]
     fn active_key_actions_merges_schema_file_and_override_per_key() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_ka_data");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_ka_data");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         let mut f = std::fs::File::create(schemas.join("ka.schema.toml")).unwrap();
@@ -11134,7 +11171,8 @@ mod tests {
         .unwrap();
         drop(f);
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_ka_overrides");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_ka_overrides");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let mut cfg = Config::default();
@@ -11181,8 +11219,10 @@ mod tests {
     /// 并且方案其余部分照常读出。
     #[test]
     fn font_keys_under_dictionaries_are_reported_not_silently_dropped() {
-        let base_dir =
-            std::env::temp_dir().join(format!("wind_eng_dict_font_data_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp
+            .path()
+            .join(format!("wind_eng_dict_font_data_{}", std::process::id()));
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -11232,8 +11272,10 @@ mod tests {
     #[test]
     fn bad_enum_value_in_override_degrades_instead_of_killing_the_schema() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_bad_enum_data");
-        let ov_dir = std::env::temp_dir().join("wind_eng_bad_enum_ov");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_bad_enum_data");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_bad_enum_ov");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         let _ = std::fs::remove_dir_all(&ov_dir);
@@ -11292,7 +11334,8 @@ type = \"codetable\"
     #[test]
     fn active_behavior_merges_schema_file_and_override() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_beh_data");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_beh_data");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -11314,7 +11357,8 @@ enabled = false
         .unwrap();
         drop(f);
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_beh_overrides");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_beh_overrides");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let mut cfg = Config::default();
@@ -11365,7 +11409,8 @@ layout = \"horizontal\"
     fn active_behavior_defaults_to_no_override_when_schema_missing() {
         let mut cfg = Config::default();
         cfg.schema.active = "nonexistent_schema".to_string();
-        let dir = std::env::temp_dir().join("wind_eng_beh_missing");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_eng_beh_missing");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("schemas")).unwrap();
         let mgr = EngineManager::with_store_override(&cfg, Some(&dir), None, Some(dir.clone()));
@@ -11390,7 +11435,8 @@ layout = \"horizontal\"
     #[test]
     fn schema_code_char_set_follows_engine_rules() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_ccs_data");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_ccs_data");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -11429,8 +11475,10 @@ input_chars = \"a-z;\"
     /// 算进去会让「空闲透传标点」在拼音下也白吃这个符号。字母键不算（字母本不在透传集）。
     #[test]
     fn schema_lead_inputs_counts_symbol_wildcard_only_for_codetable() {
-        let base_dir =
-            std::env::temp_dir().join(format!("wind_eng_lead_in_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp
+            .path()
+            .join(format!("wind_eng_lead_in_{}", std::process::id()));
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         for (id, ty) in [("lct", "codetable"), ("lpy", "pinyin")] {
@@ -11463,7 +11511,8 @@ input_chars = \"a-z;\"
     #[test]
     fn active_key_actions_empty_when_schema_declares_none() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_ka_none_data");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_ka_none_data");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         let mut f = std::fs::File::create(schemas.join("kan.schema.toml")).unwrap();
@@ -11486,7 +11535,8 @@ input_chars = \"a-z;\"
     #[test]
     fn schema_override_merge_and_delete() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_eng_ov_data");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_ov_data");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         let mut f = std::fs::File::create(schemas.join("tcfg.schema.toml")).unwrap();
@@ -11497,7 +11547,8 @@ input_chars = \"a-z;\"
         .unwrap();
         drop(f);
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_ov_overrides");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_ov_overrides");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let cfg = Config::default();
@@ -11545,7 +11596,8 @@ input_chars = \"a-z;\"
         use std::io::Write;
 
         // 建 temp 数据目录
-        let base_dir = std::env::temp_dir().join("wind_eng_sp_available_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_sp_available_test");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
 
@@ -11584,7 +11636,8 @@ input_chars = \"a-z;\"
         cfg.schema.active = "dummy_ct".into();
         cfg.schema.available = vec!["dummy_ct".into(), "sp_test".into(), "sp_unsupported".into()];
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_sp_available_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_sp_available_ov");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let mgr =
@@ -11634,7 +11687,8 @@ input_chars = \"a-z;\"
         }
 
         // override 把内置 shuangpin 方案的布局换成 mspy（`;` = ing），不动真实方案文件。
-        let ov_dir = std::env::temp_dir().join("wind_eng_sp_charset_ov");
+        let tmp = tempfile::tempdir().unwrap();
+        let ov_dir = tmp.path().join("wind_eng_sp_charset_ov");
         let _ = std::fs::remove_dir_all(&ov_dir);
         std::fs::create_dir_all(&ov_dir).unwrap();
         std::fs::write(
@@ -11664,7 +11718,8 @@ input_chars = \"a-z;\"
 
         // 反向对照：换回全字母布局（小鹤）后必须回落默认集——否则上面的断言可能只是
         // 「某处无条件把 `;` 放进码元集」，而不是真的从布局推导出来的。
-        let ov2 = std::env::temp_dir().join("wind_eng_sp_charset_ov_xh");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov2 = tmp2.path().join("wind_eng_sp_charset_ov_xh");
         let _ = std::fs::remove_dir_all(&ov2);
         std::fs::create_dir_all(&ov2).unwrap();
         std::fs::write(
@@ -11693,7 +11748,8 @@ input_chars = \"a-z;\"
     fn non_shuangpin_schema_keeps_default_alpha_charset() {
         use std::io::Write;
 
-        let base_dir = std::env::temp_dir().join("wind_eng_sp_finalkey_ct_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_sp_finalkey_ct_test");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         {
@@ -11709,7 +11765,8 @@ input_chars = \"a-z;\"
         cfg.schema.active = "wubi".into();
         cfg.schema.available = vec!["wubi".into()];
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_sp_finalkey_ct_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_sp_finalkey_ct_ov");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let mgr =
@@ -11743,7 +11800,8 @@ input_chars = \"a-z;\"
     fn installed_schemas_includes_all_supported_not_just_available() {
         use std::io::Write;
 
-        let base_dir = std::env::temp_dir().join("wind_eng_installed_schemas_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_installed_schemas_test");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
 
@@ -11793,7 +11851,8 @@ input_chars = \"a-z;\"
         cfg.schema.active = "dummy_active".into();
         cfg.schema.available = vec!["dummy_active".into()];
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_installed_schemas_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_installed_schemas_ov");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let mgr =
@@ -11849,8 +11908,10 @@ input_chars = \"a-z;\"
         use std::io::Write;
 
         // 带 pid：多 worktree / 多会话并行跑测试时，固定名 + `remove_dir_all` 会互删夹具。
-        let base =
-            std::env::temp_dir().join(format!("wind_eng_sp_layouts_test-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind_eng_sp_layouts_test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let install = base.join("install");
         let custom = base.join("custom");
@@ -11916,7 +11977,8 @@ input_chars = \"a-z;\"
     fn data_schema_id_folds_pinyin_and_returns_self() {
         use std::io::Write;
 
-        let base_dir = std::env::temp_dir().join("wind_eng_data_schema_id_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_data_schema_id_test");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
 
@@ -11944,7 +12006,8 @@ input_chars = \"a-z;\"
         cfg.schema.active = "ct_test".into();
         cfg.schema.available = vec!["ct_test".into(), "py_test".into()];
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_data_schema_id_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_data_schema_id_ov");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let mgr =
@@ -11980,7 +12043,8 @@ input_chars = \"a-z;\"
     fn write_data_schema_id_routes_mixed_by_source() {
         use std::io::Write;
 
-        let base_dir = std::env::temp_dir().join("wind_eng_write_data_schema_id_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_eng_write_data_schema_id_test");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -12017,7 +12081,8 @@ input_chars = \"a-z;\"
         cfg.schema.active = "mx_test".into();
         cfg.schema.available = vec!["mx_test".into(), "ct_test".into(), "py_test".into()];
 
-        let ov_dir = std::env::temp_dir().join("wind_eng_write_data_schema_id_ov");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let ov_dir = tmp2.path().join("wind_eng_write_data_schema_id_ov");
         let _ = std::fs::remove_dir_all(&ov_dir);
 
         let mgr =
@@ -12088,7 +12153,10 @@ input_chars = \"a-z;\"
     #[test]
     fn reverse_index_skip_is_remembered_until_invalidated() {
         use std::sync::atomic::Ordering::Relaxed;
-        let base = std::env::temp_dir().join(format!("wind_eng_riskip-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind_eng_riskip-{}", std::process::id()));
         let schemas = base.join("schemas");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(schemas.join("riskip")).unwrap();
@@ -12181,7 +12249,10 @@ input_chars = \"a-z;\"
                 }
             }
         }
-        let dir = std::env::temp_dir().join(format!("wind_eng_a17-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_eng_a17-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let dict = dir.join("py.dict.yaml");
@@ -12267,7 +12338,8 @@ input_chars = \"a-z;\"
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         );
-        let dir = std::env::temp_dir().join(&uniq);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(&uniq);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // mtime 往前拨 60 s，跨过 `cache_fp` 的 2 s racy 窗口：否则 `.st` 根本不会被写，
@@ -12413,7 +12485,10 @@ input_chars = \"a-z;\"
     /// 同码多条等权（稳定序＝子表序）、单音节（无简拼）、多音节简拼跨表取最大权重。
     #[test]
     fn merge_from_segments_matches_aggregate_build() {
-        let dir = std::env::temp_dir().join(format!("wind_eng_mergeeq-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_eng_mergeeq-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("cells")).unwrap();
         let body_a = "你好\tni hao\t100\n你\tni\t500\n拟好\tni hao\t64\n你好吗\tni hao ma\t20\n\
@@ -12495,7 +12570,10 @@ input_chars = \"a-z;\"
 
     #[test]
     fn layered_pinyin_dict_matches_merged_cache() {
-        let dir = std::env::temp_dir().join(format!("wind_eng_layered-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_eng_layered-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("cells")).unwrap();
         let body_main = "你好\tni hao\t100\n你\tni\t500\n拟好\tni hao\t64\n你好吗\tni hao ma\t20\n\
@@ -12608,7 +12686,10 @@ input_chars = \"a-z;\"
 
     #[test]
     fn purge_cache_files_only_removes_cache_extensions() {
-        let dir = std::env::temp_dir().join(format!("wind_eng_purge-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_eng_purge-{}", std::process::id()));
         let sub = dir.join("wubi86");
         std::fs::create_dir_all(&sub).unwrap();
         // 缓存产物（应删）：wdat / 多点 combined.wdat / fp 指纹 / wdb
@@ -12732,7 +12813,8 @@ input_chars = \"a-z;\"
     /// 未启用库，证明 loader 失败只 warn 跳过、不 panic。
     #[test]
     fn disabled_dict_layers_load_only_unloaded_extras() {
-        let dir = std::env::temp_dir().join(format!("wind-ddl-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("wind-ddl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("t")).unwrap();
         let dict = |name: &str, body: &str| {
@@ -12796,7 +12878,7 @@ input_chars = \"a-z;\"
     impl MixFixture {
         fn new(tag: &str) -> Self {
             let t = format!("{tag}{}", std::process::id());
-            let root = std::env::temp_dir().join(format!("wind_eng_mixgen_{t}"));
+            let root = aurora_utils::testing::scratch(&format!("wind_eng_mixgen_{t}"));
             let _ = std::fs::remove_dir_all(&root);
             let fx = Self { t, root };
             let t = &fx.t;

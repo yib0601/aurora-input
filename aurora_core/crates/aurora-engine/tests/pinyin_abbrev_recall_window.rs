@@ -17,12 +17,12 @@
 //! 自带 wdat 夹具，不依赖 `build_dev/data`（理由同 `pinyin_mixed_abbrev.rs`：
 //! 简拼索引只有 mmap 词典才有，依赖真实词库的测试在该目录缺失时会静默跳过、计数照常绿）。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::datformat::WdatWriter;
 use aurora_engine::Engine;
 use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 use aurora_store::Store;
+use std::sync::Arc;
 
 /// 简拼键 `bcx` 下的 12 条 3 音节词，权重按真实 `cn_dicts` 量级递减。
 ///
@@ -45,7 +45,7 @@ const BCX_ENTRIES: &[(&str, &str, i32, u64)] = &[
 ];
 
 fn tmp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_abbrev_window_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_abbrev_window_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -83,7 +83,8 @@ fn sys_dict_with(tag: &str, picked: &[(&str, &str, i32, u64)]) -> CachedDict {
 }
 
 fn store(tag: &str) -> Arc<Store> {
-    let p = std::env::temp_dir().join(format!("wind_abbrev_window_{tag}.redb"));
+    let p = aurora_utils::testing::scratch("abbrev_window")
+        .join(format!("wind_abbrev_window_{tag}.redb"));
     let _ = std::fs::remove_file(&p);
     Arc::new(Store::open(&p).unwrap())
 }

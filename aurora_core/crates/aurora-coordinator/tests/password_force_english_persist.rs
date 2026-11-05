@@ -6,11 +6,11 @@
 //!
 //! ⚠️ 本用例**不依赖 `build_dev/data`**：夹具全部自造，不会静默跳过。
 
-use std::path::Path;
 use aurora_bridge::handler::MessageHandler;
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ui_types::MenuCmd;
+use std::path::Path;
 
 /// IS_DEFAULT + IS_PASSWORD：t197 楼主那个输入框报出的 InputScope 掩码。
 const MASK_T197: u64 = 0x8000_0001;
@@ -25,7 +25,10 @@ fn user_value(user: &Path) -> Option<bool> {
 #[test]
 fn password_force_english_survives_restart_and_reload() {
     // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-    let tmp = std::env::temp_dir().join(format!("wind_coord_pw_persist-{}", std::process::id()));
+    let tmpdir = tempfile::tempdir().unwrap();
+    let tmp = tmpdir
+        .path()
+        .join(format!("wind_coord_pw_persist-{}", std::process::id()));
     let root = tmp.join("install");
     let user = tmp.join("UserData");
     let conf = tmp.join("datadir.conf");

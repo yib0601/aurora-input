@@ -834,7 +834,8 @@ mod tests {
     /// 真渲染 + 落盘 + 清理（需要系统有 CJK 字体；本仓 Linux 形态的文字测试都有这个前提）。
     #[test]
     fn ensure_writes_every_size_once_and_prune_keeps_only_wanted() {
-        let tmp = std::env::temp_dir().join(format!("wi-tray-{}", std::process::id()));
+        let td = tempfile::tempdir().unwrap();
+        let tmp = td.path().join(format!("wi-tray-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let mut t = TrayIcons::new(tmp.clone(), false);
         t.create_dirs().unwrap();

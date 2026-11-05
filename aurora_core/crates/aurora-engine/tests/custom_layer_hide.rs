@@ -35,9 +35,9 @@
 //! ⚠️ 两个环境变量都**必须**设：漏掉 `AURORA_DATADIR_CONF` 时用户层会指向真实的
 //! `%APPDATA%\AuroraInput`（本仓已有把测试写进真实用户目录的前科）。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::{Path, PathBuf};
 
 /// 真实数据层：仓库根的 `build_dev/data`。
 fn build_dev_data() -> PathBuf {
@@ -74,7 +74,8 @@ fn hidden_schemas_are_absent_from_every_layer_and_active_falls_back() {
 
     // ⚠️ 目录名带 pid：本仓常态是多 worktree / 多会话并行跑测试，固定名 + 开头的
     // `remove_dir_all` 会让两个 cargo test 互删夹具。
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp2 = tempfile::tempdir().unwrap();
+    let tmp = tmp2.path().join(format!(
         "wind_engine_custom_hide_e2e-{}",
         std::process::id()
     ));

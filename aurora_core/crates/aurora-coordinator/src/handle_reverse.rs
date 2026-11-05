@@ -199,7 +199,7 @@ mod tests {
     /// 码表 `ab 甲 / ac 乙 / bb 丁`；`\` 绑反查、模式开。
     fn coord(tag: &str, tweak: impl FnOnce(&mut Config)) -> (Arc<Coordinator>, Cleanup) {
         let id = format!("zz_rev_{tag}_{}", std::process::id());
-        let dir = std::env::temp_dir().join(format!("wind_rev_{id}"));
+        let dir = aurora_utils::testing::scratch(&format!("wind_rev_{id}"));
         let _ = std::fs::remove_dir_all(&dir);
         let s = dir.join("schemas");
         std::fs::create_dir_all(s.join(&id)).unwrap();

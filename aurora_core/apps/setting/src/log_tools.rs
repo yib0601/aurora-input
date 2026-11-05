@@ -372,14 +372,12 @@ fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
 mod tests {
     use super::*;
 
-    fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "wind_setting_log_tools_{name}_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&d);
+    /// 返回 `TempDir` 一并交给调用方持有：它一旦 drop 就删掉整个临时目录。
+    fn tmp(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!("wind_setting_log_tools_{name}"));
         std::fs::create_dir_all(&d).unwrap();
-        d
+        (tmp, d)
     }
 
     fn write(p: &Path, s: &str) {
@@ -389,7 +387,7 @@ mod tests {
 
     #[test]
     fn pack_includes_subdirs_with_forward_slash_names() {
-        let root = tmp("pack");
+        let (_tmp, root) = tmp("pack");
         let logs = root.join("logs");
         write(&logs.join("aurora_input.1.log"), "core");
         write(&logs.join("tsf_log").join("wind_tsf.wps.1.log"), "tsf");
@@ -414,7 +412,7 @@ mod tests {
 
     #[test]
     fn pack_twice_in_same_second_keeps_both() {
-        let root = tmp("pack_twice");
+        let (_tmp, root) = tmp("pack_twice");
         let logs = root.join("logs");
         write(&logs.join("a.log"), "x");
         let a = pack(&logs, &root, "AuroraInput", "s").unwrap();
@@ -426,7 +424,7 @@ mod tests {
 
     #[test]
     fn pack_empty_dir_is_error_and_leaves_nothing() {
-        let root = tmp("pack_empty");
+        let (_tmp, root) = tmp("pack_empty");
         let logs = root.join("logs");
         std::fs::create_dir_all(&logs).unwrap();
         assert!(pack(&logs, &root, "AuroraInput", "s").is_err());
@@ -436,7 +434,7 @@ mod tests {
 
     #[test]
     fn clear_keeps_tsf_switch_and_removes_history() {
-        let root = tmp("clear");
+        let (_tmp, root) = tmp("clear");
         write(&root.join("tsf_log_config"), "mode=file\n");
         write(&root.join("aurora_setting.3.log"), "old");
         write(
@@ -455,7 +453,7 @@ mod tests {
     /// 除了设置程序自己正在写的那份，全都删掉——core 与 TSF 的写端都会自愈。
     #[test]
     fn clear_removes_everything_but_own_current_log() {
-        let root = tmp("clear_current");
+        let (_tmp, root) = tmp("clear_current");
         for n in [
             "aurora_input.1.log",
             "aurora_input.2.log",
@@ -490,7 +488,7 @@ mod tests {
     /// 写端以追加方式开着时截断，之后的写入从头续写，不会在前面留一段空洞。
     #[test]
     fn truncated_file_keeps_receiving_appends_from_the_start() {
-        let root = tmp("clear_held");
+        let (_tmp, root) = tmp("clear_held");
         let p = root.join("aurora_setting.1.log");
         write(&p, "live");
         let mut writer = File::options().append(true).open(&p).unwrap();
@@ -504,7 +502,7 @@ mod tests {
 
     #[test]
     fn summarize_counts_recursively_and_tolerates_missing_dir() {
-        let root = tmp("summary");
+        let (_tmp, root) = tmp("summary");
         write(&root.join("a.log"), "12345");
         write(&root.join("tsf_log").join("b.log"), "123");
         write(&root.join("tsf_log_config"), "mode=file\n");

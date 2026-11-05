@@ -6,14 +6,14 @@
 //!
 //! 依赖 `build_dev/data` 的 wubi86 / english 方案，缺则跳过。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::RawCandidateMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SPACE: u32 = 0x20;
 const VK_ESCAPE: u32 = 0x1B;
@@ -47,7 +47,8 @@ fn type_word(coord: &Coordinator, word: &str) {
 }
 
 fn store_at(tag: &str) -> Arc<Store> {
-    let path = std::env::temp_dir().join(format!("wind_record_always_it_{tag}.redb"));
+    let path =
+        aurora_utils::testing::scratch(tag).join(format!("wind_record_always_it_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     Arc::new(Store::open(&path).unwrap())
 }

@@ -14,9 +14,9 @@
 //! 见 `project_build_dev_data_missing.md` 记的同族坑：那里的判据是耗时，这里连耗时都不
 //! 可用（词库走 mmap，真跑也只要 0.06s），只能靠这个显式开关。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

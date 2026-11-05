@@ -11,13 +11,13 @@
 //!
 //! ⚠️ 词典缺失时整族静默跳过（判据是**耗时 0.00s**，不是通过条数）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -248,8 +248,10 @@ fn in_ing_user_word_preedit_follows_typed_segmentation() {
     let cases = [("pinan", "瓶安", "pingan", "pin'an", ("拼按", "pin'an"))];
     for (input, word, code, want, plain) in cases {
         for on in [true, false] {
-            let db =
-                std::env::temp_dir().join(format!("wind_fuzzy_preedit_user_{input}_{on}.redb"));
+            let tmp = tempfile::tempdir().unwrap();
+            let db = tmp
+                .path()
+                .join(format!("wind_fuzzy_preedit_user_{input}_{on}.redb"));
             let _ = std::fs::remove_file(&db);
             let store = Arc::new(Store::open(&db).unwrap());
             // 两个音节都在 4 字节以内：边界位 0 与 4。

@@ -5,10 +5,10 @@
 
 use crate::Store;
 use crate::store::USER_WORDS;
-use std::collections::BTreeMap;
-use std::path::Path;
 use aurora_userdata::record::Target;
 use aurora_userdata::runtime::UserWord;
+use std::collections::BTreeMap;
+use std::path::Path;
 
 pub const MIGRATED_P2: &str = "migrated-p2";
 
@@ -115,7 +115,8 @@ mod tests {
     use crate::Store;
 
     fn db(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("wind_mp2_{name}_{}.redb", std::process::id()));
+        let p = aurora_utils::testing::scratch(name)
+            .join(format!("wind_mp2_{name}_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_dir_all(crate::store::derived_state_dir(&p));
         let _ = std::fs::remove_dir_all(crate::store::derived_text_dir(&p));

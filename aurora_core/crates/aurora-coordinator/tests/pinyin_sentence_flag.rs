@@ -32,11 +32,11 @@
 //!
 //! 词典缺失时自动跳过。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     // 三级：crates/aurora-coordinator → crates → aurora_input → 仓库根（build_dev 在仓库根）。
@@ -74,7 +74,8 @@ fn test_sentence_flags_survive_to_freq_rerank() {
         return;
     }
 
-    let store_path = std::env::temp_dir().join("wind_sentence_flag_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_sentence_flag_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // 「恭贺」积累可观使用次数（拼音衰减分远超 PINYIN_FREQ_EPSILON）
@@ -127,7 +128,8 @@ fn test_partial_consumption_sentence_does_not_anchor_over_full() {
         eprintln!("跳过：拼音词库不存在");
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_partial_anchor_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_partial_anchor_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // ⚠️ 必须给**本次候选里真实存在**的词记账，否则 freq_rerank 压根不会跑，本用例假绿。
@@ -181,7 +183,8 @@ fn test_speculative_sentence_yields_to_frequently_used_word() {
         eprintln!("跳过：拼音词库不存在");
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_spec_sentence_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_spec_sentence_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     for _ in 0..30 {

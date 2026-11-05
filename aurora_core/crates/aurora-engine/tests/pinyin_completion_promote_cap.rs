@@ -17,7 +17,7 @@ use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 /// 20 这个数量是要害：它**大于**名额（8）、小于真机那 58 条 —— 足以让「无名额」与
 /// 「有名额」两种行为分开，又不至于让夹具变成一本词典。权重递减，模拟真实词库的长尾。
 fn fixture(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_promote_cap_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_promote_cap_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

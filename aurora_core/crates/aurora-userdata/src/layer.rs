@@ -11,9 +11,9 @@ use crate::delta::{Entry, group_of};
 use crate::engine::{UserData, overlay_entries};
 use crate::record::Target;
 use crate::snapshot::SnapshotEntry;
-use std::sync::Arc;
 use aurora_candidate::{Candidate, better};
 use aurora_dict::{DictLayer, LayerType};
+use std::sync::Arc;
 
 fn sort_trunc(mut v: Vec<Candidate>, limit: usize) -> Vec<Candidate> {
     v.sort_by(better);
@@ -372,8 +372,8 @@ mod tests {
     use super::*;
     use crate::engine::{Dirs, UserData};
     use crate::record::{OpKind, Payload, Target};
-    use std::sync::Arc;
     use aurora_dict::DictLayer;
+    use std::sync::Arc;
 
     fn names(v: Vec<aurora_candidate::Candidate>) -> Vec<String> {
         v.into_iter().map(|c| c.text).collect()
@@ -381,7 +381,10 @@ mod tests {
 
     #[test]
     fn layer_sees_snapshot_delta_and_deletes() {
-        let d = std::env::temp_dir().join(format!("wind_layer-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_layer-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let ud = Arc::new(
             UserData::open(Dirs {
@@ -487,7 +490,10 @@ mod tests {
     /// 开放问题：search_prefix(…, 0) 表示不限，快照里的条目也要返回。
     #[test]
     fn prefix_with_zero_limit_returns_snapshot_entries_too() {
-        let d = std::env::temp_dir().join(format!("wind_layer_p0-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_layer_p0-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let ud = Arc::new(
             UserData::open(Dirs {
@@ -561,7 +567,8 @@ mod tests {
     }
 
     fn open_ud(name: &str) -> Arc<UserData> {
-        let d = std::env::temp_dir().join(format!("wind_layer8_{name}-{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(name)
+            .join(format!("wind_layer8_{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         Arc::new(
             UserData::open(Dirs {

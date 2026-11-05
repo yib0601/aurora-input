@@ -38,12 +38,12 @@
 //! | `pinyin_completion_recall_gate` | **几个音节**：超音节候选进不进候选列表 |
 //! | `pinyin_completion_syllable_tier` | **谁在前**：召回之后的显示次序 |
 
-use std::collections::HashSet;
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

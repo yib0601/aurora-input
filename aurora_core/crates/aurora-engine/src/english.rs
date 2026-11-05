@@ -11,8 +11,8 @@
 use crate::codetable::CodeTableEngine;
 use crate::engine::{ConvertResult, Engine, EngineType};
 use crate::english_phrase::{LazyPhraseIndex, split_segments};
-use std::sync::Arc;
 use aurora_candidate::CandidateSource;
+use std::sync::Arc;
 
 /// 英文引擎：内部复用码表引擎的查询，候选统一标记为 [`CandidateSource::English`]。
 pub struct EnglishEngine {
@@ -258,10 +258,10 @@ mod tests {
     use super::*;
     use crate::codetable::CommitOptions;
     use crate::engine::Engine;
-    use std::sync::Arc;
     use aurora_dict::cached::CachedDict;
     use aurora_dict::codetable::CodetableDict;
     use aurora_dict::{DictManager, SystemDictLayer};
+    use std::sync::Arc;
 
     /// 内存英文引擎，开着词组分词。
     fn engine(entries: &[(&str, &str, i32)]) -> EnglishEngine {
@@ -453,7 +453,10 @@ mod tests {
     /// 改不了，也就断言不了「换了哪份文件」；这里用引擎的缓存目录注入口补上这一半。
     #[test]
     fn hot_unplugging_a_dictionary_switches_to_another_cache_file() {
-        let dir = std::env::temp_dir().join(format!("wind_en_unplug_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_en_unplug_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let load = |name: &str, body: &str| {

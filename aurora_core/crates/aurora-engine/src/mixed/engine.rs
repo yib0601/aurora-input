@@ -10,8 +10,8 @@
 //! 后置：英文候选、简拼长度惩罚（HasFullSyllable）、convertMixedOverflow 精细档。
 
 use crate::engine::{ConvertOptions, ConvertResult, Engine, EngineType};
-use std::sync::Arc;
 use aurora_candidate::{Candidate, CandidateSource};
+use std::sync::Arc;
 
 /// 拼音候选的**保底配额分母**：截断时至少给拼音留 `max_candidates / 此值` 席
 /// （生产 `max_candidates=300` ⇒ 60 席）。见 [`MixedEngine::truncate_with_pinyin_quota`]。
@@ -1278,10 +1278,10 @@ impl Engine for MixedEngine {
 mod tests {
     use super::*;
     use crate::codetable::{CodeTableEngine, CommitOptions};
-    use std::sync::Arc;
     use aurora_dict::cached::CachedDict;
     use aurora_dict::codetable::CodetableDict;
     use aurora_dict::{DictManager, SystemDictLayer};
+    use std::sync::Arc;
 
     /// 构建一个内存码表引擎（可选开启全码自动上屏）。
     fn ct_engine(entries: &[(&str, &str, i32)], at_full: bool) -> Box<dyn Engine> {

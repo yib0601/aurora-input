@@ -16,15 +16,15 @@
 //! - `zd`：无任何保护；
 //! - `english`：英文方案（只在 `schema.mix.enable_english` 的用例里被混输取走）。
 
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_coordinator::web_host::WebDataHost;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_ui_types::MenuCmd;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -34,9 +34,7 @@ const CODETABLES: [(&str, &str); 4] = [("za", "甲"), ("zb", "乙"), ("zc", "丙
 fn root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
     ROOT.get_or_init(|| {
-        // 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-        let root = std::env::temp_dir().join(format!("wind_residency-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = root_unchecked();
         let schemas = root.join("data/schemas");
         for (id, word) in CODETABLES {
             std::fs::create_dir_all(schemas.join(id)).unwrap();
@@ -101,9 +99,15 @@ fn write_dict(id: &str, word: &str) {
     .unwrap();
 }
 
-/// `root()` 初始化期间也要写词库，那时 OnceLock 还没落值。
+/// `root()` 初始化期间也要写词库，那时 ROOT 还没落值；两边共用同一个进程级目录。
+///
+/// 进程级托管（unix 由 atexit 删）：不能换 `scratch()`——它归首个 test 线程，
+/// 线程一结束就删，而 `ROOT` 还缓存着这个路径。
 fn root_unchecked() -> PathBuf {
-    std::env::temp_dir().join(format!("wind_residency-{}", std::process::id()))
+    static ROOT_PATH: OnceLock<PathBuf> = OnceLock::new();
+    ROOT_PATH
+        .get_or_init(|| aurora_utils::testing::process_scratch("residency"))
+        .clone()
 }
 
 fn user() -> PathBuf {

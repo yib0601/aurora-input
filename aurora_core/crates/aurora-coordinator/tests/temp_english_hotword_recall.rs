@@ -23,13 +23,13 @@
 //!
 //! 用例里的观测词是 `tranquil` 而非反馈里的 `translation`，理由见 [`WORD`]。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 观测词取一个**没有词频名次**的词库词：英文候选按词频名次排序后，有名次的常用词
 /// （如反馈里的 `translation`）已在 `t` 的 300 条池内，测不出「池外召回」。无名次的词排在
@@ -73,7 +73,7 @@ fn config(freq: bool) -> Config {
 }
 
 fn fresh_store(tag: &str) -> (Arc<Store>, PathBuf) {
-    let path = std::env::temp_dir().join(format!(
+    let path = aurora_utils::testing::scratch(tag).join(format!(
         "wind_a2_39_recall_{tag}_{}.redb",
         std::process::id()
     ));

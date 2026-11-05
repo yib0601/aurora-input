@@ -372,7 +372,7 @@ mod tests {
     /// 流式落盘：超限 / 取消时已写的部分文件随守卫删掉，不留残渣。
     #[test]
     fn save_stream_removes_partial_file_on_cancel() {
-        let dir = scratch_dir("stream_cancel");
+        let (_tmp, dir) = scratch_dir("stream_cancel");
         let err = save_stream(&dir, &b"data"[..], &AtomicBool::new(true)).unwrap_err();
         assert!(err.contains("取消"), "{err}");
         assert_eq!(
@@ -386,7 +386,7 @@ mod tests {
     /// 写了一部分才超限 / 断流：半截文件必须删掉（文件在第一块写入后才有内容）。
     #[test]
     fn save_stream_removes_partial_file_when_over_limit_or_broken() {
-        let dir = scratch_dir("stream_partial");
+        let (_tmp, dir) = scratch_dir("stream_partial");
         let big = vec![1u8; 40_000];
         let err = save_stream_limited(&dir, &big[..], 20_000, &AtomicBool::new(false)).unwrap_err();
         assert!(err.contains("64 MB"), "{err}");
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn save_stream_writes_whole_body() {
-        let dir = scratch_dir("stream_ok");
+        let (_tmp, dir) = scratch_dir("stream_ok");
         let pkg = save_stream(&dir, &b"PKzip"[..], &AtomicBool::new(false)).unwrap();
         assert_eq!(std::fs::read(pkg.path()).unwrap(), b"PKzip");
         drop(pkg);
@@ -540,20 +540,18 @@ mod tests {
         assert!(http_fetch(&download_agent(), &format!("http://127.0.0.1:{port}/a.zip")).is_err());
     }
 
-    fn scratch_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "wind_setting_schema_dl_{tag}_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&d);
+    /// 返回 `TempDir` 一并交给调用方持有：它一旦 drop 就删掉整个临时目录。
+    fn scratch_dir(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!("wind_setting_schema_dl_{tag}"));
         std::fs::create_dir_all(&d).unwrap();
-        d
+        (tmp, d)
     }
 
     /// 随机名 + O_EXCL：两次落盘不同名、互不覆盖；drop 即删。
     #[test]
     fn save_package_uses_fresh_names_and_drop_deletes() {
-        let dir = scratch_dir("save");
+        let (_tmp, dir) = scratch_dir("save");
         let a = save_package(&dir, b"one").unwrap();
         let b = save_package(&dir, b"two").unwrap();
         assert_ne!(a.path(), b.path());
@@ -583,7 +581,7 @@ mod tests {
     /// 陈旧残留只删本模块前缀的；别的文件不碰。
     #[test]
     fn purge_stale_only_touches_our_old_files() {
-        let dir = scratch_dir("purge");
+        let (_tmp, dir) = scratch_dir("purge");
         let ours = dir.join(format!("{FILE_PREFIX}old.zip"));
         let other = dir.join("someone_else.zip");
         let fresh = save_package(&dir, b"x").unwrap();

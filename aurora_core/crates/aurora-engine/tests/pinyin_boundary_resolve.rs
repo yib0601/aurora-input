@@ -30,7 +30,7 @@ use aurora_engine::{BoundaryResolution, Engine};
 /// - `xiai`→「喜爱」带真值 boundary，且**故意不给「喜」「爱」单字读音**——这样层 4 必然
 ///   算不出来，返回 `Exact` 就证明确实走的是层 2 点查。
 fn fixture(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_boundary_resolve_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_boundary_resolve_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

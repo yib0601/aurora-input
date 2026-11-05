@@ -161,8 +161,10 @@ mod tests {
         rs.app_schemas.insert("weixin.exe".into(), "wubi86".into());
         rs.app_schemas
             .insert("com.tencent.xinwechat".into(), "english".into());
-        let dir =
-            std::env::temp_dir().join(format!("wind_state_app_schemas_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_state_app_schemas_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         rs.save(&dir).unwrap();
         let back = RuntimeState::load(&dir);
@@ -345,7 +347,10 @@ last_softkeyboard_page = "symbols"
     /// 前置（设计 §2.1）：state.toml 从本机根挪进 state/，老位置的文件首次加载时搬过来。
     #[test]
     fn legacy_state_toml_is_moved_into_state_dir_on_load() {
-        let root = std::env::temp_dir().join(format!("wind_state_move-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp
+            .path()
+            .join(format!("wind_state_move-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("state.toml"), "last_chinese_mode = false\n").unwrap();

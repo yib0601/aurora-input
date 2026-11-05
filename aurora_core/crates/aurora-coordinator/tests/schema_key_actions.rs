@@ -4,11 +4,11 @@
 //! `EngineManager` 取真实用户目录，测试写进去要污染用户配置，这个缺口曾让方案级
 //! `[key_actions]` 的分派 bug 直接漏到真机上。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -21,7 +21,7 @@ fn has_schemas() -> bool {
 
 /// 建一个隔离的 override 目录，写入指定方案的 `[key_actions]`。
 fn make_override(tag: &str, schema_id: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_ka_ov_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_ka_ov_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -39,7 +39,7 @@ fn make_override(tag: &str, schema_id: &str, body: &str) -> PathBuf {
 /// `store` 是 None、短语层为空 → z 成了死码，首键直接进模式，**根本走不到夺取路径**。
 /// 这里改用码表自带 `zz` 编码来复现「z 是活码前缀」，与真机同构。
 fn make_data_dir_with_z_code(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_ka_data_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_ka_data_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     let schemas = dir.join("schemas");
     std::fs::create_dir_all(schemas.join("zt")).unwrap();

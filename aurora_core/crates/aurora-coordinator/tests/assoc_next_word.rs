@@ -68,7 +68,8 @@ fn coord_with(
     seed: impl FnOnce(&aurora_store::Store),
     tweak: impl FnOnce(&mut Config),
 ) -> (Arc<Coordinator>, Arc<aurora_store::Store>) {
-    let store_path = std::env::temp_dir().join(format!("wind_assoc_user_{tag}.redb"));
+    let store_path =
+        aurora_utils::testing::scratch(tag).join(format!("wind_assoc_user_{tag}.redb"));
     let _ = std::fs::remove_file(&store_path);
     let store = Arc::new(aurora_store::Store::open(&store_path).unwrap());
     seed(&store);

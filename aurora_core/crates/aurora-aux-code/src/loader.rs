@@ -172,8 +172,10 @@ mod tests {
     /// 非 UTF-8 文件（手心表常见 GBK）：告警「请转存为 UTF-8」并产出空表，不 panic、不乱码入表。
     #[test]
     fn load_from_file_non_utf8_returns_empty() {
-        let path =
-            std::env::temp_dir().join(format!("wind-aux-code-gbk-test-{}.txt", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind-aux-code-gbk-test-{}.txt", std::process::id()));
         // 「七=a」的 GBK 编码：C6 DF 3D 61。
         std::fs::write(&path, [0xC6u8, 0xDF, b'=', b'a', b'\n']).unwrap();
         let t = load_from_file(&path);
@@ -225,8 +227,10 @@ mod tests {
     /// load_from_file：第 1 行没写名字时回落文件主干名
     #[test]
     fn load_from_file_name_falls_back_to_file_stem() {
-        let dir =
-            std::env::temp_dir().join(format!("wind-aux-code-name-test-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-aux-code-name-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let named = dir.join("stroke.txt");
         std::fs::write(&named, "# name: 笔画\n阿=ek\n").unwrap();
@@ -245,7 +249,8 @@ mod tests {
     /// load_from_file：读取 txt 文件（`=` 格式，注释行跳过）
     #[test]
     fn load_from_file_reads_txt() {
-        let path = std::env::temp_dir().join(format!(
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(format!(
             "wind-aux-code-load-test-{}.txt",
             std::process::id()
         ));
@@ -267,8 +272,10 @@ mod tests {
     /// 即协调器 `ensure_aux_code_runtime`（`aux_code_source.rs`）合并相邻文件来源的路径。
     #[test]
     fn load_merged_combines_files() {
-        let dir =
-            std::env::temp_dir().join(format!("wind-aux-code-merged-test-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-aux-code-merged-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let hi = dir.join("high.txt");
         let lo = dir.join("low.txt");
@@ -288,7 +295,10 @@ mod tests {
 
     #[test]
     fn read_name_reads_only_first_line() {
-        let dir = std::env::temp_dir().join(format!("wind-aux-read-name-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-aux-read-name-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let a = dir.join("a.txt");
         std::fs::write(&a, "# name: 小鹤\n# version: 1\n阿=ek\n").unwrap();

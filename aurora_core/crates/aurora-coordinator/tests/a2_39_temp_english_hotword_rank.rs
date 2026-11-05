@@ -28,14 +28,14 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时跳过。
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Instant;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Instant;
 
 const WORD: &str = "translation";
 const VK_ESCAPE: u32 = 0x1B;
@@ -174,7 +174,7 @@ fn observe(freq: bool, via: Via) {
     cfg.schema.active = "wubi86".into();
     cfg.input.default.chinese_mode = true;
     cfg.schema.english.frequency.enabled = freq;
-    let db = std::env::temp_dir().join(format!(
+    let db = aurora_utils::testing::scratch("observe").join(format!(
         "wind_a2_39_{}_{}_{}.redb",
         freq,
         via as u8,
@@ -244,7 +244,10 @@ fn observe_recall_other_entries_and_cost() {
         eprintln!("跳过：缺少英文方案或词库");
         return;
     }
-    let db = std::env::temp_dir().join(format!("wind_a2_39_cost_{}.redb", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp
+        .path()
+        .join(format!("wind_a2_39_cost_{}.redb", std::process::id()));
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     for _ in 0..5 {

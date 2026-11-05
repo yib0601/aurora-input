@@ -10,19 +10,19 @@
 //!
 //! 自带 wdat 夹具 + 真 redb store，不依赖 `build_dev/data`。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::datformat::WdatWriter;
 use aurora_engine::Engine;
 use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 use aurora_store::Store;
+use std::sync::Arc;
 
 /// 系统词库：够组出一句「有盖伦吗」的竞争者，但**没有**「盖伦」这个词。
 ///
 /// `gai`/`lun` 各自的单字都在，所以不开 S2 时整句会把它拆成两个单字（或别的组合），
 /// 这正是 t134 的现场。
 fn sys_dict(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_s2_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_s2_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -60,7 +60,7 @@ fn sys_dict(tag: &str) -> CachedDict {
 }
 
 fn store(tag: &str) -> Arc<Store> {
-    let p = std::env::temp_dir().join(format!("wind_s2_{tag}.redb"));
+    let p = aurora_utils::testing::scratch("s2").join(format!("wind_s2_{tag}.redb"));
     let _ = std::fs::remove_file(&p);
     Arc::new(Store::open(&p).unwrap())
 }
@@ -404,7 +404,8 @@ fn full_exact(e: &PinyinEngine) -> aurora_candidate::Candidate {
 /// 跟着走——否则学进去的「西昂多练」少一个音节，简拼索引算出的声母串是 `xdl` 而不是 `xadl`。
 #[test]
 fn system_fuzzy_node_boundary_must_match_variant_segmentation() {
-    let dir = std::env::temp_dir().join("wind_s2_canon_entry_boundary");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("wind_s2_canon_entry_boundary");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -473,7 +474,7 @@ type Entry<'a> = (&'a str, &'a [(&'a str, i32)], u64);
 
 /// 只含给定词条与简拼索引（声母串, 全拼码）的 wdat 系统词库。
 fn wdat_dict(tag: &str, entries: &[Entry], abbrevs: &[(&str, &str)]) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_s2_learn_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_s2_learn_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

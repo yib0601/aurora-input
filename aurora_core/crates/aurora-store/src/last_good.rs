@@ -1,9 +1,9 @@
 //! 手改小表（快捷格式、常用字覆盖）的「最后一次好数据」（设计 §2.5 第 2 条）：文件改坏了不当成
 //! 空表，继续按上一次解析成功的内容服务，并登记隔离；修好后自动恢复。
 
-use std::sync::{Arc, Mutex};
 use aurora_userdata::issues::{self, IssueKind};
 use aurora_userdata::text::doc::TextDoc;
+use std::sync::{Arc, Mutex};
 
 struct Seen<T> {
     /// 最近一次解析过的内容（同一份内容不重复解析、不重复告警）。

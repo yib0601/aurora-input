@@ -10,11 +10,11 @@
 //! ⚠️ 全文件仅此一个 `#[test]`，理由同 `custom_layer_hide_theme_import.rs`。
 //! ⚠️ 不依赖 `build_dev/data`：主题夹具全自造，故不会静默跳过。
 
-use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_webdata::WebDataRpc;
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -30,7 +30,8 @@ fn theme_toml(name: &str, bg: &str) -> String {
 #[test]
 fn same_slug_import_reports_conflict_in_result_and_force_overwrites() {
     // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-    let tmp = std::env::temp_dir().join(format!(
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join(format!(
         "wind_webdata_theme_import_conflict-{}",
         std::process::id()
     ));

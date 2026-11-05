@@ -9,10 +9,10 @@
 //! 所有排序（含自动调频）之后统一定位，守门测试在 `aurora-coordinator` 的
 //! `english_placement_tests`。
 
-use std::path::PathBuf;
 use aurora_candidate::CandidateSource;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

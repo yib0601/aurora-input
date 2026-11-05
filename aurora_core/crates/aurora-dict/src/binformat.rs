@@ -498,7 +498,8 @@ mod tests {
     /// key 外的所有词条读到错误位置（text 为空/乱码），五笔与拼音候选全废。
     #[test]
     fn test_writer_reader_roundtrip_multi_key() {
-        let tmp = std::env::temp_dir().join("wind_dict_roundtrip_test.wdb");
+        let _tmp = tempfile::tempdir().unwrap();
+        let tmp = _tmp.path().join("wind_dict_roundtrip_test.wdb");
 
         let mut writer = DictWriter::new();
         // 故意让第一个 key 有 2 条，使后续 key 的 entry_off > 0（暴露 off-by-size bug）
@@ -554,7 +555,8 @@ mod tests {
     /// 本格式用长度前缀存串（非 NUL 结尾、非按空白切分），故理应无损；此处把它钉死。
     #[test]
     fn test_roundtrip_preserves_trailing_whitespace_in_text() {
-        let tmp = std::env::temp_dir().join("wind_dict_trailing_ws.wdb");
+        let _tmp = tempfile::tempdir().unwrap();
+        let tmp = _tmp.path().join("wind_dict_trailing_ws.wdb");
 
         let mut writer = DictWriter::new();
         // 蒙古文形态：PUA 码位 + 内部空格（词间分隔）+ 尾随空格
@@ -588,7 +590,8 @@ mod tests {
     /// for_each_entry 应枚举全部 (code,text,weight),供反查索引构建(mmap 路径)。
     #[test]
     fn test_for_each_entry_enumerates_all() {
-        let tmp = std::env::temp_dir().join("wind_dict_foreach_test.wdb");
+        let _tmp = tempfile::tempdir().unwrap();
+        let tmp = _tmp.path().join("wind_dict_foreach_test.wdb");
         let mut writer = DictWriter::new();
         writer.add(
             "a".to_string(),

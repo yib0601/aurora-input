@@ -10,11 +10,11 @@
 //! 默认 smart 下临拼比主路径多出数百个生僻字（实测 `ying`：299 vs 76）。现已按主路径同序
 //! 接入（`mark_common` → `apply_filter`）。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

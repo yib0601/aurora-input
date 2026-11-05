@@ -12,12 +12,13 @@
 //!
 //! ⚠️ 全文件仅此一个 `#[test]`：`is_portable()` 是 OnceLock，一个进程只判一次。
 
-use std::path::Path;
 use aurora_config::Config;
+use std::path::Path;
 
 #[test]
 fn portable_does_not_write_user_config_seen() {
-    let tmp = std::env::temp_dir().join("wind_portable_seen_marker_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_portable_seen_marker_e2e");
     let root = tmp.join("PortableApp");
     let user = root.join("userdata");
     let _ = std::fs::remove_dir_all(&tmp);

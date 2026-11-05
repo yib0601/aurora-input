@@ -4,10 +4,10 @@
 //!
 //! 位次（`position`）在协调器定位，守门测试在 `aurora-coordinator` 的 `english_placement_tests`。
 
-use std::path::PathBuf;
 use aurora_candidate::{Candidate, CandidateSource};
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -173,7 +173,8 @@ fn codetable_schema_override_applies() {
     }
     let mut cfg = make_config("wubi86");
     cfg.schema.codetable.english_merge.enable = true;
-    let ov = std::env::temp_dir().join("wind_english_merge_policy_ov");
+    let tmp = tempfile::tempdir().unwrap();
+    let ov = tmp.path().join("wind_english_merge_policy_ov");
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).unwrap();
     std::fs::write(

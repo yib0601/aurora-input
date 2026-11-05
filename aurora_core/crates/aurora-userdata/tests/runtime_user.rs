@@ -1,10 +1,10 @@
 //! 用户词 API 与 aurora-store/src/user_words.rs 的行为对拍（文本即真源：每条末尾折回、重开再验）。
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_userdata::engine::{Dirs, TextBinding, UserData};
 use aurora_userdata::layer::UserDataUserLayer;
 use aurora_userdata::record::Target;
 use aurora_userdata::runtime::{Runtime, USER_CODE_MAX_CHARS, USER_TEXT_MAX_CHARS, UserWord};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 struct Env {
     dir: PathBuf,
@@ -12,7 +12,8 @@ struct Env {
 
 impl Env {
     fn new(name: &str) -> Env {
-        let dir = std::env::temp_dir().join(format!("wind_rtu_{name}-{}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(name)
+            .join(format!("wind_rtu_{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Env { dir }
     }

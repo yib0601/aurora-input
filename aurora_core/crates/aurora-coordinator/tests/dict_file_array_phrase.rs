@@ -3,14 +3,14 @@
 //! 报告：按文档把 `$SS(...)` 写进词库文件不生效，同样内容在设置页新增就可以。
 //! 这里走真实的文件加载路径：临时方案目录 → 码表解析 → 候选构建 → `finalize_candidates`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn make_data_dir(tag: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_ss_file_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_ss_file_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     let schemas = dir.join("schemas");
     std::fs::create_dir_all(schemas.join("st")).unwrap();
@@ -35,7 +35,7 @@ fn coord_for(dir: &std::path::Path, ov_tag: &str) -> (std::sync::Arc<Coordinator
     c.schema.available = vec!["st".into()];
     c.schema.active = "st".into();
     c.input.default.chinese_mode = true;
-    let ov = std::env::temp_dir().join(format!("wind_ss_file_ov_{ov_tag}"));
+    let ov = aurora_utils::testing::scratch("coord_for").join(format!("wind_ss_file_ov_{ov_tag}"));
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).unwrap();
     let coord = Coordinator::new_headless_with_override(c, Some(dir), Some(ov.clone()));

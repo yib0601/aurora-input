@@ -2487,7 +2487,7 @@ mod tests {
 
         let dir = std::env::var("AURORA_ICON_PREVIEW_DIR")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir());
+            .unwrap_or_else(|_| tempfile::tempdir().expect("建预览输出目录").keep());
         std::fs::create_dir_all(&dir).expect("创建输出目录");
 
         const ZOOM: u32 = 9;

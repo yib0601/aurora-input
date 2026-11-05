@@ -16,11 +16,11 @@
 //! 这不是假想风险：本文件开发期间该目录被清掉过一次，用例全部跳过却报「3 passed」，
 //! 是靠一个无守卫的临时探针打印出空候选才发现的。恢复命令 `.\scripts\dev.ps1 gd`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 const VK_NEXT: u32 = 0x22; // PageDown，默认翻页键组 "pageupdown"
 const VK_SPACE: u32 = 0x20;

@@ -3,14 +3,14 @@
 //!
 //! 自造夹具，不依赖 `build_dev/data`：`pinguo` 精确命中「拼过」，in/ing 模糊命中「苹果」「平过」。
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 use aurora_bridge::handler::{CaretData, KeyAction, KeyEventData, MessageHandler};
 use aurora_config::{Config, HintScope};
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, caret_source};
 use aurora_ui_types::{CandidateItem, UiCommand};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 const DICT: &str = "拼过\tpin guo\t5000\n苹果\tping guo\t3000\n平过\tping guo\t100\n";
 
@@ -29,7 +29,8 @@ fn fixture(tag: &str) -> Fixture {
 }
 
 fn fixture_with(tag: &str, dict: &str) -> Fixture {
-    let dir = std::env::temp_dir().join(format!("wind_pinyin_hint_{tag}_{}", std::process::id()));
+    let dir = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_pinyin_hint_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let schemas = dir.join("schemas");
     std::fs::create_dir_all(schemas.join("fh")).unwrap();

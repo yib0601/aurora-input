@@ -11,9 +11,9 @@
 //! ⚠️ 两个环境变量都**必须**设：漏掉 `AURORA_DATADIR_CONF` 时用户层会指向真实的
 //! `%APPDATA%\AuroraInput`（本仓已有把测试写进真实用户目录的前科）。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -36,7 +36,8 @@ fn layout_toml(id: &str, name: &str) -> String {
 fn custom_layer_is_visible_to_engine_enumerations() {
     // ⚠️ 目录名带 pid：本仓常态是多 worktree / 多会话并行跑测试，固定名 + 开头的
     // `remove_dir_all` 会让两个 cargo test 互删夹具，失败现象与真实缺陷难以区分。
-    let tmp = std::env::temp_dir().join(format!(
+    let tmp2 = tempfile::tempdir().unwrap();
+    let tmp = tmp2.path().join(format!(
         "wind_engine_custom_layer_e2e-{}",
         std::process::id()
     ));

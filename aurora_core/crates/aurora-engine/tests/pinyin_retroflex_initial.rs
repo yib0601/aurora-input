@@ -55,7 +55,7 @@ const ABBREV: &[(&str, &[&str])] = &[
 ];
 
 fn dict(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_retroflex_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_retroflex_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

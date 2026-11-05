@@ -97,7 +97,7 @@ fn shuangpin_target_config() -> Config {
 
 /// 每个用例一个独立空 store（同一文件并发写会撕裂）。
 fn fresh_store(name: &str) -> (Arc<aurora_store::Store>, PathBuf) {
-    let path = std::env::temp_dir().join(name);
+    let path = aurora_utils::testing::scratch(name).join(name);
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(aurora_store::Store::open(&path).unwrap());
     (store, path)

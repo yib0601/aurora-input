@@ -4,14 +4,14 @@
 //! ⚠️ 依赖 `build_dev/data` 真实词库（快捷输入的成员方案要能加载）；缺失时**静默跳过**
 //! （判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
 use aurora_store::completion::CompletionKind;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SEMICOLON: u32 = 0xBA;
 const VK_SPACE: u32 = 0x20;
@@ -53,7 +53,7 @@ fn key(k: u32, modifiers: u32) -> KeyEventData {
 }
 
 fn store_at(tag: &str) -> Arc<Store> {
-    let path = std::env::temp_dir().join(format!(
+    let path = aurora_utils::testing::scratch(tag).join(format!(
         "wind_quick_history_{}_{tag}.redb",
         std::process::id()
     ));
@@ -561,7 +561,10 @@ fn raw_stays_first_after_case_cycle() {
 fn right_click_deletes_a_history_entry() {
     skip_without_data!();
     use aurora_ui_types::UiCommand;
-    let user_dir = std::env::temp_dir().join(format!("wind_qh_menu_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let user_dir = tmp
+        .path()
+        .join(format!("wind_qh_menu_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&user_dir);
     std::fs::create_dir_all(&user_dir).unwrap();
     let mut c = Config::default();

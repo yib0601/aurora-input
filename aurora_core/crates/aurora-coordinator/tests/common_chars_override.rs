@@ -8,13 +8,13 @@
 //! ⚠️ `build_dev/data` 不存在时**整族静默跳过而计数照绿**（判据是耗时：正常秒级，
 //! 跳过是 0.0x s）。恢复命令 `.\scripts\dev.ps1 gd`。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_ui_types::CandidateOp;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// PageDown，默认翻页键组 "pageupdown"（末页再按一次即触发检索范围临时放宽）。
 const VK_NEXT: u32 = 0x22;
@@ -41,7 +41,7 @@ fn key_event(key_code: u32) -> KeyEventData {
 
 /// 每个测试独立库：redb 单写者，共用文件会让并发测试互相阻塞。
 fn store(tag: &str) -> Arc<aurora_store::Store> {
-    let p = std::env::temp_dir().join(format!(
+    let p = aurora_utils::testing::scratch(tag).join(format!(
         "wind_common_override_{}_{}.redb",
         std::process::id(),
         tag

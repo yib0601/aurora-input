@@ -12,7 +12,6 @@
 //! - 滤掉拼音候选后 `has_pinyin` 转假，满码上屏的拼音守护随之松开——这是**有意的连带**，
 //!   在此锁死取值，避免日后被当成回归「修」回去。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::codetable::CodetableDict;
 use aurora_dict::{DictManager, SystemDictLayer};
@@ -20,6 +19,7 @@ use aurora_engine::codetable::{CodeTableEngine, CommitOptions};
 use aurora_engine::mixed::{MixConfig, MixedEngine};
 use aurora_engine::pinyin::Config as PinyinConfig;
 use aurora_engine::{Engine, PinyinEngine};
+use std::sync::Arc;
 
 /// 五笔侧：`gedw` 是精确全码「青春」（真机同款）；再放一条无关词占位。
 fn wubi_engine() -> Box<dyn Engine> {
@@ -173,7 +173,8 @@ fn real_dict_gedw_surfaces_the_mixed_abbrev_word() {
         ];
         cfg.schema.active = "wubi86_pinyin".to_string();
         cfg.schema.mix.enable_pinyin_abbrev = abbrev;
-        let root = std::env::temp_dir().join(format!("wind_mix_partial_filter_{abbrev}"));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(format!("wind_mix_partial_filter_{abbrev}"));
         let _ = std::fs::remove_dir_all(&root);
         let mgr = aurora_engine::EngineManager::with_store_override(
             &cfg,

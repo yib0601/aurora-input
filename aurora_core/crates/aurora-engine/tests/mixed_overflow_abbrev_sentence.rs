@@ -11,7 +11,6 @@
 //!
 //! 拼音侧用 wdat 夹具：简拼索引只有 wdat 词典才有（`CachedDict::Memory` 返回空）。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::codetable::CodetableDict;
 use aurora_dict::datformat::WdatWriter;
@@ -20,6 +19,7 @@ use aurora_engine::codetable::{CodeTableEngine, CommitOptions};
 use aurora_engine::mixed::{MixConfig, MixedEngine};
 use aurora_engine::pinyin::Config as PinyinConfig;
 use aurora_engine::{Engine, PinyinEngine};
+use std::sync::Arc;
 
 /// 五笔侧：`wobz` 是精确全码（「前 N 码是精确全码」那一条成立，变量只剩拼音认不认领）。
 fn wubi() -> Box<dyn Engine> {
@@ -39,7 +39,7 @@ fn wubi() -> Box<dyn Engine> {
 
 /// 拼音侧：权重取 `cn_dicts` 真实值。
 fn pinyin() -> PinyinEngine {
-    let dir = std::env::temp_dir().join("wind_mixed_overflow_abbrev_sentence");
+    let dir = aurora_utils::testing::scratch("wind_mixed_overflow_abbrev_sentence");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

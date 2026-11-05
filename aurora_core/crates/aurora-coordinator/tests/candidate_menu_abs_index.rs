@@ -11,15 +11,15 @@
 //! 夹具：wubi86，`aa` 有多页候选（首页之外的才测得出绝对下标）。
 //! 词典缺失时自动跳过——⚠️ 跳过时计数照绿，确认真的跑了看 `--nocapture` 里有没有「跳过：」。
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_keys::keymap::VK_NEXT;
 use aurora_ui_types::{CandidateOp, MenuItemSpec, MenuKind, UiCommand};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -55,7 +55,8 @@ fn type_code(c: &Coordinator, code: &str) {
 
 /// 带 UI 通道与用户目录（shadow 规则要落 redb）。目录名带 pid：并行跑测试时固定名会互删夹具。
 fn setup(tag: &str) -> (Arc<Coordinator>, Receiver<UiCommand>, PathBuf) {
-    let user = std::env::temp_dir().join(format!("wind_cand_menu_{tag}_{}", std::process::id()));
+    let user = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_cand_menu_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&user);
     std::fs::create_dir_all(&user).unwrap();
     let mut cfg = Config::default();

@@ -502,7 +502,8 @@ mod tests {
         tag: &str,
         hours: u32,
     ) -> (Arc<Coordinator>, Arc<Store>, std::path::PathBuf) {
-        let db = std::env::temp_dir().join(format!("wind_draft_start_{tag}.redb"));
+        let db = aurora_utils::testing::scratch("draft_start")
+            .join(format!("wind_draft_start_{tag}.redb"));
         let _ = std::fs::remove_file(&db);
         let store = Arc::new(Store::open(&db).unwrap());
         let c = Coordinator::new_headless_with_store(cfg_with_ttl(hours), None, Arc::clone(&store));
@@ -572,7 +573,8 @@ mod tests {
     /// 模拟「顶出的首选是一条草稿候选」。
     #[test]
     fn auto_committed_top_candidate_promotes_the_draft() {
-        let db = std::env::temp_dir().join("wind_draft_auto_commit_promote.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("wind_draft_auto_commit_promote.redb");
         let _ = std::fs::remove_file(&db);
         let store = Arc::new(Store::open(&db).unwrap());
         let mut cfg = cfg_with_ttl(24);
@@ -635,7 +637,8 @@ mod tests {
     /// `state.candidates` 里放一条 `is_draft` 候选、文本与本次上屏一致。
     #[test]
     fn auto_commit_outcome_promotes_the_draft_candidate() {
-        let db = std::env::temp_dir().join("wind_draft_auto_commit_helper.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("wind_draft_auto_commit_helper.redb");
         let _ = std::fs::remove_file(&db);
         let store = Arc::new(Store::open(&db).unwrap());
         let mut cfg = cfg_with_ttl(24);

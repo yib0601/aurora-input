@@ -77,7 +77,10 @@ fn sweep_two_key_and_single_syllable_top1() {
         eprintln!("跳过：拼音词库不存在");
         return;
     };
-    let tmp = std::env::temp_dir().join(format!("wind-zw-sweep-{}", std::process::id()));
+    let tmp2 = tempfile::tempdir().unwrap();
+    let tmp = tmp2
+        .path()
+        .join(format!("wind-zw-sweep-{}", std::process::id()));
     let mut out = String::new();
 
     let mut keys: Vec<char> = ('a'..='z').collect();

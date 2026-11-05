@@ -15,7 +15,6 @@
 //! `is_possible_pinyin_sequence` 与候选 `consumed_length` 的真实取值，fake 引擎给什么就是什么，
 //! 用 fake 锁不住真机行为（`youyo` 在 fake 下靠「消费整串」偶然通过，真机靠的是「还没打完」）。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::codetable::CodetableDict;
 use aurora_dict::{DictManager, SystemDictLayer};
@@ -24,6 +23,7 @@ use aurora_engine::english::EnglishEngine;
 use aurora_engine::mixed::{MixConfig, MixedEngine};
 use aurora_engine::pinyin::Config as PinyinConfig;
 use aurora_engine::{Engine, PinyinEngine};
+use std::sync::Arc;
 
 /// 五笔侧（4 码封顶）：`yijg`=就是（本例主角）、`youy`=变凉（youyoud 回归对照）、
 /// `gith`=不算（github 回归对照，取自真词库 `wubi86_jidian.dict.yaml` 的真实条目与权重）。
@@ -660,7 +660,8 @@ fn real_dict_cety_top_commits_on_the_fifth_key() {
         // 不覆写的话顶码通路整个不启用，全部断言都会退化成假绿。
         cfg.schema.codetable.top_code_commit = true;
         cfg.schema.mix.enable_pinyin_abbrev = false;
-        let root = std::env::temp_dir().join(format!("wind_cety_topcode_{tag}"));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(format!("wind_cety_topcode_{tag}"));
         let _ = std::fs::remove_dir_all(&root);
         aurora_engine::EngineManager::with_store_override(
             &cfg,
@@ -743,7 +744,8 @@ fn factory_defaults_alone_are_enough_for_cety_topcode() {
         "前置：两道否决出厂都开着 —— 顶码能放行是靠归属例外口，不是靠守护没开"
     );
 
-    let root = std::env::temp_dir().join("wind_cety_factory_defaults");
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("wind_cety_factory_defaults");
     let _ = std::fs::remove_dir_all(&root);
     let m = aurora_engine::EngineManager::with_store_override(
         &cfg,

@@ -7,13 +7,13 @@
 //!
 //! 词库缺失时跳过（worktree 里要自备 `build_dev/data`）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -53,7 +53,7 @@ fn config(schema: &str, f: impl FnOnce(&mut Config)) -> Config {
 
 /// 打 `input`，返回协调器排好的全部候选文本（界面序）。
 fn typed(cfg: Config, input: &str, tag: &str) -> Vec<String> {
-    let path = std::env::temp_dir().join(format!("wind_py_en_policy_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_py_en_policy_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(Store::open(&path).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), store);
@@ -136,7 +136,10 @@ fn english_selected_once_skips_yield() {
         ("py", config("pinyin", pinyin_bucket)),
         ("en", config("pinyin", english_bucket)),
     ] {
-        let path = std::env::temp_dir().join(format!("wind_py_en_policy_used_{tag}.redb"));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_py_en_policy_used_{tag}.redb"));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), store);
@@ -178,7 +181,8 @@ fn selected_completion_does_not_exempt() {
         c.schema.pinyin.frequency.enabled = true;
         c.schema.pinyin.english_merge.complete_min_length = 3;
     });
-    let path = std::env::temp_dir().join("wind_py_en_policy_completion_used.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("wind_py_en_policy_completion_used.redb");
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(Store::open(&path).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), store);

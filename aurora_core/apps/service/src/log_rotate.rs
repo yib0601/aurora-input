@@ -864,7 +864,8 @@ mod prune_tsf_tests {
     /// （老版本平铺的存量，含所有进程共写的那个 `wind_tsf.log`）。
     #[test]
     fn prunes_only_stale_tsf_logs() {
-        let dir = std::env::temp_dir().join(format!("wind_prune_test_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_prune_test");
         let _ = std::fs::remove_dir_all(&dir);
         let sub = dir.join(TSF_LOG_SUBDIR);
         std::fs::create_dir_all(&sub).unwrap();

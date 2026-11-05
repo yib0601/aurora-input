@@ -8,14 +8,14 @@
 //!
 //! ⚠️ 词典缺失时整族静默跳过（判据是耗时而非通过条数），worktree 需自备 `build_dev`。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::RawCandidateMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SEMICOLON: u32 = 0xBA;
 /// 与 `handle_mode.rs` 的 `MIX_MEMBER_QUOTA` 同值。
@@ -60,7 +60,7 @@ fn quick_config(raw: RawCandidateMode, variants: bool) -> Config {
 }
 
 fn coord_with(cfg: Config, tag: &str) -> Arc<Coordinator> {
-    let path = std::env::temp_dir().join(format!("wind_quick_en_head_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_quick_en_head_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     Coordinator::new_headless_with_store(
         cfg,

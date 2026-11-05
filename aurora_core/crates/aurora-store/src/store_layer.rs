@@ -4,9 +4,9 @@
 //! shadow 是 ShadowProvider，引擎排序后应用）——本文件只负责"用户词/临时词作为查询层"。
 
 use crate::Store;
-use std::sync::Arc;
 use aurora_candidate::Candidate;
 use aurora_dict::{DictLayer, LayerType};
+use std::sync::Arc;
 
 /// 用户造词层（P2 起数据在 `user/<schema>/user.dict.yaml` + 运行时引擎；本类型是
 /// `UserDataUserLayer` 的薄包装，保留 `StoreUserLayer::new(store, schema)` 这个入口，调用方不动）。
@@ -242,7 +242,7 @@ mod tests {
     use aurora_dict::CompositeDict;
 
     fn store(name: &str) -> Arc<Store> {
-        let p = std::env::temp_dir().join(format!("wind_storelayer_{name}.redb"));
+        let p = aurora_utils::testing::scratch(name).join(format!("wind_storelayer_{name}.redb"));
         let _ = std::fs::remove_file(&p);
         Arc::new(Store::open(&p).unwrap())
     }
@@ -524,7 +524,10 @@ mod tests {
     /// 用户词层读引擎：精确、简拼（无边界词靠首字符兜底组）都经引擎分组索引。
     #[test]
     fn user_layer_reads_engine_and_text() {
-        let p = std::env::temp_dir().join(format!("wind_sl_user_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_sl_user_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let s = Arc::new(Store::open(&p).unwrap());
         s.add_user_word("pinyin", "nihao", "你好", 9, 0b101)
@@ -548,7 +551,10 @@ mod tests {
     /// 晋升：临时词进用户词（边界随词），临时词删掉，用户词落文本。
     #[test]
     fn promote_writes_user_word_through_engine() {
-        let p = std::env::temp_dir().join(format!("wind_sl_promote_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_sl_promote_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let s = Store::open(&p).unwrap();
         s.learn_temp_word("pinyin", "nihao", "你好", 1, 0b101)

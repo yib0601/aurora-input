@@ -11,12 +11,14 @@
 //! 词典缺失时自动跳过 —— ⚠️ `build_dev/data` 不存在时**整族静默跳过而计数照绿**，
 //! 确认真的跑了看 `--nocapture` 里有没有「跳过：」那行。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
-use aurora_keys::keymap::{VK_BACKTICK, VK_COMMA, VK_DOWN, VK_EQUAL, VK_MINUS, VK_PERIOD, VK_PRIOR};
+use aurora_keys::keymap::{
+    VK_BACKTICK, VK_COMMA, VK_DOWN, VK_EQUAL, VK_MINUS, VK_PERIOD, VK_PRIOR,
+};
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

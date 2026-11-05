@@ -1185,8 +1185,10 @@ mod tests {
     /// 迁移全部完成（短语迁移是最后一步）后立即放下旧库：不再锁文件。
     #[test]
     fn legacy_db_is_released_once_fully_migrated() {
-        let path =
-            std::env::temp_dir().join(format!("wind_store_release-{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_store_release-{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(derived_state_dir(&path));
         let _ = std::fs::remove_dir_all(derived_text_dir(&path));
@@ -1206,10 +1208,14 @@ mod tests {
     /// 标记不补写（P5 起判据只认 format_version），其余依赖旧库链完成的判断照旧。
     #[test]
     fn legacy_done_skips_remigration_even_if_markers_are_deleted() {
-        let path =
-            std::env::temp_dir().join(format!("wind_store_ldone-{}.redb", std::process::id()));
-        let st =
-            std::env::temp_dir().join(format!("wind_store_ldone_state-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_store_ldone-{}.redb", std::process::id()));
+        let tmp2 = tempfile::tempdir().unwrap();
+        let st = tmp2
+            .path()
+            .join(format!("wind_store_ldone_state-{}", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&st);
         let loc = |done: bool| StateLoc {
@@ -1259,8 +1265,10 @@ mod tests {
     /// 已经迁完的库再打开：根本不碰 redb（不锁、不写——文件逐字节不变，留给回退的旧版本）。
     #[test]
     fn fully_migrated_store_never_opens_legacy_db() {
-        let path =
-            std::env::temp_dir().join(format!("wind_store_noopen-{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_store_noopen-{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(derived_state_dir(&path));
         let _ = std::fs::remove_dir_all(derived_text_dir(&path));
@@ -1286,7 +1294,8 @@ mod tests {
 
     #[test]
     fn list_data_schemas_across_tables() {
-        let path = std::env::temp_dir().join("wind_store_schemas_test.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_store_schemas_test.redb");
         let _ = std::fs::remove_file(&path);
         let s = Store::open(&path).unwrap();
         s.add_user_word("wb", "a", "工", 1, 0).unwrap();
@@ -1301,7 +1310,8 @@ mod tests {
 
     #[test]
     fn test_open_version_persist_and_reopen() {
-        let path = std::env::temp_dir().join("wind_store_skeleton_test.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_store_skeleton_test.redb");
         let _ = std::fs::remove_file(&path);
 
         // 首次打开：版本应为当前版本
@@ -1324,7 +1334,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
     fn tmp_db(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_store_rt-{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(name)
+            .join(format!("wind_store_rt-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         d.join(format!("{name}.redb"))
     }
@@ -1646,7 +1657,10 @@ mod tests {
     fn open_with_state_uses_the_given_dir_and_never_wipes() {
         let p = tmp_db("explicit");
         let _ = std::fs::remove_file(&p);
-        let st = std::env::temp_dir().join(format!("wind_store_rt_state-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let st = tmp
+            .path()
+            .join(format!("wind_store_rt_state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&st);
         let loc = || StateLoc {
             state_dir: st.clone(),

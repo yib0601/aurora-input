@@ -1,11 +1,12 @@
 //! 草稿 API 与 aurora-store/src/draft_words.rs 的行为对拍。
-use std::sync::Arc;
 use aurora_userdata::engine::{Dirs, Op, UserData};
 use aurora_userdata::record::{OpKind, Payload, Target};
 use aurora_userdata::runtime::Runtime;
+use std::sync::Arc;
 
 fn rt(name: &str) -> Runtime {
-    let d = std::env::temp_dir().join(format!("wind_rtd_{name}-{}", std::process::id()));
+    let d = aurora_utils::testing::scratch(name)
+        .join(format!("wind_rtd_{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     Runtime::new(Arc::new(
         UserData::open(Dirs {

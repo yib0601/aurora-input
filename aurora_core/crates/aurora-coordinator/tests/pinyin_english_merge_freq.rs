@@ -4,13 +4,13 @@
 //! 开关按归属方案取：英文桶看 `schema.english.frequency`，不看拼音的调频开关。
 //! 词库缺失时整族跳过（worktree 里要自备 `build_dev/data`，核对耗时）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_1: u32 = 0x31;
 
@@ -48,7 +48,7 @@ fn config(english_freq: bool) -> Config {
 }
 
 fn store_at(tag: &str) -> Arc<Store> {
-    let path = std::env::temp_dir().join(format!("wind_py_en_freq_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_py_en_freq_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     Arc::new(Store::open(&path).unwrap())
 }

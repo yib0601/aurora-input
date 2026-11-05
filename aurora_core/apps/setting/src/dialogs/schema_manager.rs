@@ -6315,7 +6315,8 @@ mod ext_dict_tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("AURORA_RPC_MOCK", "1") };
-        let dir = std::env::temp_dir().join(format!("wind_setting_dl_mgr_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_setting_dl_mgr");
         std::fs::create_dir_all(&dir).unwrap();
         let save = || crate::schema_url_import::save_package(&dir, b"PK").unwrap();
         let preview = json!({ "willAdd": ["x"], "conflicts": [] });

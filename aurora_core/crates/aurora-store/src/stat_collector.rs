@@ -477,8 +477,11 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static CNT: AtomicU32 = AtomicU32::new(0);
         let n = CNT.fetch_add(1, Ordering::Relaxed);
-        let p =
-            std::env::temp_dir().join(format!("wind_collector_{}_{}.redb", std::process::id(), n));
+        let p = aurora_utils::testing::scratch("collector").join(format!(
+            "wind_collector_{}_{}.redb",
+            std::process::id(),
+            n
+        ));
         let _ = std::fs::remove_file(&p);
         Arc::new(Store::open(&p).unwrap())
     }

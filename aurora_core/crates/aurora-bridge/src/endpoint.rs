@@ -295,7 +295,8 @@ mod tests {
     #[test]
     fn linux_runtime_dir_uses_xdg_runtime_dir() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _restore = EnvRestore::capture(&["AURORA_INPUT_RUNTIME_DIR", "XDG_RUNTIME_DIR", "HOME"]);
+        let _restore =
+            EnvRestore::capture(&["AURORA_INPUT_RUNTIME_DIR", "XDG_RUNTIME_DIR", "HOME"]);
         unsafe { std::env::remove_var("AURORA_INPUT_RUNTIME_DIR") };
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
         unsafe { std::env::set_var("HOME", "/home/tester") };
@@ -322,7 +323,8 @@ mod tests {
     #[test]
     fn check_private_dir_rejects_unsafe_dirs() {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        let root = std::env::temp_dir().join(format!("wind_priv_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(format!("wind_priv_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let uid = unsafe { libc::getuid() };

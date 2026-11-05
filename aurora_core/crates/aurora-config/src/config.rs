@@ -12662,7 +12662,10 @@ scripts = { latin = 42 }
     /// ★ 非 UTF-8 的配置文件要进 `unparsable`（关写盘闸），不能当「文件不存在」跳过。
     #[test]
     fn non_utf8_config_is_reported_as_unparsable() {
-        let dir = std::env::temp_dir().join(format!("wind_cfg_gbk_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_cfg_gbk_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         // 「# 中文」的 GBK 字节

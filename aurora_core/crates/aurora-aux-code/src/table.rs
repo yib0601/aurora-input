@@ -461,8 +461,10 @@ mod tests {
     /// 跨文件同码去重、异码共存
     #[test]
     fn load_and_merge_multiple_files() {
-        let dir =
-            std::env::temp_dir().join(format!("wind-aux-code-merge-test-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-aux-code-merge-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let hi = dir.join("high.txt");
         let lo = dir.join("low.txt");

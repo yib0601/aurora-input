@@ -487,7 +487,10 @@ mod tests {
     /// 用户的词库配置落回 `%APPDATA%`——现象是「升级后我的词库全没了」。
     #[test]
     fn portable_marker_accepts_new_and_legacy_names() {
-        let base = std::env::temp_dir().join(format!("wind_marker_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind_marker_{}", std::process::id()));
 
         for (i, name) in [PORTABLE_MARKER_NAME, LEGACY_PORTABLE_MARKER_NAME]
             .iter()
@@ -522,29 +525,14 @@ mod migrate_tests {
     use super::*;
     use std::fs;
 
-    /// 自带临时目录：本 crate 的 dev-dependencies 里没有 tempfile，为一个测试拉依赖不值当。
-    /// 名字带进程 id + 计数器，避免并行测试撞名。
-    struct TmpDir(std::path::PathBuf);
+    /// 临时目录：直接持有 `tempfile::TempDir`，drop（含 panic unwind）时删除。
+    struct TmpDir(tempfile::TempDir);
     impl TmpDir {
         fn new() -> Self {
-            use std::sync::atomic::{AtomicUsize, Ordering};
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let p = std::env::temp_dir().join(format!(
-                "aurora-mig-{}-{}",
-                std::process::id(),
-                N.fetch_add(1, Ordering::Relaxed)
-            ));
-            let _ = fs::remove_dir_all(&p);
-            fs::create_dir_all(&p).unwrap();
-            Self(p)
+            Self(tempfile::tempdir().unwrap())
         }
         fn path(&self) -> &std::path::Path {
-            &self.0
-        }
-    }
-    impl Drop for TmpDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            self.0.path()
         }
     }
 

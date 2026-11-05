@@ -16,13 +16,13 @@
 //! 编译期强制（`PhraseScope` 是必填参数）挡的是「新增查询方法时忘了过滤」；
 //! 本文件挡的是「传了 scope 但传错了口径」。两者互补，缺一不可。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_phrase::PhraseSeed;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -46,7 +46,7 @@ fn key(vk: u32) -> KeyEventData {
 
 /// 造一个只含 `[phrases]` 段的方案 override。
 fn phrases_override(tag: &str, schema_id: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_phscope_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_phscope_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(

@@ -25,7 +25,7 @@ use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 /// | `richu`        | 日出   | ri\|chu          | `rc`  | `r↔l` |
 /// | `nihao`        | 你好   | ni\|hao          | `nh`  | 对照：n 开头的真词 |
 fn fixture(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_abbrev_fz_init_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_abbrev_fz_init_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

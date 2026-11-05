@@ -2,9 +2,9 @@
 //! 再看旧版留在旁边的 `.bak`）自愈，也不行就把坏文件另存为 `.corrupt-<时间>` 后从空重建。坏文件本身
 //! 从不被覆盖。
 
-use std::path::Path;
 use aurora_userdata::issues::{self, IssueKind};
 use aurora_userdata::text::fold;
+use std::path::Path;
 
 /// 读机写文件：不存在 ⇒ `Ok(None)`；解析成功 ⇒ `Ok(Some(v))`；解析失败 ⇒ 坏文件另存留存，
 /// 上一版能解析就把它恢复成正文并返回其内容，否则返回 `Ok(None)`（调用方从空开始）。两种情况都
@@ -51,7 +51,8 @@ mod tests {
     use super::*;
 
     fn dir(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_mf_{name}-{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(name)
+            .join(format!("wind_mf_{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

@@ -10,11 +10,11 @@
 //!   2. **KeyAction 的形状**对不对——丢弃分支下 `text` 恒空，此时若返回 `StatusUpdate`
 //!      就等于没修：内部状态干净了，用户屏幕上那串编码还在。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_CTRL, MOD_SHIFT};
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

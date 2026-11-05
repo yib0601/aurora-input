@@ -4,14 +4,14 @@
 //! 重载从磁盘读配置，用宿主配置改写（`set_config_overlay`）把读到的整份换成用例给的配置，
 //! 不受本机用户配置影响。改写是不带捕获的函数指针，每个场景各用一份静态配置。
 
-use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
 use aurora_bridge::handler::{CaretData, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, caret_source};
 use aurora_ui_types::{CandidateItem, UiCommand};
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 
 const DICT: &str = "欣欣\txin xin\t5000\n心心\txin xin\t3000\n莘莘\tshen shen\t100\n\
                     公平\tgong ping\t3000\n";
@@ -27,7 +27,8 @@ impl Drop for Fixture {
 }
 
 fn fixture(tag: &str) -> Fixture {
-    let dir = std::env::temp_dir().join(format!("wind_corr_reload_{tag}_{}", std::process::id()));
+    let dir = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_corr_reload_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let schemas = dir.join("schemas");
     std::fs::create_dir_all(schemas.join("cr")).unwrap();

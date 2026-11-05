@@ -170,7 +170,8 @@ fn residency_follows_size_threshold_and_does_not_change_results() {
     // 同一份文件强制按另一种方式打开，查询结果必须逐字相同。
     let wridx = find_wridx().expect(".wridx 应已落盘");
     let other = if resident { 0 } else { usize::MAX };
-    let alt = aurora_dict::reverseidx::ReverseIndex::open(&wridx, other).expect("另一种方式应能打开");
+    let alt =
+        aurora_dict::reverseidx::ReverseIndex::open(&wridx, other).expect("另一种方式应能打开");
     assert_ne!(alt.is_resident(), resident, "应确实换了一种打开方式");
     assert_eq!(
         alt.codes_of("中").map(|c| c.join("/")),
@@ -202,7 +203,10 @@ fn changing_the_enabled_dict_set_invalidates_and_reverting_hits_again() {
         eprintln!("!!! 跳过 invalidation：build_dev/data 不存在，本测试**没有真正运行**");
         return;
     };
-    let overrides = std::env::temp_dir().join(format!("wind_wridx_ovr_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let overrides = tmp
+        .path()
+        .join(format!("wind_wridx_ovr_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&overrides);
     std::fs::create_dir_all(&overrides).unwrap();
 

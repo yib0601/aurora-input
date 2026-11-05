@@ -6,11 +6,11 @@
 //!
 //! 自带临时方案与词库，不依赖 `build_dev/data`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 struct TempRoot(PathBuf);
 impl Drop for TempRoot {
@@ -21,7 +21,8 @@ impl Drop for TempRoot {
 
 /// 造一个三维天然码式的临时方案：码元 `a-z1-9`，首码集由 `leading` 给出。
 fn make_schema(tag: &str, leading: &str) -> (PathBuf, PathBuf, TempRoot) {
-    let root = std::env::temp_dir().join(format!("wind_digit_lead_{tag}_{}", std::process::id()));
+    let root = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_digit_lead_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let schemas = root.join("data/schemas");
     std::fs::create_dir_all(schemas.join("trm")).unwrap();

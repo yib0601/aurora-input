@@ -871,7 +871,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(name);
+        let p = aurora_utils::testing::scratch(name).join(name);
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -1610,7 +1610,10 @@ mod tests {
     /// 否则会触发一次同步、把用户对系统短语的修改重置回出厂。
     #[test]
     fn phrase_sys_hash_roams_with_user_dir() {
-        let base = std::env::temp_dir().join(format!("wind_ph_hash_roam_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind_ph_hash_roam_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let loc = |st: &str| crate::store::StateLoc {
             state_dir: base.join(st),

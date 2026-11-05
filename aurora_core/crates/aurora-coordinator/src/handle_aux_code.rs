@@ -593,7 +593,7 @@ mod tests {
 
     /// 同上，但方案段的 `enabled` 可控：`None` = 不写这一行（回落全局基线）。
     fn data_dir_with_aux_enabled(tag: &str, enabled: Option<bool>) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("wind_aux_code_data_{tag}"));
+        let dir = aurora_utils::testing::scratch(&format!("wind_aux_code_data_{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         let aux_code_dir = schemas.join("aux_code");
@@ -631,7 +631,8 @@ mod tests {
         data_dir: std::path::PathBuf,
         tweak: impl FnOnce(&mut Config),
     ) -> Arc<Coordinator> {
-        let path = std::env::temp_dir().join(format!("wind_aux_code_{tag}.redb"));
+        let path =
+            aurora_utils::testing::scratch("aux_code").join(format!("wind_aux_code_{tag}.redb"));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let mut cfg = Config::default();
@@ -914,10 +915,9 @@ mod tests {
     /// `invalidate_aux_code_table`」模拟切方案钩子的行为，验证重挂生效。
     #[test]
     fn schema_switch_invalidates_aux_code_table() {
-        let c = coord_with("switch");
-        let aux_file = std::env::temp_dir()
-            .join("wind_aux_code_data_switch")
-            .join("schemas/aux_code/flypy_test.txt");
+        let dir = data_dir_with_aux("switch");
+        let c = coord_with_data("switch", dir.clone());
+        let aux_file = dir.join("schemas/aux_code/flypy_test.txt");
         let mut st = seed_composition(&c);
         // 首次进入：载入旧表（李=mz/樱=my/河=sk），打 m 命中李+樱。
         let _ = c.enter_aux_code(&mut st, keymap::VK_BACKTICK);
@@ -1455,7 +1455,8 @@ mod tests {
     #[test]
     fn aux_code_schema_override_disables_over_global_on() {
         let dir = data_dir_with_aux_enabled("schema_off", Some(false));
-        let path = std::env::temp_dir().join("wind_aux_code_schema_off.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_aux_code_schema_off.redb");
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let mut cfg = Config::default();
@@ -1915,8 +1916,10 @@ mod tests {
     /// pinyin 方案的 `files` 由调用方给（TOML 数组字面量），并带上 `wbx_id` 方案与 `flypy_test.txt`。
     /// 返回的 [`Cleanup`] 要一直持有到用例结束。
     fn data_dir_with_files(tag: &str, files: &str, wbx_id: &str) -> (std::path::PathBuf, Cleanup) {
-        let dir =
-            std::env::temp_dir().join(format!("wind_aux_code_src_{tag}_{}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!(
+            "wind_aux_code_src_{tag}_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let guard = Cleanup {
             id: wbx_id.to_string(),
@@ -2020,8 +2023,10 @@ mod tests {
         let (dir, _g) = data_dir_with_files("ovr", r#"["aux_code/flypy_test.txt"]"#, &id);
         let ov = dir.join("overrides");
         std::fs::create_dir_all(&ov).unwrap();
-        let path =
-            std::env::temp_dir().join(format!("wind_aux_code_ovr_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_aux_code_ovr_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let mut cfg = Config::default();

@@ -372,7 +372,7 @@ mod tests {
 
     fn store() -> (Store, std::path::PathBuf) {
         // 每个测试独立文件：redb 是单写者，共用文件会让并发测试互相阻塞
-        let p = std::env::temp_dir().join(format!(
+        let p = aurora_utils::testing::scratch("quick_format").join(format!(
             "wind_quick_format_test_{}_{:?}.redb",
             std::process::id(),
             std::thread::current().id()
@@ -408,7 +408,10 @@ mod tests {
         std::fs::write(&f, txt).unwrap();
         s.quick_doc().sync();
         s.set_quick_format_enabled("date", "x", false).unwrap();
-        assert!(aurora_userdata::issues::list_under(&f).is_empty(), "修好就清");
+        assert!(
+            aurora_userdata::issues::list_under(&f).is_empty(),
+            "修好就清"
+        );
         let _ = std::fs::remove_file(&p);
     }
 
@@ -685,7 +688,10 @@ mod tests {
     /// 快捷格式调整落用户目录文件；重开读回。
     #[test]
     fn quick_format_lives_in_user_dir() {
-        let p = std::env::temp_dir().join(format!("wind_qf_file_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_qf_file_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         {
             let s = Store::open(&p).unwrap();

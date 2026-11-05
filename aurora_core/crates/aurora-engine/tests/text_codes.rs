@@ -1,10 +1,10 @@
 //! 按词查编码统一入口的接线验证：系统层（反查索引）+ 用户层（用户词），见
 //! `docs/design/text-code-lookup.md`。夹具自造一个小码表方案，不依赖 build_dev/data。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 造一个码表方案，工=a/aaaa、攻=atyy、公=wcu。`id` 由调用方指定：反查索引磁盘缓存路径按
 /// 方案 id 落在进程外共享目录（`Config::cache_dir`），并发跑测试时同名会撞同一份缓存文件 /
@@ -57,7 +57,7 @@ fn setup_with(
     id: &str,
     pinyin_aux_files: &str,
 ) -> (EngineManager, Arc<aurora_store::Store>, Cleanup) {
-    let dir = std::env::temp_dir().join(format!("wind_text_codes_it_{id}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_text_codes_it_{id}"));
     let _ = std::fs::remove_dir_all(&dir);
     let guard = Cleanup {
         id: id.to_string(),

@@ -11,11 +11,11 @@
 //! 尤其要挡住的是 `mouse_toolbar` 里那个 `unreachable!()`：新变体若漏了第一个
 //! match 的分支就会落到它上面 —— 那是 panic，不是静默，但只有真走一遍才看得见。
 
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 use aurora_config::{Config, ToolbarButtonSpec};
 use aurora_coordinator::Coordinator;
 use aurora_ui_types::{ToolbarAction, UiEvent};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

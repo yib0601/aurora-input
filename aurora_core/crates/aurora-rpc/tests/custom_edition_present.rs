@@ -15,9 +15,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Value, json};
 use aurora_ipc::rpc::Request;
 use aurora_rpc::{CoreRpc, DispatchState, dispatch};
+use serde_json::{Value, json};
 
 struct StubCore;
 
@@ -54,7 +54,8 @@ fn call(state: &DispatchState, method: &str) -> Value {
 #[test]
 fn custom_edition_identity_is_visible_in_log_summary_and_system_info() {
     // ⚠️ 临时目录名带 pid：并发跑测试（或上一轮残留）时共用一个目录会互相删对方的夹具。
-    let tmp = std::env::temp_dir().join(format!(
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join(format!(
         "wind_custom_edition_present_{}",
         std::process::id()
     ));

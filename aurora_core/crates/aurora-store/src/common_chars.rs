@@ -291,7 +291,7 @@ mod tests {
     /// 每个测试独立文件：redb 是单写者，共用文件会让并发测试互相阻塞。
     /// `tag` 区分同一测试里需要的第二个库（导入导出对拷）。
     fn store(tag: &str) -> Store {
-        let p = std::env::temp_dir().join(format!(
+        let p = aurora_utils::testing::scratch(tag).join(format!(
             "wind_common_chars_test_{}_{}_{:?}.redb",
             std::process::id(),
             tag,

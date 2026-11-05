@@ -6,9 +6,9 @@
 //! 为什么不能半启用：半解析出来的清单可能丢掉 `hide` 名单，于是定制版里本该被删掉的
 //! 方案又冒出来——诡异且难以归因。而「完全变回原版」现象足够明显，用户会立刻报障。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_config::app_compat::AppCompat;
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -19,7 +19,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
 
 #[test]
 fn unparsable_manifest_disables_the_whole_custom_layer() {
-    let tmp = std::env::temp_dir().join("wind_custom_manifest_invalid_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_custom_manifest_invalid_e2e");
     let root = tmp.join("install");
     let data = root.join("data");
     let custom = root.join("data_custom");

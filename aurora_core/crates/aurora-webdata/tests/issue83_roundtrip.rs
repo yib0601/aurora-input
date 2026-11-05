@@ -2,12 +2,12 @@
 //!
 //! 单元测试各自钉住一环，这条把环连起来跑一遍——环与环之间的接缝（键的形态、默认判定的
 //! 方向、导出格式的往返）正是本 issue 反复出问题的地方。
-use serde_json::{Value, json};
-use std::sync::Arc;
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_store::Store;
 use aurora_webdata::WebDataRpc;
+use serde_json::{Value, json};
+use std::sync::Arc;
 
 /// 只带 `common_han` 类的临时数据目录。
 ///
@@ -18,7 +18,7 @@ use aurora_webdata::WebDataRpc;
 /// **表态类的成员**——列了名单，那几个字就会出现在列表里。给一段用不到的 PUA 码位，
 /// 既让这个类有内容（不触发「名单为空就撤销表态」那道安全阀），又不往全表里塞东西。
 fn charsets_data_dir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("wind_issue83_data_{tag}_{}", std::process::id()));
+    let d = aurora_utils::testing::scratch(&format!("wind_issue83_data_{tag}"));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(d.join("charsets")).unwrap();
     std::fs::write(
@@ -39,7 +39,7 @@ outside: rare
 }
 
 fn coord(tag: &str) -> Arc<Coordinator> {
-    let p = std::env::temp_dir().join(format!("wind_issue83_{tag}_{}.redb", std::process::id()));
+    let p = aurora_utils::testing::scratch(&format!("wind_issue83_{tag}")).join("store.redb");
     let _ = std::fs::remove_file(&p);
     let data = charsets_data_dir(tag);
     Coordinator::new_headless_with_store(

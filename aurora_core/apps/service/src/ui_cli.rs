@@ -47,7 +47,9 @@ fn print_usage() {
 
 fn cmd_toast(rest: &[String]) -> anyhow::Result<i32> {
     let Some(text) = rest.first() else {
-        anyhow::bail!("用法: aurora_input ui toast <文案> [--kind …] [--color …] [--pos …] [--ms …]");
+        anyhow::bail!(
+            "用法: aurora_input ui toast <文案> [--kind …] [--color …] [--pos …] [--ms …]"
+        );
     };
     let mut params = json!({ "text": text });
     let mut it = rest[1..].iter();

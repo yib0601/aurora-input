@@ -15,12 +15,12 @@
 //! - 禁用一个启用中的库经 [`DisabledDictLayers::mark_disabled`] 进入影子集合、已加载的作废；
 //!   启用方向不经这里——引擎整体失效重建，影子层随之重建。
 
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use aurora_candidate::Candidate;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::{DictManager, SystemDictLayer};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// 读一个扩展库的闭包：由构建方（`EngineManager`）按方案配置捕获路径 / 缓存参数。
 pub type DictLoader = Arc<dyn Fn() -> anyhow::Result<CachedDict> + Send + Sync>;
@@ -148,8 +148,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use aurora_dict::codetable::CodetableDict;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn mem_source(
         id: &str,

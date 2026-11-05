@@ -15,13 +15,13 @@
 //!
 //! 词典缺失时自动跳过。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -66,7 +66,7 @@ fn candidates_for(schema: &str, input: &str) -> Vec<String> {
 }
 
 fn fresh_store(tag: &str) -> Arc<Store> {
-    let root = std::env::temp_dir().join(format!(
+    let root = aurora_utils::testing::scratch(tag).join(format!(
         "wind_zero_weight_yield_{tag}_{}",
         std::process::id()
     ));

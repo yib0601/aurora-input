@@ -1398,7 +1398,7 @@ mod tests {
     }
 
     fn tmp(tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("wind_compat_adm_{tag}_{}", std::process::id()))
+        aurora_utils::testing::scratch(&format!("wind_compat_adm_{tag}"))
     }
 
     const SYS: &str = "\
@@ -3550,11 +3550,7 @@ mod window_admin_tests {
     }
 
     fn rpc_dirs(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let base = std::env::temp_dir().join(format!(
-            "wind_compat_p4_{tag}_{}_{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let base = aurora_utils::testing::scratch(&format!("wind_compat_p4_{tag}"));
         let (d, u) = (base.join("data"), base.join("user"));
         std::fs::create_dir_all(&d).unwrap();
         std::fs::create_dir_all(&u).unwrap();
@@ -3660,7 +3656,8 @@ mod window_admin_tests {
         assert_eq!(row["caret_use_top"], json!(false), "{row:?}");
         assert_eq!(row["unset"], json!(["first_show_mode"]), "{row:?}");
 
-        let base = std::env::temp_dir().join(format!(
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join(format!(
             "wind_compat_p4_copy_{}_{:?}",
             std::process::id(),
             std::thread::current().id()

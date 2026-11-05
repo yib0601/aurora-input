@@ -18,11 +18,11 @@
 //!
 //! ⚠️ 词库缺失时静默跳过（同 `english_engine_is_shared.rs` 的约定）。
 
+use aurora_config::Config;
+use aurora_engine::EngineManager;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
-use aurora_config::Config;
-use aurora_engine::EngineManager;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -45,7 +45,10 @@ fn a_malformed_english_schema_typed_as_mixed_must_not_deadlock() {
 
     // 目录名带进程号：并发会话同时跑本用例会互相删目录，english.toml 被删掉后 english 按
     // 普通方案加载，用例恒绿却什么也没测到。
-    let ov = std::env::temp_dir().join(format!("wind_en_self_borrow_ov_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let ov = tmp
+        .path()
+        .join(format!("wind_en_self_borrow_ov_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).unwrap();
     // 先把畸形 override 落盘，再建 manager——让它从一开始就读到 type = "mixed"。

@@ -30,6 +30,9 @@ pub mod syllable;
 pub mod viterbi;
 
 use crate::engine::{BoundaryResolution, ConvertOptions, ConvertResult, Engine, EngineType};
+use aurora_candidate::{Candidate, CandidateSource};
+use aurora_dict::DictManager;
+use aurora_dict::cached::CachedDict;
 use dag::{Dag, SegGraph};
 use fuzzy::FuzzyConfig;
 use generate::CharPinyinIndex;
@@ -39,9 +42,6 @@ use shuangpin::ShuangpinConverter;
 use std::sync::{Arc, OnceLock};
 use syllable::SyllableTrie;
 use viterbi::{ViterbiDecoder, WordNode};
-use aurora_candidate::{Candidate, CandidateSource};
-use aurora_dict::DictManager;
-use aurora_dict::cached::CachedDict;
 
 /// 整句解的**等效词频**：把 Viterbi 路径分换算回词频域，与其余候选同量纲。
 ///
@@ -5696,7 +5696,7 @@ mod tests {
     }
 
     fn tmp_store(name: &str) -> Arc<Store> {
-        let p = std::env::temp_dir().join(format!("wind_pinyin_{name}.redb"));
+        let p = aurora_utils::testing::scratch("pinyin").join(format!("wind_pinyin_{name}.redb"));
         let _ = std::fs::remove_file(&p);
         Arc::new(Store::open(&p).unwrap())
     }
@@ -7085,7 +7085,8 @@ i = ["i"]
     /// `tag` 用于隔离临时文件名——多个用例并发跑，共用一个文件名会互相截断。
     fn sp_fp_engine(tag: &str, entries: &[(&str, &str, i32)], allow: bool) -> PinyinEngine {
         use std::io::Write;
-        let path = std::env::temp_dir().join(format!("wind_fp_fallback_{tag}.dict.yaml"));
+        let path = aurora_utils::testing::scratch("fp_fallback")
+            .join(format!("wind_fp_fallback_{tag}.dict.yaml"));
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: py\n...").unwrap();
@@ -7117,7 +7118,8 @@ i = ["i"]
     #[test]
     fn full_pinyin_fallback_ignores_shared_key() {
         use std::io::Write;
-        let path = std::env::temp_dir().join("wind_fp_fallback_shared_key.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_fp_fallback_shared_key.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: py\n...").unwrap();
@@ -7768,7 +7770,8 @@ s = ["ao"]
     fn shuangpin_rejects_mismatched_syllable_split() {
         use crate::pinyin::shuangpin::{Layout, ShuangpinConverter};
         use std::io::Write;
-        let path = std::env::temp_dir().join("wind_sp_boundary_check.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_sp_boundary_check.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: py\n...").unwrap();
@@ -7818,7 +7821,8 @@ s = ["ao"]
     fn shuangpin_uses_own_split_for_lookup_not_dag() {
         use crate::pinyin::shuangpin::{Layout, ShuangpinConverter};
         use std::io::Write;
-        let path = std::env::temp_dir().join("wind_sp_lookup_split.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_sp_lookup_split.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: py\n...").unwrap();
@@ -7870,7 +7874,8 @@ s = ["ao"]
     fn shuangpin_keeps_own_semantics_with_unmatched_pair() {
         use crate::pinyin::shuangpin::{Layout, ShuangpinConverter};
         use std::io::Write;
-        let path = std::env::temp_dir().join("wind_sp_writeback_strict.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_sp_writeback_strict.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: py\n...").unwrap();
@@ -9117,7 +9122,8 @@ s = ["ao"]
     #[test]
     fn full_pinyin_fallback_hint_uses_raw_input_for_trailing() {
         use std::io::Write;
-        let path = std::env::temp_dir().join("wind_fp_fallback_hint.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_fp_fallback_hint.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: py\n...").unwrap();

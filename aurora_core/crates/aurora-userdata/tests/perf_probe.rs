@@ -1,13 +1,14 @@
 //! 性能形状探针（`cargo test --release -- --ignored --nocapture`）。不进常规测试：只打印耗时，
 //! 供改动前后对比；断言只守住数量级（防回退成 O(全表) 物化）。
-use std::sync::Arc;
-use std::time::Instant;
 use aurora_userdata::engine::{Dirs, Op, UserData};
 use aurora_userdata::record::{OpKind, Payload, Target};
 use aurora_userdata::runtime::Runtime;
+use std::sync::Arc;
+use std::time::Instant;
 
 fn open(name: &str) -> Runtime {
-    let d = std::env::temp_dir().join(format!("wind_perf_{name}-{}", std::process::id()));
+    let d = aurora_utils::testing::scratch(name)
+        .join(format!("wind_perf_{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     Runtime::new(Arc::new(
         UserData::open(Dirs {

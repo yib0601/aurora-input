@@ -17,16 +17,16 @@
 //!
 //! 自带 wdat 夹具，不依赖 `build_dev/data`（同 `pinyin_mixed_abbrev.rs` 的理由）。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::datformat::WdatWriter;
 use aurora_engine::Engine;
 use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 use aurora_store::Store;
+use std::sync::Arc;
 
 /// 最小系统词库：只放一个 `nihao`，让系统侧不参与本文件的断言。
 fn sys_dict(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_store_abbrev_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_store_abbrev_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -38,7 +38,8 @@ fn sys_dict(tag: &str) -> CachedDict {
 }
 
 fn store(tag: &str) -> Arc<Store> {
-    let p = std::env::temp_dir().join(format!("wind_store_abbrev_{tag}.redb"));
+    let p = aurora_utils::testing::scratch("store_abbrev")
+        .join(format!("wind_store_abbrev_{tag}.redb"));
     let _ = std::fs::remove_file(&p);
     Arc::new(Store::open(&p).unwrap())
 }

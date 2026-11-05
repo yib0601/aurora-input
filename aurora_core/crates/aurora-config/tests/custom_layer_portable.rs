@@ -12,8 +12,8 @@
 //!
 //! ⚠️ 全文件仅此一个 `#[test]`：`is_portable()` 与 `custom_manifest()` 都是 OnceLock。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -24,7 +24,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
 
 #[test]
 fn portable_layout_keeps_layer_order() {
-    let tmp = std::env::temp_dir().join("wind_custom_layer_portable_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_custom_layer_portable_e2e");
     let root = tmp.join("PortableApp");
     let data = root.join("data");
     let custom = root.join("data_custom");

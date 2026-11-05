@@ -26,7 +26,8 @@ fn dict_ready() -> bool {
 
 /// 临时根（redb + override 目录）。⚠️ 名字带 pid：多会话并行跑测试时固定名会互删夹具。
 fn tmp_root(tag: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("wind_sdapi_{tag}_{}", std::process::id()));
+    let root = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_sdapi_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("overrides")).unwrap();
     root

@@ -9,13 +9,13 @@
 //! ⚠️ `build_dev/data` 不存在时整族静默跳过而计数照绿，判据是耗时（正常 ≥1s）
 //! 与输出里有没有「跳过」。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -777,7 +777,8 @@ fn short_code_yield_skipped_under_wildcard() {
         return;
     }
     let first_at = |level: usize| {
-        let ov = std::env::temp_dir().join(format!("wind_wcard_scy_{level}"));
+        let tmp = tempfile::tempdir().unwrap();
+        let ov = tmp.path().join(format!("wind_wcard_scy_{level}"));
         std::fs::create_dir_all(&ov).expect("建 override 目录失败");
         std::fs::write(
             ov.join("wubi86.toml"),
@@ -810,8 +811,10 @@ fn commit_under_wildcard_records_freq_by_full_code() {
     // 标点顶屏取 Shift+1（「！」）：出厂 `,` `.` 在组码中是翻页键；码表的标点顶屏
     // 开关（`punct_commit`）出厂关，这里打开。
     for (tag, vk, shift) in [("space", VK_SPACE, false), ("bang", 0x31, true)] {
-        let base =
-            std::env::temp_dir().join(format!("wind_wcard_freq_{tag}_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind_wcard_freq_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let ov = base.join("override");
         std::fs::create_dir_all(&ov).unwrap();

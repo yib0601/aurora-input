@@ -465,8 +465,8 @@ mod tests {
     /// 不存在的段名当场拒绝（不落盘）
     #[test]
     fn unknown_tooltip_section_is_rejected() {
-        let dir = std::env::temp_dir();
-        assert!(set_tooltip_section_enabled(&dir, "没有这一段", true).is_err());
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(set_tooltip_section_enabled(tmp.path(), "没有这一段", true).is_err());
     }
 
     /// 注册表里报成 enum 的键都要带值域：设置页拿空选项画不出选择器（LayoutEnum 曾漏填）。

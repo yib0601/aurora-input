@@ -93,7 +93,10 @@ mod tests {
 
     #[test]
     fn state_roundtrip_and_corrupt_file_reads_as_unknown() {
-        let d = std::env::temp_dir().join(format!("wind_state-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let p = d.join("state");
@@ -125,7 +128,8 @@ mod tests {
 
     #[test]
     fn atomic_write_replaces_whole_file() {
-        let d = std::env::temp_dir().join(format!("wind_aw-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!("wind_aw-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         let p = d.join("f.bin");
         atomic_write(&p, b"long old content").unwrap();
@@ -135,7 +139,10 @@ mod tests {
 
     #[test]
     fn state_with_unknown_version_is_treated_as_missing() {
-        let d = std::env::temp_dir().join(format!("wind_state_ver-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_state_ver-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         let p = d.join("state");
         let s = State {

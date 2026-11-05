@@ -28,7 +28,7 @@ fn data_dir() -> Option<PathBuf> {
 
 /// `words` = (code, text, weight, boundary)。每个用例独立目录，避免串扰。
 fn manager(dir: &Path, tag: &str, words: &[(&str, &str, i32, u64)]) -> EngineManager {
-    let root = std::env::temp_dir().join(format!("wind_uw_boundary_{tag}"));
+    let root = aurora_utils::testing::scratch(&format!("wind_uw_boundary_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));
@@ -51,7 +51,7 @@ fn manager(dir: &Path, tag: &str, words: &[(&str, &str, i32, u64)]) -> EngineMan
 
 /// 同 [`manager`]，但激活**双拼**方案（用户词仍写 `pinyin`——拼音族 data_schema_id 折叠）。
 fn manager_shuangpin(dir: &Path, tag: &str, words: &[(&str, &str, i32, u64)]) -> EngineManager {
-    let root = std::env::temp_dir().join(format!("wind_uw_boundary_{tag}"));
+    let root = aurora_utils::testing::scratch(&format!("wind_uw_boundary_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));

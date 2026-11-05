@@ -7,14 +7,14 @@
 //! 层的不带，`cmp_match_layers` 先于权重），那里用户词本来就排在系统补全之后，与权重无关。
 //! 词库缺失时整族跳过（worktree 里要自备 `build_dev/data`，核对耗时）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::RawCandidateMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -39,7 +39,8 @@ fn zero_weight_user_word_leads_same_code_ranked_word() {
         eprintln!("跳过：英文词库或名次表不存在");
         return;
     }
-    let path = std::env::temp_dir().join("wind_en_user_over_ranked.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("wind_en_user_over_ranked.redb");
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(Store::open(&path).unwrap());
     // 与系统词 product（有名次）同码、文本不同。

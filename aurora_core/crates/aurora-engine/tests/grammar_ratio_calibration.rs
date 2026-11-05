@@ -24,9 +24,9 @@
 //! ⚠️ 要看未经闸门过滤的原始分布时，注意本探针跑的是**闸门之后**的候选：被拦下的整句
 //! 不会出现在 `candidates` 里。标定新阈值时应先临时放行再测。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

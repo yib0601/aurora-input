@@ -15,11 +15,11 @@
 //! ⚠️ `build_dev/data` 不存在时**整族跳过而计数照绿**（判据是耗时：正常秒级，跳过 0.0x s）。
 //! 恢复命令 `.\scripts\dev.ps1 gd`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

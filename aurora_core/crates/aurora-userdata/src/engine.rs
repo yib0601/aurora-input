@@ -1961,7 +1961,10 @@ mod tests {
     /// 折回写到一半崩溃（新 wdat 已写、sidecar 未写）：重开后已折回的与未折回的都在。
     #[test]
     fn crash_mid_fold_loses_nothing() {
-        let d = std::env::temp_dir().join(format!("wind_ud_halffold-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_ud_halffold-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let dirs = || Dirs {
             state_dir: d.clone(),
@@ -1987,7 +1990,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
     fn dirs_for(name: &str) -> (std::path::PathBuf, Dirs) {
-        let d = std::env::temp_dir().join(format!("wind_ud_{name}-{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(name)
+            .join(format!("wind_ud_{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         (
             d.clone(),

@@ -1339,7 +1339,8 @@ text = "$RESULT"
     #[test]
     fn load_of_empty_file_falls_back_to_builtin() {
         // 空表（合法 TOML 但零条目）必须兜底，否则快捷输入整个哑掉
-        let dir = std::env::temp_dir().join("wind_quick_fmt_empty_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_quick_fmt_empty_test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("system.quick.toml");
         std::fs::write(&p, "# 空表\n").unwrap();
@@ -1349,7 +1350,8 @@ text = "$RESULT"
 
     #[test]
     fn load_of_broken_file_falls_back_to_builtin() {
-        let dir = std::env::temp_dir().join("wind_quick_fmt_broken_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_quick_fmt_broken_test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("system.quick.toml");
         std::fs::write(&p, "[[formats]]\nid = ").unwrap();

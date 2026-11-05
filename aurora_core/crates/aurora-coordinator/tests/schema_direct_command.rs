@@ -19,11 +19,11 @@
 //! 故每个用例都断言没有「命令执行失败」toast：那是求值/派发出错的唯一出口，
 //! 不看它就会把「命令压根没跑」误读成「切换逻辑不对」。
 
-use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ui_types::UiCommand;
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

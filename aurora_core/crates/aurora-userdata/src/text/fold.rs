@@ -426,7 +426,10 @@ pub fn commit_text(path: &Path, bytes: &[u8], expect_fp: Option<&str>) -> anyhow
 mod tests {
     #[test]
     fn preserve_corrupt_renames_with_stamp_and_never_collides() {
-        let d = std::env::temp_dir().join(format!("wind_preserve-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_preserve-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let f = d.join("a.toml");
@@ -451,7 +454,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn root(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_fold_{name}-{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(name)
+            .join(format!("wind_fold_{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         register_data_root(&d);
@@ -480,7 +484,10 @@ mod tests {
         assert_eq!(backup_path(&f), bak);
         assert_eq!(std::fs::read_to_string(&bak).unwrap(), "1\n");
         // 没登记的目录照旧同目录 `.bak`
-        let other = std::env::temp_dir().join(format!("wind_fold_unreg-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let other = tmp
+            .path()
+            .join(format!("wind_fold_unreg-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&other);
         let g = other.join("a.toml");
         commit_text(&g, b"1", None).unwrap();
@@ -658,7 +665,10 @@ mod tests {
     /// 钩子是进程级的，并发的测试各装各的：一个测试卸下自己的钩子，不能顺手卸掉别人的。
     #[test]
     fn removing_one_hook_keeps_the_others() {
-        let d = std::env::temp_dir().join(format!("wind_fold_hooks-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_fold_hooks-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let me = std::thread::current().id();

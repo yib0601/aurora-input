@@ -11,19 +11,19 @@
 //!
 //! 自带 wdat 夹具 + 真 redb store，不依赖 `build_dev/data`。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::datformat::WdatWriter;
 use aurora_engine::Engine;
 use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 use aurora_store::Store;
+use std::sync::Arc;
 
 /// bai|cheng|xian → 位 0/3/8
 const BCX_BOUNDARY: u64 = 0b100001001;
 
 /// 系统词库：`bcx` 下只有「不出现」，`rmzf` 下是「人民政府」。**没有**「拜城县」。
 fn sys_dict(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_s2abbr_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_s2abbr_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -45,7 +45,7 @@ fn sys_dict(tag: &str) -> CachedDict {
 }
 
 fn store(tag: &str) -> Arc<Store> {
-    let p = std::env::temp_dir().join(format!("wind_s2abbr_{tag}.redb"));
+    let p = aurora_utils::testing::scratch("s2abbr").join(format!("wind_s2abbr_{tag}.redb"));
     let _ = std::fs::remove_file(&p);
     Arc::new(Store::open(&p).unwrap())
 }

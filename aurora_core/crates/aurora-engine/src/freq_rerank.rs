@@ -23,9 +23,9 @@
 //! 而非 dict 查询层或 coordinator。本模块即该排序层的纯函数实现，由 coordinator 在排序后调用。
 
 use crate::manager::{FreqStrategy, PromotePrefix};
-use std::collections::HashMap;
 use aurora_candidate::Candidate;
 use aurora_store::freq::{FreqProfile, FreqRecord};
+use std::collections::HashMap;
 
 /// 按**输入码长**分级的首选保护策略（见 docs/design/codetable-freq-short-code-protection.md）。
 ///

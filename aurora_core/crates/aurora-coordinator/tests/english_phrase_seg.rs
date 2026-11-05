@@ -7,14 +7,14 @@
 //! 词典缺失时整族**静默跳过**（判据是耗时而非通过条数），worktree 需自备 `build_dev`。
 //! 见 `has_english_schema`。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::FreeInputMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// `'` 键。
 const VK_QUOTE: u32 = 0xDE;
@@ -52,7 +52,7 @@ fn english_config(phrase_seg: bool) -> Config {
 }
 
 fn coord_with(cfg: Config, tag: &str) -> Arc<Coordinator> {
-    let path = std::env::temp_dir().join(format!("wind_en_seg_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_en_seg_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     Coordinator::new_headless_with_store(
         cfg,

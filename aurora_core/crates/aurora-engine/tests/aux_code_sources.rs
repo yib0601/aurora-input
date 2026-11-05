@@ -1,11 +1,11 @@
 //! `[engine.aux_code].files` 的两种条目：文件路径与 `schema:<id>` 方案引用。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::{AuxSource, EngineManager};
+use std::path::PathBuf;
 
 fn setup(tag: &str, files: &str) -> (EngineManager, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("wind_aux_src_{tag}_{}", std::process::id()));
+    let dir = aurora_utils::testing::scratch(&format!("wind_aux_src_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let schemas = dir.join("schemas");
     std::fs::create_dir_all(schemas.join("aux_code")).unwrap();
@@ -68,7 +68,10 @@ fn plain_file_entries_behave_as_before() {
 /// 见 `docs/design/aux-code-direct.md` §7。
 #[test]
 fn direct_requires_enabled_and_shuangpin() {
-    let dir = std::env::temp_dir().join(format!("wind_aux_direct_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp
+        .path()
+        .join(format!("wind_aux_direct_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let schemas = dir.join("schemas");
     std::fs::create_dir_all(schemas.join("aux_code")).unwrap();
@@ -133,7 +136,10 @@ fn direct_requires_enabled_and_shuangpin() {
 /// 逐键路径用的缓存版：设置页写方案覆盖层、重载全局配置之后立即看到新值（不能拿着旧值）。
 #[test]
 fn cached_settings_follow_override_writes_and_reload() {
-    let dir = std::env::temp_dir().join(format!("wind_aux_cache_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp
+        .path()
+        .join(format!("wind_aux_cache_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let schemas = dir.join("schemas");
     let ov = dir.join("overrides");

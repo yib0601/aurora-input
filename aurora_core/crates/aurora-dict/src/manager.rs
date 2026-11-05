@@ -428,7 +428,8 @@ mod tests {
     /// 使 search_with_boundary 沦为全仓无消费方的死代码。
     #[test]
     fn system_layer_carries_boundary_into_candidates() {
-        let path = std::env::temp_dir().join("wind_layer_boundary.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_layer_boundary.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: py\n...").unwrap();
@@ -629,7 +630,10 @@ mod tests {
     /// 内存词库（wdat 写失败的降级形态）给 `None`：没有稳定产物可比 ⇒ 派生索引不落盘。
     #[test]
     fn entries_digest_tracks_content_file_and_weight_transform() {
-        let dir = std::env::temp_dir().join(format!("wind_entries_digest_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_entries_digest_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let yaml = dir.join("en.dict.yaml");

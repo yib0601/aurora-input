@@ -22,9 +22,9 @@
 //! ⚠️ 全文件仅此一个 `#[test]`：`Config::custom_manifest()` 是 OnceLock，理由同
 //! `aurora-engine/tests/custom_layer_hide.rs`。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
+use std::path::{Path, PathBuf};
 
 /// 真实数据层：仓库根的 `build_dev/data`（**只读**——它是主仓 junction 共享的产物目录，
 /// 测试绝不写它。本用例的 custom / user 两层都在临时目录里）。
@@ -50,7 +50,8 @@ fn hidden_schema_is_skipped_as_mix_member_while_others_stay() {
     }
 
     // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-    let tmp = std::env::temp_dir().join(format!(
+    let tmpdir = tempfile::tempdir().unwrap();
+    let tmp = tmpdir.path().join(format!(
         "wind_coord_custom_hide_mix_e2e-{}",
         std::process::id()
     ));

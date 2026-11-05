@@ -12,11 +12,11 @@
 //!
 //! 每加一类键，先在这里加断言。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_host::{KeyProbe, Modifiers};
 use aurora_keys::keymap;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

@@ -408,7 +408,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(name);
+        let p = aurora_utils::testing::scratch(name).join(name);
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -617,7 +617,10 @@ mod tests {
     /// §10 退出判据：词频记录 / 批量查、联想、草稿读写都不经过 redb Mutex。
     #[test]
     fn draft_freq_assoc_hot_paths_do_not_touch_redb() {
-        let p = std::env::temp_dir().join(format!("wind_freq_hot-{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_freq_hot-{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let s = std::sync::Arc::new(Store::open(&p).unwrap());
         s.pause().unwrap();

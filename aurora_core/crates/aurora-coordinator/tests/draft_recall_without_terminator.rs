@@ -16,13 +16,13 @@
 //! `handle_focus_lost` 去「等落库」——那等于测试替被测系统做了它自己不做的事。
 //! 本文件的要害就是**刻意不调任何断流**，与真实使用姿势一致。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -67,7 +67,8 @@ fn a_fresh_draft_is_recallable_without_any_stream_terminator() {
     cfg.input.default.chinese_mode = true;
     cfg.schema.codetable.auto_phrase.enabled = true;
 
-    let db = std::env::temp_dir().join("wind_draft_repro_xnsm.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_draft_repro_xnsm.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), Arc::clone(&store));

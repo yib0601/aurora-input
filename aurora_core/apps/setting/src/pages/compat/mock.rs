@@ -380,14 +380,12 @@ mod tests {
     use aurora_config::compat_admin::rpc;
     use std::path::{Path, PathBuf};
 
-    fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "wind_setting_compat_mock_{tag}_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&d);
+    /// 返回 `TempDir` 一并交给调用方持有：它一旦 drop 就删掉整个临时目录。
+    fn tmp(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!("wind_setting_compat_mock_{tag}"));
         std::fs::create_dir_all(&d).unwrap();
-        d
+        (tmp, d)
     }
 
     fn mock_dir() -> PathBuf {
@@ -396,7 +394,8 @@ mod tests {
 
     /// 用**核心真实的 RPC 实现**跑夹具，得到每份 mock 应答应有的样子。
     fn generate() -> Vec<(&'static str, Value)> {
-        let (d, u) = (tmp("d"), tmp("u"));
+        let (_t1, d) = tmp("d");
+        let (_t2, u) = tmp("u");
         std::fs::write(d.join("compat.toml"), fixture::SYSTEM).unwrap();
         std::fs::write(u.join("compat.toml"), fixture::USER).unwrap();
         let call = |m: &str, p: Value| -> Value {

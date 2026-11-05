@@ -320,7 +320,7 @@ mod tests {
     }
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(name);
+        let p = aurora_utils::testing::scratch(name).join(name);
         let _ = std::fs::remove_file(&p);
         p
     }

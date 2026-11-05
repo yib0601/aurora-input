@@ -18,14 +18,14 @@
 //! 词典缺失时整族**静默跳过**（判据是耗时而非通过条数），worktree 需自备 `build_dev`。
 //! 见 `has_english_schema`。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::RawCandidateMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SPACE: u32 = 0x20;
 
@@ -70,7 +70,7 @@ fn temp_english_config() -> Config {
 }
 
 fn store_at(tag: &str) -> Arc<Store> {
-    let path = std::env::temp_dir().join(format!("wind_en_head_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_en_head_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     Arc::new(Store::open(&path).unwrap())
 }
@@ -342,7 +342,8 @@ fn in_dict_pins_raw_above_frequency_when_input_is_a_dict_word() {
         eprintln!("跳过：缺少英文方案或词库");
         return;
     }
-    let path = std::env::temp_dir().join("wind_en_head_indict_hit.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("wind_en_head_indict_hit.redb");
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(Store::open(&path).unwrap());
     // 让 `hello` 在调频上明显压过 `hell`，据此才测得出「原文候选不受调频影响」。
@@ -437,7 +438,8 @@ fn in_dict_applies_to_temp_english_after_case_projection() {
     // 的话，判据放在投影前后都能过（实测变异确认过这条假绿）。真正的差别是**受不受调频
     // 影响**——头部候选钉最前，词库候选会被高频词顶下去。故让 `hello` 高频，再看 `Hell`
     // 还在不在首位。
-    let path = std::env::temp_dir().join("wind_en_head_indict_temp_hit.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("wind_en_head_indict_temp_hit.redb");
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(Store::open(&path).unwrap());
     for _ in 0..9 {

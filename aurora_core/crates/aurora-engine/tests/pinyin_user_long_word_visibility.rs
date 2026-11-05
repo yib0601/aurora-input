@@ -57,7 +57,7 @@ fn code_and_boundary() -> (String, u64) {
 }
 
 fn manager(dir: &Path, tag: &str, max_extra: u32) -> EngineManager {
-    let root = std::env::temp_dir().join(format!("wind_uw_visible_{tag}"));
+    let root = aurora_utils::testing::scratch(&format!("wind_uw_visible_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));

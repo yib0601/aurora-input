@@ -6,13 +6,13 @@
 //!
 //! 缺 `build_dev/data` 时自动跳过并打印原因（本组真跑也只要零点几秒，不能拿耗时判假绿）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_coordinator::web_host::WebDataHost;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_ALT};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

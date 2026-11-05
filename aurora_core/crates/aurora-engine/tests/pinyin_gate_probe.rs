@@ -37,7 +37,8 @@ fn gate_fixed_point_probe() {
         return;
     };
 
-    let root = std::env::temp_dir().join("wind_pinyin_gate_probe");
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("wind_pinyin_gate_probe");
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));

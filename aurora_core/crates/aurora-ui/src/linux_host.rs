@@ -241,12 +241,9 @@ mod tests {
         assert_eq!(pick(&["DISPLAY"], &["wl-copy"]), None);
     }
 
-    /// 本测试独占的临时目录（进程号 + 用例名，并发用例不撞）。
+    /// 本测试独占的临时目录（交给 `aurora_utils::testing` 按测试线程托管，用例结束即删）。
     fn scratch(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_lh_{}_{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        aurora_utils::testing::scratch(&format!("wind_lh_{tag}"))
     }
 
     /// 假剪贴板工具：不读 stdin、不写 stdout，起一个后代 `sleep` 一直占着继承来的管道——

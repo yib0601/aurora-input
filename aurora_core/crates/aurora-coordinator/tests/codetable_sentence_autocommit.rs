@@ -6,13 +6,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -61,7 +61,8 @@ impl std::ops::Deref for Fixture {
 /// 方案 `schema` 的 `[engine.codetable]` 段写 `body`；目录名带 tag + pid，并行用例 /
 /// 并行的 `cargo test` 不互相删库。
 fn coord_for(schema: &str, tag: &str, body: &str, global_auto: bool) -> Fixture {
-    let root = std::env::temp_dir().join(format!("wind_sentence_ac_{tag}_{}", std::process::id()));
+    let root = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_sentence_ac_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let ov = root.join("overrides");
     std::fs::create_dir_all(&ov).unwrap();

@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{parse, Entry};
+use super::{Entry, parse};
 
 /// 一条问题的可读描述。返回 `Vec<String>` 而不是结构化错误类型：它唯一的消费者是
 /// `assert!(problems.is_empty(), "{problems:#?}")`，人读的字符串比枚举更有用。
@@ -732,11 +732,7 @@ other = "{count} 个文件"
     }
 
     fn temp_src_dir(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "windui_lint_{tag}_{}_{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let d = aurora_utils::testing::scratch(&format!("windui_lint_{tag}"));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("sub")).expect("建临时目录");
         for (name, body) in files {

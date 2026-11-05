@@ -33,7 +33,7 @@ use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 /// （`syllables.len() >= 2` 才启动）在这些输入上要么不跑、要么产出被词典整词压过，
 /// 故这里的权重只影响排序，不影响「某词在不在候选里」这一唯一被断言的事实。
 fn fixture(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_shadow_code_domain_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_shadow_code_domain_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

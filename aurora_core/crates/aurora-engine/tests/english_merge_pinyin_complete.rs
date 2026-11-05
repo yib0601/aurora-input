@@ -6,10 +6,10 @@
 //!
 //! 词库缺失时整族跳过（worktree 里要自备 `build_dev/data`，核对耗时）。
 
-use std::path::PathBuf;
 use aurora_candidate::CandidateSource;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

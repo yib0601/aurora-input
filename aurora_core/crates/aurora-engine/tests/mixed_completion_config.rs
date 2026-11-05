@@ -23,9 +23,9 @@
 //! `zaim` = zai + 残码 m ⇒ `started = 2`。真实词库下拼音侧有 2 音节的「在吗」「再买」与
 //! 3 音节的「在美国」「在没有」，恰好跨门槛，与 `pinyin_completion_recall_gate` 同一组样本。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 const SCHEMA: &str = "wubi86_pinyin";
 

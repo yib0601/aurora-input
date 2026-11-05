@@ -7,13 +7,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data`；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_CTRL, MOD_SHIFT};
 use aurora_ui_types::MenuCmd;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -33,9 +33,9 @@ fn has_data() -> bool {
 fn root() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
     ROOT.get_or_init(|| {
-        // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-        let root = std::env::temp_dir().join(format!("wind_conv_toggle-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        // 进程级托管：目录活到进程退出（unix 由 atexit 删）；`scratch()` 会被首个
+        // test 线程结束时删掉，而 OnceLock 还缓存着它。
+        let root = aurora_utils::testing::process_scratch("conv_toggle");
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::create_dir_all(root.join("userdata")).unwrap();
         std::fs::write(root.join(aurora_config::variant::PORTABLE_MARKER_NAME), "").unwrap();

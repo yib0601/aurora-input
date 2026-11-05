@@ -1645,7 +1645,7 @@ mod tests {
     fn english_add_word_code_is_lowercased_word() {
         let f = Coordinator::english_add_word_code;
         assert_eq!(f("Hello"), ("hello".to_string(), 0));
-        assert_eq!(f("AuroraInput"), ("windinput".to_string(), 0));
+        assert_eq!(f("AuroraInput"), ("aurorainput".to_string(), 0));
         // 连字符/下划线/数字都是英文标识符里的常见成分，只要还有字母就放行。
         assert_eq!(f("well-known"), ("well-known".to_string(), 0));
         assert_eq!(f("utf8"), ("utf8".to_string(), 0));
@@ -1691,7 +1691,8 @@ mod tests {
         tag: &str,
         clip: &str,
     ) -> (Arc<Coordinator>, Arc<std::sync::atomic::AtomicUsize>) {
-        let path = std::env::temp_dir().join(format!("wind_addword_{tag}.redb"));
+        let path =
+            aurora_utils::testing::scratch("addword").join(format!("wind_addword_{tag}.redb"));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let c = Coordinator::new_headless_with_store(Config::default(), None, store);
@@ -1826,7 +1827,8 @@ mod tests {
     fn learn_phrase_promotes_at_threshold_via_6a() {
         use aurora_candidate::CandidateSource as CS;
         use aurora_store::Store;
-        let path = std::env::temp_dir().join("wind_addword_promote6a.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_addword_promote6a.redb");
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
 
@@ -2064,7 +2066,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.schema.available = vec!["pinyin".into()];
         cfg.schema.active = "pinyin".into();
-        let path = std::env::temp_dir().join("wind_addword_fallback_flat.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_addword_fallback_flat.redb");
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let c = Coordinator::new_headless_with_store(cfg, Some(&data), store);
@@ -2621,7 +2624,8 @@ mod tests {
         let mut cfg = aurora_config::config::Config::default();
         cfg.schema.available = vec!["wubi86".into()];
         cfg.schema.active = "wubi86".into();
-        let db = std::env::temp_dir().join("wind_dictadd_gh171.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("wind_dictadd_gh171.redb");
         let _ = std::fs::remove_file(&db);
         let store = std::sync::Arc::new(aurora_store::Store::open(&db).unwrap());
         let c = Coordinator::new_headless_with_store(cfg, Some(&data), store.clone());

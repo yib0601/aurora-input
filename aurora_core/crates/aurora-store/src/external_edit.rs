@@ -3,10 +3,10 @@
 
 use crate::store::Store;
 use crate::user_words::{TextPath, classify_text_path};
+use aurora_userdata::record::Target;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
-use aurora_userdata::record::Target;
 
 /// 会话租约：这么久既没有再次打开、也没有保存文件，就按「完成并加载」处理（设置进程退出、
 /// 用户忘了点）。
@@ -545,7 +545,8 @@ mod tests {
     use crate::store::Store;
 
     fn open(name: &str) -> Store {
-        let p = std::env::temp_dir().join(format!("wind_xedit_{name}-{}.redb", std::process::id()));
+        let p = aurora_utils::testing::scratch(name)
+            .join(format!("wind_xedit_{name}-{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         Store::open(&p).unwrap()
     }
@@ -813,7 +814,10 @@ mod tests {
         let s = open("learned_new");
         for (f, b) in [
             ("wubi86/temp.dict.yaml", aurora_userdata::text::banner::TEMP),
-            ("wubi86/freq.table.yaml", aurora_userdata::text::banner::FREQ),
+            (
+                "wubi86/freq.table.yaml",
+                aurora_userdata::text::banner::FREQ,
+            ),
         ] {
             let sess = s.begin_edit(f).unwrap();
             let text = std::fs::read_to_string(&sess.path).unwrap();
@@ -1095,7 +1099,10 @@ mod tests {
     /// 用户数据锁被别的进程占着（引擎只读）⇒ begin 拒绝。
     #[test]
     fn readonly_engine_rejects_begin() {
-        let d = std::env::temp_dir().join(format!("wind_xedit_ro-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_xedit_ro-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let loc = crate::store::StateLoc {
             state_dir: d.join("state"),

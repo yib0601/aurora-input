@@ -14,13 +14,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_COMMA: u32 = 0xBC;
 const VK_PERIOD: u32 = 0xBE;
@@ -74,7 +74,7 @@ fn open(tag: &str, active: &str) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
     c.keys.select_char_keys = vec!["comma_period".into()];
     c.schema.pinyin.frequency.enabled = true;
     c.schema.codetable.frequency.enabled = true;
-    let db = std::env::temp_dir().join(format!(
+    let db = aurora_utils::testing::scratch(tag).join(format!(
         "wind_select_char_freq_{tag}_{}.redb",
         std::process::id()
     ));

@@ -12,7 +12,8 @@ use aurora_config::config::UserConfigProbe;
 
 #[test]
 fn datadir_conf_redirects_user_config_dir() {
-    let tmp = std::env::temp_dir().join("wind_datadir_conf_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_datadir_conf_e2e");
     let target = tmp.join("MyUserData");
     let conf = tmp.join("datadir.conf");
     let _ = std::fs::remove_dir_all(&tmp);

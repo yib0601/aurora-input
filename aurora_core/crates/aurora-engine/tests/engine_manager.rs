@@ -3,9 +3,9 @@
 //! 用仓库内真实 schema 构建 EngineManager，验证五笔/拼音转换产出候选。
 //! 词典缺失时自动跳过。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     // 三级：crates/aurora-engine → crates → aurora_input → 仓库根（build_dev 在仓库根）。
@@ -269,8 +269,10 @@ fn recheck_auto_commit_for_applies_schema_scoped_english_veto() {
         cfg.schema.available.push("wubi86".to_string());
         // english_merge 写在 wubi86 自己的方案覆盖里，而不是全局 cfg.schema.codetable——
         // 这正是要锁住的差异：全局镜像按活跃方案（pinyin）折叠，读不到这条。
-        let override_dir =
-            std::env::temp_dir().join(format!("wind_recheck_english_veto_ov_{block}_{word}"));
+        let tmp = tempfile::tempdir().unwrap();
+        let override_dir = tmp
+            .path()
+            .join(format!("wind_recheck_english_veto_ov_{block}_{word}"));
         let _ = std::fs::remove_dir_all(&override_dir);
         std::fs::create_dir_all(&override_dir).unwrap();
         std::fs::write(
@@ -1042,7 +1044,8 @@ fn user_long_word_promotion_end_to_end() {
         return;
     }
     let cfg = make_config(&["pinyin"]);
-    let sp = std::env::temp_dir().join("wind_e2e_longword.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let sp = tmp.path().join("wind_e2e_longword.redb");
     let _ = std::fs::remove_file(&sp);
     let store = std::sync::Arc::new(aurora_store::Store::open(&sp).unwrap());
     store

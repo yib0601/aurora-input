@@ -13,9 +13,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Value, json};
 use aurora_ipc::rpc::Request;
 use aurora_rpc::{CoreRpc, DispatchState, dispatch};
+use serde_json::{Value, json};
 
 struct StubCore;
 
@@ -37,8 +37,10 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
 
 #[test]
 fn without_manifest_summary_is_silent_and_rpc_field_is_explicit_null() {
-    let tmp =
-        std::env::temp_dir().join(format!("wind_custom_edition_absent_{}", std::process::id()));
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td
+        .path()
+        .join(format!("wind_custom_edition_absent_{}", std::process::id()));
     let root = tmp.join("install");
     let data = root.join("data");
     let user = tmp.join("UserData");

@@ -4712,6 +4712,17 @@ mod tests {
     use aurora_store::Store;
     use std::sync::Arc;
 
+    thread_local! {
+        /// 本测试线程的临时根：线程退出（含 panic）即删。
+        static TEST_ROOT: std::path::PathBuf = aurora_utils::testing::scratch("webdata-root");
+    }
+
+    /// 同一 tag 在一条用例里可能被按名字重建出同一路径（`charsets_data_dir` ↔ 断言侧），
+    /// 故这里走「本线程固定根 + 原名字」，而不是 `scratch(tag)`（后者每次都是新目录）。
+    fn test_root() -> std::path::PathBuf {
+        TEST_ROOT.with(|p| p.clone())
+    }
+
     // 拼音准入契约的处置表测试随 `dispose_contract_rows` 搬到了
     // `aurora_coordinator::dict_transfer_api`（contract_disposition_table_covers_both_fill_choices）。
 
@@ -4732,7 +4743,8 @@ mod tests {
         )
         .unwrap();
 
-        let out = std::env::temp_dir().join("wind_webdata_dictpath_export.wdict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("wind_webdata_dictpath_export.wdict.yaml");
         let _ = std::fs::remove_file(&out);
         let path = out.to_string_lossy().to_string();
 
@@ -4812,7 +4824,7 @@ mod tests {
     /// **表态类的成员**——列了名单，那几个字就会出现在列表里。给一段用不到的 PUA 码位，
     /// 既让这个类有内容（不触发「名单为空就撤销表态」那道安全阀），又不往全表里塞东西。
     fn charsets_data_dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_webdata_data_{tag}"));
+        let d = test_root().join(format!("wind_webdata_data_{tag}"));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("charsets")).unwrap();
         std::fs::write(
@@ -4834,7 +4846,7 @@ outside: rare
 
     fn coord(tag: &str) -> Arc<Coordinator> {
         let path =
-            std::env::temp_dir().join(format!("wind_webdata_{tag}_{}.redb", std::process::id()));
+            aurora_utils::testing::scratch(&format!("wind_webdata_{tag}")).join("store.redb");
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let data = charsets_data_dir(tag);
@@ -5096,8 +5108,10 @@ outside: rare
     #[test]
     fn data_edit_accepts_kind_and_schema() {
         let tag = "data_edit_kind";
-        let path =
-            std::env::temp_dir().join(format!("wind_webdata_{tag}_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_webdata_{tag}_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let data = charsets_data_dir(tag);
@@ -6771,7 +6785,10 @@ outside: rare
     fn phrase_reset_default_keeps_system() {
         use aurora_store::phrases::SystemPhrase;
 
-        let path = std::env::temp_dir().join("wind_webdata_phrase_reset_keeps_system.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join("wind_webdata_phrase_reset_keeps_system.redb");
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
 
@@ -6816,7 +6833,8 @@ outside: rare
     /// headless coordinator + 独立 redb（redb 是单写者，共用文件会让并发测试互相阻塞）。
     /// 格式表走 `FormatTable::load(None)` → 内置出厂表。
     fn quick_coord(tag: &str) -> (Arc<Coordinator>, std::path::PathBuf) {
-        let path = std::env::temp_dir().join(format!("wind_webdata_quick_{tag}.redb"));
+        let path =
+            aurora_utils::testing::scratch(&format!("wind_webdata_quick_{tag}")).join("store.redb");
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         (
@@ -8056,7 +8074,7 @@ moved = [{ id = 'date.lunar', position = 0 }]
 
     /// 用一份 system.phrases.toml 起一个带 data_dir 的 headless coordinator。
     fn coord_with_phrase_toml(tag: &str, toml: &str) -> (Arc<Coordinator>, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("wind_phrase_reread_{tag}"));
+        let dir = aurora_utils::testing::scratch(&format!("wind_phrase_reread_{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("system.phrases.toml"), toml).unwrap();
@@ -8239,7 +8257,8 @@ moved = [{ id = 'date.lunar', position = 0 }]
     /// StructList 数组里，这三样一样都够不着。
     #[test]
     fn schema_overlay_section_roundtrips_through_save_config() {
-        let dir = std::env::temp_dir().join("wind_webdata_overlay_rt");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_webdata_overlay_rt");
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
@@ -8253,7 +8272,8 @@ moved = [{ id = 'date.lunar', position = 0 }]
         let ov_dir = dir.join("overrides");
         std::fs::create_dir_all(&ov_dir).unwrap();
 
-        let store_path = std::env::temp_dir().join("wind_webdata_overlay_rt.redb");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let store_path = tmp2.path().join("wind_webdata_overlay_rt.redb");
         let _ = std::fs::remove_file(&store_path);
         let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
         let c = Coordinator::new_headless_with_store_override(
@@ -8311,8 +8331,10 @@ moved = [{ id = 'date.lunar', position = 0 }]
     /// 设置页区分「跟随方案」与「用户选的来源」要看方案文件自己的 files——合并值答不了。
     #[test]
     fn get_config_exposes_aux_code_base_files_and_strips_it_on_save() {
-        let dir =
-            std::env::temp_dir().join(format!("wind_webdata_aux_base_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_webdata_aux_base_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
@@ -8380,7 +8402,8 @@ moved = [{ id = 'date.lunar', position = 0 }]
     /// 与用户值，方案自带的那一项会被显示成「用户已改」。
     #[test]
     fn schema_get_config_separates_author_baseline_from_user_override() {
-        let dir = std::env::temp_dir().join("wind_webdata_ct_tristate");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_webdata_ct_tristate");
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
@@ -8484,7 +8507,8 @@ short_code_yield_level = 2
     /// 同时验稀疏性：同一次保存里另一项照常写入，不因为有人被取消而受牵连。
     #[test]
     fn save_config_null_cancels_one_override_and_keeps_the_others() {
-        let dir = std::env::temp_dir().join("wind_webdata_ct_cancel");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_webdata_ct_cancel");
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
@@ -8617,7 +8641,8 @@ short_code_yield_level = 2
     fn pinyin_and_shuangpin_share_userdict() {
         use std::io::Write;
         // 写两个拼音类方案 schema.toml，让 data_schema_id 折叠到 "pinyin"
-        let base_dir = std::env::temp_dir().join("wind_coord_share_userdict_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_coord_share_userdict_test");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         for name in ["pinyin_simp", "double_pinyin"] {
@@ -8625,7 +8650,8 @@ short_code_yield_level = 2
             write!(f, "[engine]\ntype = \"pinyin\"\n").unwrap();
         }
 
-        let db_path = std::env::temp_dir().join("wind_coord_share_userdict.redb");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let db_path = tmp2.path().join("wind_coord_share_userdict.redb");
         let _ = std::fs::remove_file(&db_path);
         let store = Arc::new(Store::open(&db_path).unwrap());
         let c = Coordinator::new_headless_with_store(
@@ -8673,7 +8699,8 @@ short_code_yield_level = 2
     #[test]
     fn dict_stats_counts_all_follow_data_schema_folding() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_coord_stats_fold_all");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_coord_stats_fold_all");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         for name in ["pinyin_simp", "double_pinyin"] {
@@ -8686,7 +8713,8 @@ short_code_yield_level = 2
             write!(f, "[engine]\ntype = \"codetable\"\n").unwrap();
         }
 
-        let db_path = std::env::temp_dir().join("wind_coord_stats_fold_all.redb");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let db_path = tmp2.path().join("wind_coord_stats_fold_all.redb");
         let _ = std::fs::remove_file(&db_path);
         let store = Arc::new(Store::open(&db_path).unwrap());
         // `dict.stats` 遍历的是**已启用方案**（`config.schema.available`），不是目录扫描结果
@@ -8797,8 +8825,10 @@ short_code_yield_level = 2
     /// 词库开关的唯一写入口是 `setDictEnabled`，`saveConfig` 不得经由快照改它。
     #[test]
     fn save_config_snapshot_does_not_clobber_dict_toggle() {
-        let dir =
-            std::env::temp_dir().join(format!("wind_webdata_dict_toggle_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_webdata_dict_toggle_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
@@ -8870,7 +8900,8 @@ short_code_yield_level = 2
     #[test]
     fn schema_list_exposes_scheme() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_coord_schema_list_scheme_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_coord_schema_list_scheme_test");
         let schemas = base_dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         // 创建全拼方案
@@ -8892,7 +8923,8 @@ short_code_yield_level = 2
             )
             .unwrap();
         }
-        let db_path = std::env::temp_dir().join("wind_webdata_schema_list_scheme.redb");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let db_path = tmp2.path().join("wind_webdata_schema_list_scheme.redb");
         let _ = std::fs::remove_file(&db_path);
         let store = Arc::new(Store::open(&db_path).unwrap());
         let c = Coordinator::new_headless_with_store(
@@ -8935,7 +8967,8 @@ short_code_yield_level = 2
     #[test]
     fn english_schema_listed_with_its_own_engine_type() {
         use std::io::Write;
-        let base_dir = std::env::temp_dir().join("wind_coord_schema_list_english_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let base_dir = tmp.path().join("wind_coord_schema_list_english_test");
         let schemas = base_dir.join("schemas");
         let _ = std::fs::remove_dir_all(&base_dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -8957,7 +8990,8 @@ short_code_yield_level = 2
             )
             .unwrap();
         }
-        let db_path = std::env::temp_dir().join("wind_webdata_schema_list_english.redb");
+        let tmp2 = tempfile::tempdir().unwrap();
+        let db_path = tmp2.path().join("wind_webdata_schema_list_english.redb");
         let _ = std::fs::remove_file(&db_path);
         let store = Arc::new(Store::open(&db_path).unwrap());
         let c = Coordinator::new_headless_with_store(
@@ -8998,7 +9032,10 @@ short_code_yield_level = 2
     /// 设置页「辅助码来源」的可选项：码表方案（不含请求方自己、不含非码表方案）+ aux_code/*.txt。
     #[test]
     fn schema_aux_code_sources_lists_codetable_schemas_and_tables() {
-        let dir = std::env::temp_dir().join(format!("wind_webdata_aux_src_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_webdata_aux_src_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(schemas.join("aux_code")).unwrap();
@@ -9347,24 +9384,27 @@ short_code_yield_level = 2
     fn scheme_package_rpc_contract() {
         let c = coord("schemepkg");
         // exportPackage:不存在的方案 id → 错误
+        let tmp = tempfile::tempdir().unwrap();
         assert!(
             c.web_data_rpc(
                 "scheme.exportPackage",
-                &json!({ "id": "zz_no_such_schema", "path": std::env::temp_dir().join("zz_no.zip").to_string_lossy() }),
+                &json!({ "id": "zz_no_such_schema", "path": tmp.path().join("zz_no.zip").to_string_lossy() }),
             )
             .is_err(),
             "不存在的方案应报错"
         );
         // previewImport:不存在的包路径 → 错误
+        let tmp2 = tempfile::tempdir().unwrap();
         assert!(
             c.web_data_rpc(
                 "scheme.previewImport",
-                &json!({ "path": std::env::temp_dir().join("zz_no_such_pkg.zip").to_string_lossy() }),
+                &json!({ "path": tmp2.path().join("zz_no_such_pkg.zip").to_string_lossy() }),
             )
             .is_err()
         );
         // previewImport:真实构造的包 → 只读预览成功,形状正确
-        let t = std::env::temp_dir().join("wind_schemepkg_test");
+        let tmp3 = tempfile::tempdir().unwrap();
+        let t = tmp3.path().join("wind_schemepkg_test");
         let _ = std::fs::remove_dir_all(&t);
         let (user, system) = (t.join("u"), t.join("s"));
         std::fs::create_dir_all(user.join("my")).unwrap();
@@ -9405,10 +9445,11 @@ short_code_yield_level = 2
         assert!(prev.get("conflicts").and_then(|v| v.as_array()).is_some());
         let _ = std::fs::remove_dir_all(&t);
         // importPackage:不存在的包路径 → 错误
+        let tmp4 = tempfile::tempdir().unwrap();
         assert!(
             c.web_data_rpc(
                 "scheme.importPackage",
-                &json!({ "path": std::env::temp_dir().join("zz_no_such_pkg.zip").to_string_lossy() }),
+                &json!({ "path": tmp4.path().join("zz_no_such_pkg.zip").to_string_lossy() }),
             )
             .is_err()
         );
@@ -9434,9 +9475,11 @@ short_code_yield_level = 2
         // (同 `tests/custom_layer_hide_theme_import.rs` 的纪律)。
         let tag = format!("themepkg{}", std::process::id());
         let c = coord(&tag);
-        let data = std::env::temp_dir().join(format!("wind_webdata_data_{tag}"));
-        let out_dir =
-            std::env::temp_dir().join(format!("wind_themepkg_out-{}", std::process::id()));
+        let data = test_root().join(format!("wind_webdata_data_{tag}"));
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp
+            .path()
+            .join(format!("wind_themepkg_out-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out_dir);
         std::fs::create_dir_all(&out_dir).unwrap();
         let slug = "wind_test_themepkg_mo";
@@ -9590,7 +9633,8 @@ short_code_yield_level = 2
     #[test]
     fn scheme_preview_import_separates_package_and_patch_info() {
         let c = coord("schemepkginfo");
-        let t = std::env::temp_dir().join("wind_schemepkginfo_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let t = tmp.path().join("wind_schemepkginfo_test");
         let _ = std::fs::remove_dir_all(&t);
         std::fs::create_dir_all(&t).unwrap();
         let pkg = t.join("info.wpkg");
@@ -9743,8 +9787,10 @@ short_code_yield_level = 2
             )
             .unwrap();
         col.resume();
-        let out =
-            std::env::temp_dir().join(format!("wind_restore_stats_{}.zip", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp
+            .path()
+            .join(format!("wind_restore_stats_{}.zip", std::process::id()));
         let _ = std::fs::remove_file(&out);
         c.web_data_rpc(
             "backup.create",
@@ -9787,7 +9833,8 @@ short_code_yield_level = 2
             &json!({ "schemaId": "wb", "code": "a", "text": "工", "weight": 100 }),
         )
         .unwrap();
-        let out = std::env::temp_dir().join("wind_backup_rpc_test.zip");
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("wind_backup_rpc_test.zip");
         let _ = std::fs::remove_file(&out);
         let r = c
             .web_data_rpc(
@@ -9807,10 +9854,11 @@ short_code_yield_level = 2
             Some("backup")
         );
         // inspect 不存在的包 → 错误
+        let tmp2 = tempfile::tempdir().unwrap();
         assert!(
             c.web_data_rpc(
                 "backup.inspect",
-                &json!({ "path": std::env::temp_dir().join("zz_no.zip").to_string_lossy() }),
+                &json!({ "path": tmp2.path().join("zz_no.zip").to_string_lossy() }),
             )
             .is_err()
         );
@@ -10116,7 +10164,7 @@ mod phrase_shadowing_tests {
 
     /// `extra`：追加在 TOML 末尾的更多 `[[phrases]]` 条目。
     fn coord_with_sys_toml(tag: &str, extra: &str) -> (Arc<Coordinator>, std::path::PathBuf) {
-        let base = std::env::temp_dir().join(format!("wind_phrase_shadow_{tag}"));
+        let base = aurora_utils::testing::scratch(&format!("wind_phrase_shadow_{tag}"));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(
@@ -10182,7 +10230,8 @@ mod phrase_shadowing_tests {
     /// 用户短语不能因此看不见。
     #[test]
     fn phrase_migration_runs_without_system_toml() {
-        let base = std::env::temp_dir().join("wind_phrase_no_toml");
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("wind_phrase_no_toml");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let store = Arc::new(Store::open(base.join("s.redb")).unwrap());
@@ -10443,7 +10492,7 @@ mod memory_stats_tests {
     /// `tag` 让并行的用例各用各的夹具目录——redb 是独占锁，两条用例同时开同一个 `s.redb`
     /// 必有一条失败。
     fn coord(tag: &str) -> Arc<Coordinator> {
-        let base = std::env::temp_dir().join(format!("wind_memstats-{tag}-{}", std::process::id()));
+        let base = aurora_utils::testing::scratch(&format!("wind_memstats-{tag}"));
         let _ = std::fs::remove_dir_all(&base);
         let schemas = base.join("schemas");
         std::fs::create_dir_all(schemas.join("zm1")).unwrap();
@@ -10591,7 +10640,7 @@ mod system_stats_tests {
 
     /// 码表 `zm1`（主库 + 停用扩展）+ 混输 `mx`（主码表 zm1，无拼音成员）。
     fn coord(tag: &str) -> Arc<Coordinator> {
-        let base = std::env::temp_dir().join(format!("wind_sysstats-{tag}-{}", std::process::id()));
+        let base = aurora_utils::testing::scratch(&format!("wind_sysstats-{tag}"));
         let _ = std::fs::remove_dir_all(&base);
         let schemas = base.join("schemas");
         std::fs::create_dir_all(schemas.join("zm1")).unwrap();

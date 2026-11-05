@@ -10,9 +10,9 @@
 //!
 //! ⚠️ 本用例**不依赖 `build_dev/data`**：夹具全部自造，不会静默跳过。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -24,7 +24,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
 #[test]
 fn without_manifest_softkeyboard_keeps_the_old_two_layer_behavior() {
     // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-    let tmp = std::env::temp_dir().join(format!(
+    let tmpdir = tempfile::tempdir().unwrap();
+    let tmp = tmpdir.path().join(format!(
         "wind_coord_softkeyboard_no_custom-{}",
         std::process::id()
     ));

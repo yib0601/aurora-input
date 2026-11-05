@@ -36,13 +36,13 @@
 //!
 //! 自带 wdat 夹具 + `data/schemas/shuangpin`（版本控制内），不依赖 `build_dev/data`。
 
-use std::sync::Arc;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::datformat::WdatWriter;
 use aurora_engine::Engine;
 use aurora_engine::pinyin::shuangpin::{Layout, ShuangpinConverter};
 use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 use aurora_store::Store;
+use std::sync::Arc;
 
 const CODE: &str = "qingfengshurufa";
 const SYLS: &[&str] = &["qing", "feng", "shu", "ru", "fa"];
@@ -66,7 +66,7 @@ fn code_and_boundary() -> (String, u64) {
 
 /// 最小系统词库：只放前 1-2 音节的词，让系统侧产出几条竞争候选，但不含本用例的目标词。
 fn sys_dict(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_uw_nb_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_uw_nb_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -80,7 +80,7 @@ fn sys_dict(tag: &str) -> CachedDict {
 /// 装好两条只差 boundary 的用户词的引擎。`shuangpin = true` 时开双拼 + 允许全拼输入，
 /// 把产出通道切到 step 6.7 降级支路。
 fn engine(tag: &str, max_extra: u32, shuangpin: bool) -> PinyinEngine {
-    let p = std::env::temp_dir().join(format!("wind_uw_nb_{tag}.redb"));
+    let p = aurora_utils::testing::scratch("uw_nb").join(format!("wind_uw_nb_{tag}.redb"));
     let _ = std::fs::remove_file(&p);
     let s = Arc::new(Store::open(&p).expect("打开 store"));
     let (code, boundary) = code_and_boundary();
@@ -252,7 +252,8 @@ fn merge_branch_user_weight_applies_without_boundary() {
     const USER_WEIGHT: i32 = 5000;
 
     // 系统词库里放一条同文词（`boundary = 0`，模拟导入的扩展词库），用户词同码同文。
-    let dir = std::env::temp_dir().join("wind_uw_nb_merge_dict");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("wind_uw_nb_merge_dict");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -262,7 +263,8 @@ fn merge_branch_user_weight_applies_without_boundary() {
     w.write(&wdat).unwrap();
     let sys = CachedDict::load_at(&dir.join("t.dict.yaml"), &wdat).expect("加载 wdat 夹具");
 
-    let p = std::env::temp_dir().join("wind_uw_nb_merge.redb");
+    let tmp2 = tempfile::tempdir().unwrap();
+    let p = tmp2.path().join("wind_uw_nb_merge.redb");
     let _ = std::fs::remove_file(&p);
     let store = Arc::new(Store::open(&p).expect("打开 store"));
     store

@@ -329,8 +329,10 @@ mod tests {
 
     /// `aux` 是 `[engine.aux_code]` 里 `files` 之外的行（enabled / direct）；`scheme` 空 = 全拼。
     fn fixture(tag: &str, scheme: &str, aux: &str) -> (std::path::PathBuf, Fixture) {
-        let dir =
-            std::env::temp_dir().join(format!("wind_direct_aux_{tag}_{}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!(
+            "wind_direct_aux_{tag}_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(schemas.join("aux_code")).unwrap();
@@ -367,8 +369,8 @@ mod tests {
     }
 
     fn coord(tag: &str, data_dir: &std::path::Path) -> (Arc<Coordinator>, Arc<Store>) {
-        let path =
-            std::env::temp_dir().join(format!("wind_direct_aux_{tag}_{}.redb", std::process::id()));
+        let path = aurora_utils::testing::scratch("direct_aux")
+            .join(format!("wind_direct_aux_{tag}_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let mut cfg = Config::default();

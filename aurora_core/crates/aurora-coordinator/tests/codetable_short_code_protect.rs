@@ -16,12 +16,12 @@
 //! 词典缺失时自动跳过 —— ⚠️ `build_dev/data` 不存在时**整族静默跳过而计数照绿**，
 //! 判据是耗时（正常 2s 量级 vs 跳过 0.0x s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -51,7 +51,7 @@ fn press(coord: &Coordinator, code: &str) {
 
 /// 建一个只含指定词频记录的 store（每个用例独立文件，避免相互污染）。
 fn store_with(name: &str, hits: &[(&str, &str, u32)]) -> (Arc<aurora_store::Store>, PathBuf) {
-    let path = std::env::temp_dir().join(name);
+    let path = aurora_utils::testing::scratch(name).join(name);
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(aurora_store::Store::open(&path).unwrap());
     for (code, text, times) in hits {

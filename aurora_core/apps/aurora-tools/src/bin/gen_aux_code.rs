@@ -460,7 +460,8 @@ mod tests {
     /// 两份产物出自同一份行：stroke.txt 的 `字=码` 与方案词库的 `字\t码` 逐行对应。
     #[test]
     fn txt_and_dict_share_rows() {
-        let dir = std::env::temp_dir().join(format!("gen_aux_code_test_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_aux_code_test");
         std::fs::create_dir_all(&dir).unwrap();
         let rows = parse_stroke(STROKE, &|_| true);
         let weights = HashMap::from([('一', 100u64), ('丁', 10)]);

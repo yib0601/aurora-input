@@ -263,7 +263,8 @@ mod tests {
     /// 还会与正在运行的服务抢同一个文件。
     #[test]
     fn disabled_writer_is_a_noop() {
-        let dir = std::env::temp_dir().join("wind-state-writer-noop-must-not-exist");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind-state-writer-noop-must-not-exist");
         let w = StateWriter::new(false, Some(dir.clone()));
         w.schedule("toolbar_anchors", |rs| {
             rs.toolbar_anchors.insert("k".into(), (1, 2));
@@ -363,7 +364,7 @@ mod tests {
     }
 
     fn tempdir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
+        let d = aurora_utils::testing::scratch(&format!(
             "wind-state-writer-{}-{:?}",
             std::process::id(),
             std::thread::current().id()

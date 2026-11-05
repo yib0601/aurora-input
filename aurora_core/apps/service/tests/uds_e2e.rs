@@ -1,18 +1,19 @@
 //! 端到端集成测试：用真实 Coordinator(headless) 作 handler，经 UDS 跑 KeyEvent 往返。
 #![cfg(unix)]
 
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
-use std::sync::Arc;
 use aurora_bridge::endpoint;
 use aurora_bridge::server::{BridgeConfig, BridgeServer};
 use aurora_config::Config;
 use aurora_ipc::protocol::{CMD_KEY_EVENT, IpcHeader};
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
+use std::sync::Arc;
 
 #[test]
 fn key_event_roundtrip_through_coordinator() {
     // 使用进程 pid 隔离临时目录，避免并行测试冲突
-    let rt = std::env::temp_dir().join(format!("wind_e2e_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let rt = tmp.path().join("wind_e2e");
     std::fs::create_dir_all(&rt).expect("create runtime dir");
     // safety: 单线程测试，env 设置在 server 启动前完成
     unsafe { std::env::set_var("AURORA_INPUT_RUNTIME_DIR", &rt) };

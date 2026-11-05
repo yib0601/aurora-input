@@ -160,7 +160,10 @@ fn heap_vs_mmap_resident_and_timing() {
         child(&mode, std::path::Path::new(&root));
         return;
     }
-    let root = std::env::temp_dir().join(format!("wind_phrase_probe_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp
+        .path()
+        .join(format!("wind_phrase_probe_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let yaml = root.join("en_probe.dict.yaml");

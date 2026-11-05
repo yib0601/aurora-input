@@ -14,14 +14,14 @@
 //!
 //! 缺 `build_dev/data` 时静默跳过。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_coordinator::web_host::WebDataHost;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -100,7 +100,8 @@ fn draft_code_uses_the_code_the_user_actually_typed() {
     cfg.input.default.chinese_mode = true;
     cfg.schema.codetable.auto_phrase.enabled = true;
 
-    let db = std::env::temp_dir().join("wind_draft_typed_code_gkxn.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_draft_typed_code_gkxn.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), Arc::clone(&store));
@@ -136,7 +137,8 @@ fn draft_window_keeps_ling_and_encodes_it() {
     cfg.input.default.chinese_mode = true;
     cfg.schema.codetable.auto_phrase.enabled = true;
 
-    let db = std::env::temp_dir().join("wind_draft_ling_fgll.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_draft_ling_fgll.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), Arc::clone(&store));
@@ -167,7 +169,8 @@ fn host_typed_key_between_commits_breaks_the_draft_stream() {
     cfg.input.default.chinese_mode = true;
     cfg.schema.codetable.auto_phrase.enabled = true;
 
-    let db = std::env::temp_dir().join("wind_draft_host_key_break.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_draft_host_key_break.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), Arc::clone(&store));
@@ -209,7 +212,8 @@ fn first_draft_batch_after_idle_release_is_not_dropped() {
     cfg.input.default.chinese_mode = true;
     cfg.schema.codetable.auto_phrase.enabled = true;
 
-    let db = std::env::temp_dir().join(format!(
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join(format!(
         "wind_draft_after_idle_release_{}.redb",
         std::process::id()
     ));

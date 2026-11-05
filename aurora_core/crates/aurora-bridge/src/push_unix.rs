@@ -4,13 +4,13 @@
 //! 读 8 字节 token 注册客户端，writer 线程经 mpsc 把帧写回。
 
 use crate::push::{ClientConnectedHook, PushClient, claim_connected_hook};
+use aurora_ipc::protocol::*;
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
-use aurora_ipc::protocol::*;
 
 /// 服务端自生成的 push 客户端 token（仅用于 clients 列表去重）。
 /// darwin UDS push 协议不做 token 握手（见 handle_push_conn 说明），故由服务端发号。
@@ -112,14 +112,17 @@ fn handle_push_conn(
 mod tests {
     use super::*;
     use crate::push::{PushConfig, PushServer};
+    use aurora_ipc::protocol::{CMD_SERVICE_READY, CMD_STATE_PUSH, IpcHeader};
     use std::io::Read;
     use std::os::unix::net::UnixStream;
     use std::sync::Arc;
-    use aurora_ipc::protocol::{CMD_SERVICE_READY, CMD_STATE_PUSH, IpcHeader};
 
     #[test]
     fn uds_push_fanout_delivers_to_client() {
-        let dir = std::env::temp_dir().join(format!("wind_push_test_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_push_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bridge_push.sock");
         let server = Arc::new(PushServer::new(PushConfig {
@@ -166,7 +169,10 @@ mod tests {
     #[test]
     fn uds_push_connection_fires_connected_hook_once() {
         use std::sync::Mutex;
-        let dir = std::env::temp_dir().join(format!("wind_push_hook_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_push_hook_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bridge_push.sock");
         let server = Arc::new(PushServer::new(PushConfig {

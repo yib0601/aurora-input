@@ -8,12 +8,12 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, EVENT_KEY_UP};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_TAB: u32 = 0x09;
 const VK_RETURN: u32 = 0x0D;

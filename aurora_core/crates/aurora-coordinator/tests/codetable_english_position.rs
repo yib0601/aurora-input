@@ -3,13 +3,13 @@
 //! 送到协调器的 `place_english_after_common_exact`；拼音方案不受影响。
 //! 词库缺失时跳过（worktree 里要自备 `build_dev/data`）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -47,7 +47,7 @@ fn base(schema: &str) -> Config {
 
 /// 打 `input`，返回英文 `word` 在首页的下标与首页条数。
 fn english_index(cfg: Config, input: &str, word: &str, tag: &str) -> (usize, usize) {
-    let path = std::env::temp_dir().join(format!("wind_en_pos_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_en_pos_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(Store::open(&path).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), store);
@@ -160,7 +160,8 @@ fn mixed_pinyin_continuation_ignores_position_config() {
         cfg.schema.mix.enable_english = true;
         cfg.schema.mix.english_exact_position = pos;
         cfg.schema.mix.english_complete_position = pos;
-        let path = std::env::temp_dir().join(format!("wind_en_pos_cont_{tag}.redb"));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(format!("wind_en_pos_cont_{tag}.redb"));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), store);

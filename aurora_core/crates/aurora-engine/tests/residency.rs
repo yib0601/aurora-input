@@ -4,19 +4,21 @@
 //! 缓存根经 `XDG_DATA_HOME` 重定向到临时目录（进程级 `OnceLock`，本二进制第一次初始化），
 //! 方案全部自造：码表 ra / rb、混输 rm（主码表成员 rb），不依赖 build_dev。
 
+use aurora_config::Config;
+use aurora_engine::EngineManager;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use aurora_config::Config;
-use aurora_engine::EngineManager;
 
 static LOCK: Mutex<()> = Mutex::new(());
 
 fn data_dir() -> &'static Path {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
     ROOT.get_or_init(|| {
-        let root = std::env::temp_dir().join(format!("wind_engine_residency-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        // 进程级单例夹具（`OnceLock<&'static Path>` + `XDG_DATA_HOME` 重定向）：存活期比
+        // 测试线程长，`scratch()` / `TempDir` 会在线程结束时被删 → 用进程级托管
+        // （目录活到进程退出，unix 由 atexit 删）。
+        let root = aurora_utils::testing::process_scratch("engine_residency");
         // SAFETY: 首个用例进来时、任何 EngineManager 构造之前设置，之后只读。
         unsafe {
             std::env::set_var("XDG_DATA_HOME", root.join("xdg"));
@@ -114,7 +116,7 @@ fn manager_with_store(
     active: &str,
     tag: &str,
 ) -> (EngineManager, std::sync::Arc<aurora_store::Store>) {
-    let p = std::env::temp_dir().join(format!(
+    let p = aurora_utils::testing::scratch("engine_residency").join(format!(
         "wind_engine_residency_{tag}_{}.redb",
         std::process::id()
     ));

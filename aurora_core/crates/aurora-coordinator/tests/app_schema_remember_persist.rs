@@ -8,13 +8,13 @@
 //!
 //! ⚠️ 本用例**不依赖 `build_dev/data`**：方案全部自造。
 
-use std::path::Path;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use aurora_bridge::handler::{FocusData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ui_types::MenuCmd;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 fn setup(root: &Path) {
     let schemas = root.join("data/schemas");
@@ -83,7 +83,10 @@ fn focus(c: &Coordinator, pid: u32, proc: &str) {
 #[test]
 fn remembered_schema_survives_restart() {
     // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-    let root = std::env::temp_dir().join(format!("wind_app_schema_state-{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp
+        .path()
+        .join(format!("wind_app_schema_state-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     setup(&root);
     // SAFETY: 本文件仅此一个测试，env 在任何 OnceLock 初始化之前设置，无并发读者。

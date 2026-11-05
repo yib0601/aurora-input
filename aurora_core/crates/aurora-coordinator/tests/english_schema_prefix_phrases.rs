@@ -6,12 +6,12 @@
 //!
 //! 词库缺失时整族跳过（worktree 里要自备 `build_dev/data`，核对耗时）。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_phrase::PhraseSeed;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -31,7 +31,8 @@ fn key(key_code: u32) -> KeyEventData {
 
 /// 英文方案出厂不加载短语，用方案级 override 打开。
 fn override_with_phrases() -> PathBuf {
-    let dir = std::env::temp_dir().join("wind_en_prefix_phrases_ov");
+    let dir =
+        aurora_utils::testing::scratch("override_with_phrases").join("wind_en_prefix_phrases_ov");
     std::fs::create_dir_all(&dir).expect("建 override 目录失败");
     std::fs::write(dir.join("english.toml"), "[phrases]\nenabled = true\n")
         .expect("写 override 失败");

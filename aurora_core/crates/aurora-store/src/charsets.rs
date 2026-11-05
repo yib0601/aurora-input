@@ -148,7 +148,7 @@ mod tests {
 
     /// 每个测试独立文件：redb 是单写者，共用文件会让并发测试互相阻塞。
     fn store(tag: &str) -> Store {
-        let p = std::env::temp_dir().join(format!(
+        let p = aurora_utils::testing::scratch(tag).join(format!(
             "wind_charsets_test_{}_{}_{:?}.redb",
             std::process::id(),
             tag,
@@ -237,7 +237,10 @@ mod tests {
     /// 审查 I-3：启动后第一次手改就要被 sync 发现。
     #[test]
     fn first_hand_edit_after_open_is_detected() {
-        let p = std::env::temp_dir().join(format!("wind_cs_first_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_cs_first_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         {
             let s = Store::open(&p).unwrap();

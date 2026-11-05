@@ -8,8 +8,8 @@
 //! `is_string_common` 对**每个候选**都要跑一遍，字素簇分割比逐 char 贵，故用
 //! `has_multi_char_keys` 闸门把成本挡在「用户真的登记过多码位覆盖」之后。这里量的就是
 //! 那道闸门两侧的差距。
-use std::time::Instant;
 use aurora_candidate::CommonChars;
+use std::time::Instant;
 
 fn bench(
     label: &str,

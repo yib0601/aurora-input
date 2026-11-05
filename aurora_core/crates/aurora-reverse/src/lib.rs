@@ -1497,7 +1497,8 @@ mod tests {
         tag: &str,
         libs: &[&[(&str, &str, &str)]],
     ) -> (PathBuf, Vec<(PathBuf, Vec<String>)>) {
-        let dir = std::env::temp_dir().join(format!("wind_cmt_{}_{}", std::process::id(), tag));
+        let dir =
+            aurora_utils::testing::scratch(&format!("wind_cmt_{}_{}", std::process::id(), tag));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = libs
@@ -1554,7 +1555,8 @@ mod tests {
         //! ★ 与 `comment_columns` 的差别正是本测试的全部意义：那个在**无 `columns:` 声明**
         //! 时回落默认 `[text, comment]`，若准入也照抄，绝大多数码表（`text\tcode\tweight`）
         //! 都会被判成「自带注释」，然后把整列编码当注释显示出来——而没有任何一处会报错。
-        let dir = std::env::temp_dir().join(format!("wind-decl-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("wind-decl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let write = |name: &str, head: &str| {
@@ -1604,7 +1606,10 @@ mod tests {
     fn declares_comment_column_stops_at_header() {
         //! 判据只看 YAML 头：正文里出现 `columns:` 或 `comment` 字样不算数。
         //! 这条同时钉住「不读整份文件」——正文里那行若被读进来，判定就会翻成 true。
-        let dir = std::env::temp_dir().join(format!("wind-declh-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-declh-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("body.dict.yaml");
@@ -2071,7 +2076,10 @@ mod tests {
     /// 每次加载都会因内容指纹不符而互相重建，表现为启动变慢却查不出原因。
     #[test]
     fn same_name_different_dirs_get_separate_caches() {
-        let base = std::env::temp_dir().join(format!("wind_cmt_ns_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind_cmt_ns_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let (a, b) = (base.join("libA"), base.join("libB"));
         std::fs::create_dir_all(&a).unwrap();
@@ -2431,7 +2439,8 @@ mod tests {
         // 一字不差。
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(format!(
             "wind_comment_test_{}_{}.dict.yaml",
             std::process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed)
@@ -2618,7 +2627,10 @@ mod tests {
     #[test]
     fn test_load_pinyin_parses_multi_reading() {
         use std::io::Write;
-        let dir = std::env::temp_dir().join(format!("wind-reverse-test-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-reverse-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("pinyin_map.txt");
         let mut f = std::fs::File::create(&path).unwrap();

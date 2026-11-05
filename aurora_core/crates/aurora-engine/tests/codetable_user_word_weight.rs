@@ -6,10 +6,10 @@
 //!
 //! 自造夹具，不依赖 build_dev/data。
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 fn uid(tag: &str) -> String {
     format!("zz_uww_{tag}_{}", std::process::id())
@@ -50,7 +50,7 @@ fn setup(
     user_text: &str,
 ) -> (EngineManager, Cleanup) {
     let id = uid(tag);
-    let dir = std::env::temp_dir().join(format!("wind_uww_{id}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_uww_{id}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     write_fixture(&dir, &id, main_weight);

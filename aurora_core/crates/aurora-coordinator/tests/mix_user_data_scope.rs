@@ -19,12 +19,12 @@
 //!
 //! ⚠️ 词库缺失时整族静默跳过，判据是耗时（真跑约 1s 量级 vs 跳过 0.0x s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -63,7 +63,7 @@ fn mix_config() -> Config {
 }
 
 fn fresh_store(name: &str) -> (Arc<aurora_store::Store>, PathBuf) {
-    let path = std::env::temp_dir().join(name);
+    let path = aurora_utils::testing::scratch(name).join(name);
     let _ = std::fs::remove_file(&path);
     (Arc::new(aurora_store::Store::open(&path).unwrap()), path)
 }

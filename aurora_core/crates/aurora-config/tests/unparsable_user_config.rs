@@ -24,8 +24,8 @@
 //! ⚠️ 全文件仅此一个 `#[test]`：这些函数写用户层 config.toml，漏设
 //! `AURORA_DATADIR_CONF` 会真写 `%APPDATA%\AuroraInput\config.toml`（本仓已有前科）。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -36,7 +36,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
 
 #[test]
 fn unparsable_user_config_is_never_silently_overwritten() {
-    let tmp = std::env::temp_dir().join("wind_unparsable_cfg_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_unparsable_cfg_e2e");
     let root = tmp.join("install");
     let data = root.join("data");
     let user = tmp.join("UserData");

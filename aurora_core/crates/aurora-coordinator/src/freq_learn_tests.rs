@@ -15,7 +15,8 @@ use crate::coordinator::Coordinator;
 
 /// 构造一个带临时 store 的无头 Coordinator（与 aurora-webdata 契约测试同款 helper）。
 fn coord(tag: &str) -> Arc<Coordinator> {
-    let path = std::env::temp_dir().join(format!("wind_freqlearn_{tag}.redb"));
+    let path =
+        aurora_utils::testing::scratch("freqlearn").join(format!("wind_freqlearn_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(Store::open(&path).unwrap());
     Coordinator::new_headless_with_store(Config::default(), None, store)
@@ -79,8 +80,29 @@ fn record_input_stats_skips_when_already_recorded() {
 /// P2d：构造带混输方案（primary=ct_test、secondary=py_test）的无头 Coordinator，
 /// active=mx_test；返回 (coord, store) 供直查断言。
 fn mixed_coord(tag: &str) -> (Arc<Coordinator>, Arc<Store>) {
+    let base_dir = mixed_schema_dir(tag);
+    let mut cfg = Config::default();
+    cfg.schema.active = "mx_test".into();
+    cfg.schema.available = vec!["mx_test".into(), "ct_test".into(), "py_test".into()];
+    // 开启码表词频，供 apply_freq_rerank 测试生效（混输走码表 used-first 路径）。
+    cfg.schema.codetable.frequency.enabled = true;
+    // 开启**拼音**自动造词：`learn_phrase_on_commit` 的产出恒是拼音词，闸门已统一归
+    // `[schema.pinyin.auto_learn]`。此前这里开的是 `codetable.auto_phrase.enabled`，
+    // 那正是让功能对真实用户静默失效的错配（出厂 available 里没有纯拼音方案）。
+    cfg.schema.pinyin.auto_learn.enabled = true;
+
+    let db_path =
+        aurora_utils::testing::scratch("coord_p2d").join(format!("wind_coord_p2d_{tag}.redb"));
+    let _ = std::fs::remove_file(&db_path);
+    let store = Arc::new(Store::open(&db_path).unwrap());
+    let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
+    (c, store)
+}
+
+/// `mx_test` 方案集的数据目录（`mixed_coord` 与 `mixed_bump_coord` 共用同一份方案文件）。
+fn mixed_schema_dir(tag: &str) -> std::path::PathBuf {
     use std::io::Write;
-    let base_dir = std::env::temp_dir().join(format!("wind_coord_p2d_{tag}"));
+    let base_dir = aurora_utils::testing::scratch(&format!("wind_coord_p2d_{tag}"));
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);
     std::fs::create_dir_all(&schemas).unwrap();
@@ -108,21 +130,7 @@ fn mixed_coord(tag: &str) -> (Arc<Coordinator>, Arc<Store>) {
         )
         .unwrap();
     }
-    let mut cfg = Config::default();
-    cfg.schema.active = "mx_test".into();
-    cfg.schema.available = vec!["mx_test".into(), "ct_test".into(), "py_test".into()];
-    // 开启码表词频，供 apply_freq_rerank 测试生效（混输走码表 used-first 路径）。
-    cfg.schema.codetable.frequency.enabled = true;
-    // 开启**拼音**自动造词：`learn_phrase_on_commit` 的产出恒是拼音词，闸门已统一归
-    // `[schema.pinyin.auto_learn]`。此前这里开的是 `codetable.auto_phrase.enabled`，
-    // 那正是让功能对真实用户静默失效的错配（出厂 available 里没有纯拼音方案）。
-    cfg.schema.pinyin.auto_learn.enabled = true;
-
-    let db_path = std::env::temp_dir().join(format!("wind_coord_p2d_{tag}.redb"));
-    let _ = std::fs::remove_file(&db_path);
-    let store = Arc::new(Store::open(&db_path).unwrap());
-    let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
-    (c, store)
+    base_dir
 }
 
 /// 整句造词测试统一使用的字数上限（与出厂默认 10 一致；由 `pinyin_coord` 给两条分支同时设定）。
@@ -142,7 +150,7 @@ const LEARN_MAX_LEN: usize = 10;
 /// `data_schema_id` 只读 `schema.toml` 的 `engine.type`，故存储归属仍是 "pinyin"。
 fn pinyin_coord(tag: &str) -> (Arc<Coordinator>, Arc<Store>) {
     use std::io::Write;
-    let base_dir = std::env::temp_dir().join(format!("wind_coord_pysolo_{tag}"));
+    let base_dir = aurora_utils::testing::scratch(&format!("wind_coord_pysolo_{tag}"));
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);
     std::fs::create_dir_all(&schemas).unwrap();
@@ -160,7 +168,8 @@ fn pinyin_coord(tag: &str) -> (Arc<Coordinator>, Arc<Store>) {
     cfg.schema.pinyin.auto_learn.enabled = true;
     cfg.schema.pinyin.auto_learn.max_word_length = LEARN_MAX_LEN;
 
-    let db_path = std::env::temp_dir().join(format!("wind_coord_pysolo_{tag}.redb"));
+    let db_path = aurora_utils::testing::scratch("coord_pysolo")
+        .join(format!("wind_coord_pysolo_{tag}.redb"));
     let _ = std::fs::remove_file(&db_path);
     let store = Arc::new(Store::open(&db_path).unwrap());
     let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
@@ -409,7 +418,8 @@ fn mixed_record_selection_routes_by_source() {
 #[test]
 fn pinyin_record_selection_ignores_source() {
     use std::io::Write;
-    let base_dir = std::env::temp_dir().join("wind_coord_p2d_pinyin_active");
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().join("wind_coord_p2d_pinyin_active");
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);
     std::fs::create_dir_all(&schemas).unwrap();
@@ -426,7 +436,8 @@ fn pinyin_record_selection_ignores_source() {
     cfg.schema.available = vec!["py_test".into()];
     // 开启拼音调频，供 record_selection 写入测试生效（默认关闭不落库）。
     cfg.schema.pinyin.frequency.enabled = true;
-    let db_path = std::env::temp_dir().join("wind_coord_p2d_pinyin_active.redb");
+    let tmp2 = tempfile::tempdir().unwrap();
+    let db_path = tmp2.path().join("wind_coord_p2d_pinyin_active.redb");
     let _ = std::fs::remove_file(&db_path);
     let store = Arc::new(Store::open(&db_path).unwrap());
     let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
@@ -453,7 +464,8 @@ fn pinyin_record_selection_ignores_source() {
 fn freq_lookup_uses_candidate_code_not_input_buffer() {
     use aurora_candidate::{Candidate, CandidateSource};
     use std::io::Write;
-    let base_dir = std::env::temp_dir().join("wind_coord_freq_code_domain");
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().join("wind_coord_freq_code_domain");
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);
     std::fs::create_dir_all(&schemas).unwrap();
@@ -469,7 +481,8 @@ fn freq_lookup_uses_candidate_code_not_input_buffer() {
     cfg.schema.active = "py_test".into();
     cfg.schema.available = vec!["py_test".into()];
     cfg.schema.pinyin.frequency.enabled = true;
-    let db_path = std::env::temp_dir().join("wind_coord_freq_code_domain.redb");
+    let tmp2 = tempfile::tempdir().unwrap();
+    let db_path = tmp2.path().join("wind_coord_freq_code_domain.redb");
     let _ = std::fs::remove_file(&db_path);
     let store = Arc::new(Store::open(&db_path).unwrap());
     let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
@@ -696,7 +709,8 @@ fn mixed_manual_addword_goes_to_primary() {
 
     // primary 缺失的坏配置 → 返回 Err，不 panic，不写库。
     use std::io::Write;
-    let base_dir = std::env::temp_dir().join("wind_coord_p2d_addword_bad");
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().join("wind_coord_p2d_addword_bad");
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);
     std::fs::create_dir_all(&schemas).unwrap();
@@ -708,7 +722,8 @@ fn mixed_manual_addword_goes_to_primary() {
     let mut cfg = Config::default();
     cfg.schema.active = "mx_bad".into();
     cfg.schema.available = vec!["mx_bad".into()];
-    let db_path = std::env::temp_dir().join("wind_coord_p2d_addword_bad.redb");
+    let tmp2 = tempfile::tempdir().unwrap();
+    let db_path = tmp2.path().join("wind_coord_p2d_addword_bad.redb");
     let _ = std::fs::remove_file(&db_path);
     let bad_store = Arc::new(Store::open(&db_path).unwrap());
     let bc =
@@ -724,7 +739,7 @@ fn mixed_manual_addword_goes_to_primary() {
 /// 夹具：拼音方案 + 开调频 + 指定要排除的区块组。
 fn exclude_coord(tag: &str, exclude: &[&str]) -> (Arc<Coordinator>, Arc<Store>) {
     use std::io::Write;
-    let base_dir = std::env::temp_dir().join(format!("wind_freq_exclude_{tag}"));
+    let base_dir = aurora_utils::testing::scratch(&format!("wind_freq_exclude_{tag}"));
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);
     std::fs::create_dir_all(&schemas).unwrap();
@@ -749,7 +764,8 @@ fn exclude_coord(tag: &str, exclude: &[&str]) -> (Arc<Coordinator>, Arc<Store>) 
     cfg.schema.available = vec!["py_test".into()];
     cfg.schema.pinyin.frequency.enabled = true;
     cfg.schema.frequency.exclude_blocks = exclude.iter().map(|s| s.to_string()).collect();
-    let db_path = std::env::temp_dir().join(format!("wind_freq_exclude_{tag}.redb"));
+    let db_path = aurora_utils::testing::scratch("freq_exclude")
+        .join(format!("wind_freq_exclude_{tag}.redb"));
     let _ = std::fs::remove_file(&db_path);
     let store = Arc::new(Store::open(&db_path).unwrap());
     let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
@@ -867,7 +883,8 @@ fn unknown_block_name_does_not_disable_the_rest() {
 // 码表方案的码不是拼音，不校验。
 
 fn promo_coord(tag: &str) -> (Arc<Coordinator>, Arc<Store>) {
-    let path = std::env::temp_dir().join(format!("wind_promo_check_{tag}.redb"));
+    let path =
+        aurora_utils::testing::scratch("promo_check").join(format!("wind_promo_check_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(Store::open(&path).unwrap());
     let c = Coordinator::new_headless_with_store(Config::default(), None, Arc::clone(&store));
@@ -992,15 +1009,15 @@ const BUMP_CT_PROMOTE: usize = 5;
 /// 混输方案（mx_test）的无头 Coordinator，拼音 / 码表晋升阈值分别为 2 / 5。
 fn mixed_bump_coord(tag: &str) -> (Arc<Coordinator>, Arc<Store>) {
     let tag = format!("{tag}_{}", std::process::id());
-    // 借 `mixed_coord` 落好方案文件，再按本组所需配置另起一个。
-    drop(mixed_coord(&tag));
-    let base_dir = std::env::temp_dir().join(format!("wind_coord_p2d_{tag}"));
+    // 先落好方案文件，再按本组所需配置另起一个。
+    let base_dir = mixed_schema_dir(&tag);
     let mut cfg = Config::default();
     cfg.schema.active = "mx_test".into();
     cfg.schema.available = vec!["mx_test".into(), "ct_test".into(), "py_test".into()];
     cfg.schema.pinyin.auto_learn.promote_count = BUMP_PY_PROMOTE;
     cfg.schema.codetable.auto_phrase.promote_count = BUMP_CT_PROMOTE;
-    let db_path = std::env::temp_dir().join(format!("wind_coord_bump_{tag}.redb"));
+    let db_path =
+        aurora_utils::testing::scratch("coord_bump").join(format!("wind_coord_bump_{tag}.redb"));
     let _ = std::fs::remove_file(&db_path);
     let store = Arc::new(Store::open(&db_path).unwrap());
     let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
@@ -1072,7 +1089,7 @@ fn record_always_coord(
     tweak: impl FnOnce(&mut Config),
     schema_freq: &str,
 ) -> (Arc<Coordinator>, Arc<Store>) {
-    let base_dir = std::env::temp_dir().join(format!("wind_record_always_{tag}"));
+    let base_dir = aurora_utils::testing::scratch(&format!("wind_record_always_{tag}"));
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);
     std::fs::create_dir_all(&schemas).unwrap();
@@ -1091,7 +1108,8 @@ fn record_always_coord(
     cfg.schema.codetable.frequency.enabled = false;
     cfg.schema.codetable.frequency.record_always = false;
     tweak(&mut cfg);
-    let db_path = std::env::temp_dir().join(format!("wind_record_always_{tag}.redb"));
+    let db_path = aurora_utils::testing::scratch("record_always")
+        .join(format!("wind_record_always_{tag}.redb"));
     let _ = std::fs::remove_file(&db_path);
     let store = Arc::new(Store::open(&db_path).unwrap());
     let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));
@@ -1144,7 +1162,8 @@ fn record_always_honors_schema_override() {
 /// 拼音档同样认 `record_always`（三个引擎各有一份开关）。
 #[test]
 fn pinyin_record_always_records() {
-    let base_dir = std::env::temp_dir().join("wind_record_always_py");
+    let tmp = tempfile::tempdir().unwrap();
+    let base_dir = tmp.path().join("wind_record_always_py");
     let schemas = base_dir.join("schemas");
     let _ = std::fs::remove_dir_all(&base_dir);
     std::fs::create_dir_all(&schemas).unwrap();
@@ -1158,7 +1177,8 @@ fn pinyin_record_always_records() {
     cfg.schema.available = vec!["py_test".into()];
     cfg.schema.pinyin.frequency.enabled = false;
     cfg.schema.pinyin.frequency.record_always = true;
-    let db_path = std::env::temp_dir().join("wind_record_always_py.redb");
+    let tmp2 = tempfile::tempdir().unwrap();
+    let db_path = tmp2.path().join("wind_record_always_py.redb");
     let _ = std::fs::remove_file(&db_path);
     let store = Arc::new(Store::open(&db_path).unwrap());
     let c = Coordinator::new_headless_with_store(cfg, Some(base_dir.as_path()), Arc::clone(&store));

@@ -21,7 +21,10 @@ fn bench_comment_dict_load() {
     };
     let p = std::path::PathBuf::from(&path);
     let bytes = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-    let cache = std::env::temp_dir().join(format!("wind_cmt_bench_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp
+        .path()
+        .join(format!("wind_cmt_bench_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&cache);
 
     // 冷启：缓存目录为空，走解析 + 写盘

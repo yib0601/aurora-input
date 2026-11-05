@@ -10520,8 +10520,10 @@ mod mode_comment_e2e_tests {
     /// ⚠️ **内置方案一项都不声明**（见 `short_code_yield` 那轮的结论），所以方案级路径
     /// 出厂状态下走不到，夹具必须自造方案——拿 wubi86 当现成的只会得到一条恒绿的测试。
     fn data_dir_with_schema(tag: &str, id: &str, candidate_section: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("wind_cmt_schema_{}_{tag}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!(
+            "wind_cmt_schema_{}_{tag}",
+            std::process::id()
+        ));
         let schemas = dir.join("schemas");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&schemas).unwrap();
@@ -10941,7 +10943,10 @@ mod mode_comment_e2e_tests {
     /// 里每个库的释义各占一行；查不到的候选没有这一段。
     #[test]
     fn default_tooltip_dict_all_section_lists_every_library() {
-        let dir = std::env::temp_dir().join(format!("wind_tip_dict_all_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_tip_dict_all_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let head = "name: t\ncolumns:\n  - text\n  - comment\n...\n";
@@ -17870,7 +17875,10 @@ mod input_scope_tests {
     /// 已按新规则走，推给该客户端的值必须跟上——否则打破 core.suppress ⊆ C++.suppress。
     #[test]
     fn any_compat_reload_repushes_password_gate_for_hand_written_rule() {
-        let dir = std::env::temp_dir().join(format!("wind_pfe_reload_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_pfe_reload_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let (ui_tx, _rx) = std::sync::mpsc::channel();
@@ -18797,7 +18805,10 @@ mod exit_flush_tests {
     /// 退出前落盘连统计一起：`process::exit` 不跑析构，收集器的内存增量否则就丢了。
     #[test]
     fn flush_before_exit_writes_todays_stats() {
-        let user = std::env::temp_dir().join(format!("wind_exit_flush-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_exit_flush-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         let (c, _rx) = Coordinator::new_headless_with_ui_at(Config::default(), None, Some(&user));
         let sc = c.stat_collector.as_ref().expect("有用户目录就有统计收集器");

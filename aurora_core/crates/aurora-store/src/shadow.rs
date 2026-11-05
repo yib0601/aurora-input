@@ -519,7 +519,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(name);
+        let p = aurora_utils::testing::scratch(name).join(name);
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -557,7 +557,8 @@ mod tests {
 
     #[test]
     fn test_redb_shadow_ops() {
-        let path = std::env::temp_dir().join("wind_shadow_redb.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_shadow_redb.redb");
         let _ = std::fs::remove_file(&path);
         let s = Store::open(&path).unwrap();
 
@@ -655,7 +656,8 @@ mod tests {
 
     #[test]
     fn test_list_shadow_rules() {
-        let path = std::env::temp_dir().join("wind_shadow_list.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_shadow_list.redb");
         let _ = std::fs::remove_file(&path);
         let s = Store::open(&path).unwrap();
         s.pin_shadow("wb", "aaaa", "恭恭敬敬", None, 0).unwrap();

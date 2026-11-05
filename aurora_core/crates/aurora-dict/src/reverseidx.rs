@@ -557,7 +557,10 @@ mod tests {
             ("中", "khk", 10),
             ("大", "de", 7),
         ]);
-        let p = std::env::temp_dir().join(format!("wind_wridx_rt_{}.wridx", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_wridx_rt_{}.wridx", std::process::id()));
         write_wridx(&p, mem.image()).unwrap();
 
         // 阈值给足 → 常驻；给 0 → mmap。两条路都必须与内存版**逐位相同**。
@@ -644,7 +647,10 @@ mod tests {
         assert!(mem.is_empty());
         assert!(mem.codes_of("任意").is_none());
         assert!(mem.texts_with_prefix("中", 9).is_empty());
-        let p = std::env::temp_dir().join(format!("wind_wridx_empty_{}.wridx", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_wridx_empty_{}.wridx", std::process::id()));
         write_wridx(&p, mem.image()).unwrap();
         let disk = ReverseIndex::open(&p, usize::MAX).unwrap();
         assert!(disk.is_empty());
@@ -662,7 +668,10 @@ mod tests {
     /// 用户会静默失去反查，且毫无提示。
     #[test]
     fn rejects_foreign_or_stale_file() {
-        let p = std::env::temp_dir().join(format!("wind_wridx_bad_{}.wridx", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_wridx_bad_{}.wridx", std::process::id()));
         std::fs::write(
             &p,
             b"not a wridx file at all, padded well past the header size",
@@ -733,7 +742,7 @@ mod prefix_tests {
         tag: &str,
     ) -> (ReverseIndex, ReverseIndex, std::path::PathBuf) {
         let mem = ReverseIndex::build(pairs);
-        let p = std::env::temp_dir().join(format!(
+        let p = aurora_utils::testing::scratch(tag).join(format!(
             "wind_wridx_pfx_{}_{}.wridx",
             std::process::id(),
             tag

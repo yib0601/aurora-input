@@ -196,7 +196,8 @@ mod tests {
     use crate::stats::{DailyStats, StatsMeta};
 
     fn db(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("wind_mp4_{name}_{}.redb", std::process::id()));
+        let p = aurora_utils::testing::scratch(name)
+            .join(format!("wind_mp4_{name}_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_dir_all(crate::store::derived_state_dir(&p));
         let _ = std::fs::remove_dir_all(crate::store::derived_text_dir(&p));

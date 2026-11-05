@@ -1,9 +1,9 @@
 //! 未启用扩展词库只给反查模式（开关 `input.reverse.lookup_disabled_dicts`）：
 //! 行内通配与普通打字不看它，注释反查只认已启用词库。自造夹具，不依赖 build_dev/data。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::{Path, PathBuf};
 
 fn uid(tag: &str) -> String {
     format!("zz_ldd_{tag}_{}", std::process::id())
@@ -69,7 +69,7 @@ fn write_fixture(dir: &Path, id: &str, with_xz: bool, xz_file: bool) {
 
 fn setup(tag: &str, on: bool, with_xz: bool, xz_file: bool) -> (EngineManager, String, Cleanup) {
     let id = uid(tag);
-    let dir = std::env::temp_dir().join(format!("wind_ldd_{id}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_ldd_{id}"));
     let _ = std::fs::remove_dir_all(&dir);
     let guard = Cleanup {
         id: id.clone(),

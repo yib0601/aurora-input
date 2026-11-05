@@ -13,9 +13,9 @@
 //! 规则不同（O 引导 vs 首字母引导），抄串了照样全绿 —— 那一层由本文件末尾的
 //! `official_zero_initial_strokes_work` 正向击键表把守。
 
-use std::collections::{HashMap, HashSet};
 use aurora_engine::pinyin::shuangpin::{Layout, ShuangpinConverter};
 use aurora_engine::pinyin::syllable::STANDARD_SYLLABLES;
+use std::collections::{HashMap, HashSet};
 
 /// 内置方案清单：**扫描目录**得来，不是硬编码列表。
 ///

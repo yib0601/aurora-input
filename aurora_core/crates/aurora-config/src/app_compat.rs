@@ -3290,7 +3290,7 @@ mod disabled_rule_tests {
     use super::*;
 
     fn tmp(tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("wind_compat_dis_{tag}_{}", std::process::id()))
+        aurora_utils::testing::scratch(&format!("wind_compat_dis_{tag}"))
     }
     fn write(dir: &std::path::Path, text: &str) {
         std::fs::create_dir_all(dir).unwrap();
@@ -3386,7 +3386,7 @@ mod layering_tests {
     use crate::compat_overlay::parse_raw;
 
     fn tmp(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_compat_lay_{tag}_{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(&format!("wind_compat_lay_{tag}"));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -4443,7 +4443,7 @@ mod resolve_tests {
     use super::*;
 
     fn tmp(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_compat_res_{tag}_{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(&format!("wind_compat_res_{tag}"));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

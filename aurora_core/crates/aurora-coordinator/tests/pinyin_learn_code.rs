@@ -10,13 +10,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -73,7 +73,8 @@ fn learned_code_uses_dict_code_not_typed_code() {
         eprintln!("跳过：缺 build_dev 词库");
         return;
     }
-    let db = std::env::temp_dir().join("wind_learn_code_norm.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_norm.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg(), Some(&data_dir()), Arc::clone(&store));
@@ -132,7 +133,8 @@ fn learned_word_is_actually_typeable() {
         eprintln!("跳过：缺 build_dev 词库");
         return;
     }
-    let db = std::env::temp_dir().join("wind_learn_code_typeable.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_typeable.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg(), Some(&data_dir()), Arc::clone(&store));
@@ -149,10 +151,11 @@ fn learned_word_is_actually_typeable() {
         "再选「快乐」应整体上屏"
     );
     // 前提自检：这个词系统词库确实没有，否则下面测的是系统词库而非刚造的词。
+    let tmp2 = tempfile::tempdir().unwrap();
     let fresh = Coordinator::new_headless_with_store(
         cfg(),
         Some(&data_dir()),
-        Arc::new(Store::open(std::env::temp_dir().join("wind_learn_code_fresh.redb")).unwrap()),
+        Arc::new(Store::open(tmp2.path().join("wind_learn_code_fresh.redb")).unwrap()),
     );
     fresh.prewarm_indexes();
     assert!(
@@ -205,7 +208,8 @@ fn word_learned_by_fuzzy_typing_is_retypeable_by_fuzzy_typing() {
     }
     let mut c = cfg();
     c.schema.pinyin.fuzzy.ch_c = true;
-    let db = std::env::temp_dir().join("wind_learn_code_fuzzy_retype.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_fuzzy_retype.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord =
@@ -283,7 +287,8 @@ fn fuzzy_sentence_commit_learns_canonical_code() {
     }
     let mut c = cfg();
     c.schema.pinyin.fuzzy.ch_c = true;
-    let db = std::env::temp_dir().join("wind_learn_code_fuzzy_sentence.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_fuzzy_sentence.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(c, Some(&data_dir()), Arc::clone(&store));
@@ -313,7 +318,8 @@ fn s2_fuzzy_sentence_commit_learns_canonical_code() {
     let mut c = cfg();
     c.schema.pinyin.fuzzy.ch_c = true;
     c.schema.pinyin.sentence_uses_user_words = true;
-    let db = std::env::temp_dir().join("wind_learn_code_s2_fuzzy_sentence.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_s2_fuzzy_sentence.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     store
@@ -349,7 +355,8 @@ fn fuzzy_pick_of_temp_word_advances_its_count() {
     }
     let mut c = cfg();
     c.schema.pinyin.fuzzy.ch_c = true;
-    let db = std::env::temp_dir().join("wind_learn_code_fuzzy_temp_count.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_fuzzy_temp_count.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     const WORD: &str = "菜就多练";
@@ -393,7 +400,8 @@ fn fuzzy_sentence_repeat_commit_counts_once() {
     }
     let mut c = cfg();
     c.schema.pinyin.fuzzy.ch_c = true;
-    let db = std::env::temp_dir().join("wind_learn_code_fuzzy_sentence_twice.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_fuzzy_sentence_twice.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(c, Some(&data_dir()), Arc::clone(&store));
@@ -430,7 +438,8 @@ fn s2_single_user_word_sentence_does_not_duplicate() {
     let mut c = cfg();
     c.schema.pinyin.fuzzy.ch_c = true;
     c.schema.pinyin.sentence_uses_user_words = true;
-    let db = std::env::temp_dir().join("wind_learn_code_s2_no_dup.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_s2_no_dup.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     const WORD: &str = "菜就多练";
@@ -475,7 +484,8 @@ fn mixed_abbrev_sentence_commit_learns_full_pinyin() {
     }
     let mut c = cfg();
     c.schema.pinyin.fuzzy.enabled = false;
-    let db = std::env::temp_dir().join("wind_learn_code_mixed_abbrev.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_mixed_abbrev.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(c, Some(&data_dir()), Arc::clone(&store));
@@ -519,7 +529,8 @@ fn mixed_abbrev_sentence_does_not_duplicate_user_word() {
     }
     let mut c = cfg();
     c.schema.pinyin.fuzzy.enabled = false;
-    let db = std::env::temp_dir().join("wind_learn_code_mixed_abbrev_dup.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_mixed_abbrev_dup.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     const SENT: &str = "不知道你好";
@@ -552,7 +563,8 @@ fn user_abbrev_node_sentence_commit_learns_full_pinyin() {
     let mut c = cfg();
     c.schema.pinyin.fuzzy.enabled = false;
     c.schema.pinyin.sentence_uses_user_words = true;
-    let db = std::env::temp_dir().join("wind_learn_code_user_abbrev_node.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("wind_learn_code_user_abbrev_node.redb");
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     // bai|cheng|xian → 位 0/3/8
@@ -600,7 +612,8 @@ fn legacy_mixed_code_is_not_auto_promoted() {
         let mut c = cfg();
         c.schema.pinyin.fuzzy.enabled = false;
         c.schema.pinyin.auto_learn.promote_count = PROMOTE;
-        let db = std::env::temp_dir().join(format!("wind_learn_code_promo_{tag}.redb"));
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join(format!("wind_learn_code_promo_{tag}.redb"));
         let _ = std::fs::remove_file(&db);
         let store = Arc::new(Store::open(&db).unwrap());
         for _ in 0..PROMOTE - 1 {

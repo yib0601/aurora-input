@@ -154,7 +154,10 @@ mod tests {
     /// 锁 API 本身报错（网络家目录上的 flock 等）⇒ 退化为只读，不让整个用户数据不可用。
     #[test]
     fn lock_api_error_degrades_to_readonly() {
-        let d = std::env::temp_dir().join(format!("wind_lockerr-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_lockerr-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         let f = std::fs::File::create(d.join("lock")).unwrap();
         let e = std::fs::TryLockError::Error(std::io::Error::other("ENOLCK"));
@@ -168,7 +171,8 @@ mod tests {
     /// Review Focus 5：目录被复制到另一台机器 ⇒ 换新 device_id，旧日志封存，不与新日志混号。
     #[test]
     fn copied_dir_gets_new_device_and_seals_old_journal() {
-        let d = std::env::temp_dir().join(format!("wind_dev-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!("wind_dev-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("journal")).unwrap();
         let DeviceOutcome::Renewed {
@@ -211,7 +215,8 @@ mod tests {
 
     #[test]
     fn second_lock_holder_gets_none() {
-        let d = std::env::temp_dir().join(format!("wind_lock-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!("wind_lock-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         let a = try_lock(&d).unwrap();
         assert!(a.is_some());

@@ -435,7 +435,7 @@ fn embolden_spreads_coverage_rightwards() {
 fn save_png(buf: &[u8], w: u32, h: u32, name: &str) -> std::path::PathBuf {
     let dir = std::env::var_os("AURORA_UI_PNG_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+        .unwrap_or_else(|| tempfile::tempdir().expect("建 PNG 输出目录").keep());
     let rgba: Vec<u8> = buf
         .chunks(4)
         .flat_map(|p| {

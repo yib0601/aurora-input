@@ -14,12 +14,12 @@
 //!
 //! ⚠️ 词典缺失时整族静默跳过（判据是**耗时 0.00s**，不是通过条数）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -63,7 +63,7 @@ fn coordinator(tag: &str, words: &[(&str, &str, i32)]) -> Arc<Coordinator> {
 
 /// 用户词一律写在 `pinyin` 名下：双拼与全拼共用拼音用户词库（存的是全拼码）。
 fn coordinator_for(schema: &str, tag: &str, words: &[(&str, &str, i32)]) -> Arc<Coordinator> {
-    let store_path = std::env::temp_dir().join(format!(
+    let store_path = aurora_utils::testing::scratch(tag).join(format!(
         "wind_e2e_uw_abbrev_code_{tag}_{}.redb",
         std::process::id()
     ));
@@ -241,8 +241,11 @@ fn is_date(t: &str) -> bool {
 
 /// 开了拼音调频的协调器（出厂 `data/config.toml` 即开；`Config::default()` 是关的），
 /// 可先往词频表里灌 `(rq, text) × count`，模拟「之前某天选过」。
-fn freq_coordinator(tag: &str, seed: &[(&str, u32)]) -> (Arc<Coordinator>, Arc<aurora_store::Store>) {
-    let store_path = std::env::temp_dir().join(format!(
+fn freq_coordinator(
+    tag: &str,
+    seed: &[(&str, u32)],
+) -> (Arc<Coordinator>, Arc<aurora_store::Store>) {
+    let store_path = aurora_utils::testing::scratch(tag).join(format!(
         "wind_e2e_uw_abbrev_code_{tag}_{}.redb",
         std::process::id()
     ));

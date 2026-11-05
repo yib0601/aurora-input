@@ -7,8 +7,8 @@
 //! ⚠️ `AURORA_DATADIR_CONF` 必须设，否则 `prune_user_config()` 会真写用户的
 //! `%APPDATA%\AuroraInput\config.toml`（本仓已有前科）。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -29,7 +29,8 @@ fn layer_value<'a>(o: &'a aurora_config::KeyOrigin, name: &str) -> Option<&'a to
 
 #[test]
 fn key_origin_traces_all_four_layers() {
-    let tmp = std::env::temp_dir().join("wind_key_origin_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_key_origin_e2e");
     let root = tmp.join("install");
     let data = root.join("data");
     let custom = root.join("data_custom");

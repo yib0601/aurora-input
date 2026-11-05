@@ -12,9 +12,9 @@
 //!   cargo test -p aurora-dict --test reverse_index_bench -- --ignored --nocapture
 //! ```
 
-use std::time::Instant;
 use aurora_dict::cached::CachedDict;
 use aurora_dict::reverseidx::ReverseIndex;
+use std::time::Instant;
 
 #[test]
 #[ignore = "基准工具，需 AURORA_REVERSE_BENCH 指定含 .wdat 的目录"]
@@ -54,7 +54,10 @@ fn bench_reverse_index_build_and_open() {
     let image = aurora_dict::cached::serialize_reverse_index_from(&dicts);
     let build = t1.elapsed();
 
-    let out = std::env::temp_dir().join(format!("wind_wridx_bench_{}.wridx", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp
+        .path()
+        .join(format!("wind_wridx_bench_{}.wridx", std::process::id()));
     let t2 = Instant::now();
     aurora_dict::reverseidx::write_wridx(&out, &image).unwrap();
     let write = t2.elapsed();

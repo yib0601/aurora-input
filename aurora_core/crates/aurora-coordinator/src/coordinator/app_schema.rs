@@ -454,8 +454,10 @@ mod tests {
 
     /// 同 [`fixture`]，另可改配置。
     fn fixture_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> (Arc<Coordinator>, PathBuf) {
-        let dir =
-            std::env::temp_dir().join(format!("wind_app_schema_unit_{tag}_{}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!(
+            "wind_app_schema_unit_{tag}_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("data/schemas");
         for id in ["za", "zb"] {

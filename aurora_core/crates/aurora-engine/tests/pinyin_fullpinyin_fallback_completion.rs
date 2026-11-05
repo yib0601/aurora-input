@@ -24,11 +24,11 @@
 //! 可以直接从 `syllables.len()` 与字节长度推出。主路径两域不同，`started_syllables` 必须
 //! 走双拼域 —— 两处的算法看着像，混用会静默错配。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data");
@@ -53,7 +53,7 @@ fn manager_with_user_word(dir: &std::path::Path, tag: &str, max_extra: u32) -> E
     const SYLS: &[&str] = &[
         "qing", "feng", "shu", "ru", "fa", "nei", "ce", "wen", "ti", "fan", "kui",
     ];
-    let root = std::env::temp_dir().join(format!("wind_fpfb_uw_{tag}"));
+    let root = aurora_utils::testing::scratch(&format!("wind_fpfb_uw_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));
@@ -221,7 +221,7 @@ fn fallback_extra_without_trailing_partial() {
 /// 同一个用例在两个进程里会共用一份 store 并互相 `remove_dir_all`。上面那个夹具是先前
 /// 写的、没带 pid（`real_dict.rs` 早就踩过这个坑并加了 pid），新写的不该再沿用。
 fn manager_with_word(dir: &std::path::Path, tag: &str, syls: &[&str], word: &str) -> EngineManager {
-    let root = std::env::temp_dir().join(format!("wind_fpfb_w_{tag}_{}", std::process::id()));
+    let root = aurora_utils::testing::scratch(&format!("wind_fpfb_w_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));

@@ -10,12 +10,12 @@
 //!
 //! ⚠️ 词典缺失时整族静默跳过（判据是**耗时 0.00s**，不是通过条数）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_BACKTICK: u32 = 0xC0;
 const VK_SEMICOLON: u32 = 0xBA;

@@ -11,8 +11,8 @@
 //! ⚠️ 全文件仅此一个 `#[test]`：多个测试在同一二进制里并行会争抢环境变量与 OnceLock。
 //! ⚠️ `AURORA_DATADIR_CONF` 必须设，否则会真写用户的 `%APPDATA%\AuroraInput\config.toml`。
 
-use std::path::Path;
 use aurora_config::Config;
+use std::path::Path;
 
 fn write_at(dir: &Path, rel: &str, body: &str) {
     let p = dir.join(rel);
@@ -51,7 +51,10 @@ fn assert_new_form(text: &str, which: &str) {
 #[test]
 fn badge_color_migration_lands_on_disk_via_prune_and_set_user_value() {
     // 带进程 id：并发会话共享 TMPDIR，固定目录名会互相 remove_dir_all。
-    let tmp = std::env::temp_dir().join(format!("wind_badge_migration_e2e_{}", std::process::id()));
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td
+        .path()
+        .join(format!("wind_badge_migration_e2e_{}", std::process::id()));
     let root = tmp.join("install");
     let user = tmp.join("UserData");
     let conf = tmp.join("datadir.conf");

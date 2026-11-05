@@ -7,12 +7,12 @@
 //!
 //! ⚠️ 本用例**不依赖 `build_dev/data`**：夹具全部自造，不会静默跳过。
 
-use std::path::Path;
-use std::sync::mpsc::Receiver;
 use aurora_bridge::handler::{FocusData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ui_types::{MenuCmd, StatusTipAnchor, StatusTipPlacement, UiCommand, UiEvent};
+use std::path::Path;
+use std::sync::mpsc::Receiver;
 
 const PID: u32 = 4343;
 const PROC: &str = "illustrator.exe";
@@ -77,7 +77,10 @@ fn string(v: Option<toml::Value>) -> Option<String> {
 #[test]
 fn per_app_status_position_menu_and_drag_routing() {
     // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-    let tmp = std::env::temp_dir().join(format!("wind_coord_status_pos-{}", std::process::id()));
+    let tmpdir = tempfile::tempdir().unwrap();
+    let tmp = tmpdir
+        .path()
+        .join(format!("wind_coord_status_pos-{}", std::process::id()));
     let root = tmp.join("install");
     let user = tmp.join("UserData");
     let conf = tmp.join("datadir.conf");

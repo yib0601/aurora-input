@@ -300,8 +300,10 @@ mod tests {
 
     /// 每个用例独占一个目录（按用例名 + pid），保证并行跑互不干扰。
     fn cache_in(case: &str) -> (TempDir, PathBuf) {
-        let dir =
-            std::env::temp_dir().join(format!("wind_build_guard_{case}_{}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!(
+            "wind_build_guard_{case}_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let cache = dir.join("a.wdat");

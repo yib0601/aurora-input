@@ -11,8 +11,8 @@
 //! ⚠️ 全文件仅此一个 `#[test]`：多个测试在同一二进制里并行会争抢 `AURORA_DATADIR_CONF`
 //! 与 OnceLock，先跑的那个会把用户目录定死，后跑的静默测到错误的目标。
 
-use std::path::Path;
 use aurora_config::Config;
+use std::path::Path;
 
 /// 在 `dir/rel` 写一个带内容的文件（父目录按需创建）。
 fn write_at(dir: &Path, rel: &str, body: &str) -> std::path::PathBuf {
@@ -24,7 +24,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> std::path::PathBuf {
 
 #[test]
 fn user_dir_overrides_installed_data_files() {
-    let tmp = std::env::temp_dir().join("wind_user_override_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_user_override_e2e");
     let user = tmp.join("UserData");
     let data = tmp.join("install/data");
     let conf = tmp.join("datadir.conf");

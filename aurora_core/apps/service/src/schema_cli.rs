@@ -194,7 +194,8 @@ fn cmd_rebuild() -> anyhow::Result<i32> {
 /// 不在这里另写一份：此前手抄的版本把「enabled 与 default_enabled 都没写」当启用，引擎却当
 /// 关闭——自动识别的扩展库正是这种形态，CLI 会把一张没开的库报成「启用」。
 fn dict_status(d: &Value) -> &'static str {
-    let spec: aurora_config::schema::DictSpec = serde_json::from_value(d.clone()).unwrap_or_default();
+    let spec: aurora_config::schema::DictSpec =
+        serde_json::from_value(d.clone()).unwrap_or_default();
     if spec.default {
         "主库"
     } else if spec.is_enabled() {

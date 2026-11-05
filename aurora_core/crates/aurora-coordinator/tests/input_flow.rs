@@ -49,7 +49,7 @@ fn overlay_override_dir_with_codetable(
     schemas: &[(&str, bool)],
     codetable: &str,
 ) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_overlay_ov_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_overlay_ov_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for (id, show_all) in schemas {
@@ -1365,7 +1365,8 @@ fn separator_works_for_shuangpin_when_explicitly_enabled() {
     {
         return;
     }
-    let ov = std::env::temp_dir().join("wind_sp_sep_quote_ov");
+    let tmp = tempfile::tempdir().unwrap();
+    let ov = tmp.path().join("wind_sp_sep_quote_ov");
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).expect("建 override 目录");
     std::fs::write(
@@ -1471,7 +1472,7 @@ fn coord_with_mspy_temp_pinyin(tag: &str) -> Option<std::sync::Arc<Coordinator>>
     if !has_schemas() || !d.join("schemas/shuangpin/mspy.toml").exists() {
         return None;
     }
-    let dir = std::env::temp_dir().join(format!("wind_tp_mspy_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_tp_mspy_{tag}"));
     std::fs::create_dir_all(&dir).expect("建 override 目录失败");
     std::fs::write(
         dir.join("shuangpin.toml"),
@@ -1566,7 +1567,7 @@ fn temp_pinyin_full_pinyin_keeps_semicolon_as_select_key() {
 /// 每个用例独立目录（并发写同一文件会撕裂），用法同
 /// `codetable_short_code_yield.rs` 的 `override_with_level`。
 fn override_with_separator(tag: &str, mode: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_sep_ov_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_sep_ov_{tag}"));
     std::fs::create_dir_all(&dir).expect("建 override 目录失败");
     std::fs::write(
         dir.join("pinyin.toml"),
@@ -3774,7 +3775,8 @@ fn quick_type(coord: &Coordinator, s: &str) {
 }
 
 fn quick_coord(store_tag: &str) -> (std::sync::Arc<Coordinator>, std::path::PathBuf) {
-    let p = std::env::temp_dir().join(format!("wind_quickfmt_{store_tag}.redb"));
+    let p = aurora_utils::testing::scratch("quick_coord")
+        .join(format!("wind_quickfmt_{store_tag}.redb"));
     let _ = std::fs::remove_file(&p);
     let store = std::sync::Arc::new(aurora_store::Store::open(&p).unwrap());
     let coord =
@@ -4347,7 +4349,8 @@ fn test_phrase_date_expansion() {
     // 短语层存储于 store（TOML 只是同步种子，见 build() 的 store.sync_system_phrases），
     // 无 store 时短语层不建、"date" 不会展开——须用 new_headless_with_store 注入真实 store。
     // 输入 "date" → 短语层应展开当前日期候选（如 2026年6月14日）
-    let store_path = std::env::temp_dir().join("wind_phrase_date_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_date_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let coord =
@@ -4373,7 +4376,8 @@ fn test_phrase_time_expansion() {
         return;
     }
     // 短语层需真实 store 才会同步/启用（见 test_phrase_date_expansion 注释）。
-    let store_path = std::env::temp_dir().join("wind_phrase_time_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_time_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let coord =
@@ -5665,7 +5669,8 @@ fn test_candidate_op_move_top_and_delete() {
     // （new_headless 的 store=None 会让 pin/delete 变空操作）。
     // 用码表方案（非拼音）：拼音普通候选禁调位（见 handle_candidate.rs 的
     // "拼音普通候选禁调位" 分支——无稳定位置语义，pin 与衰减软置前冲突），MoveTop 恒为空操作。
-    let store_path = std::env::temp_dir().join("wind_candidate_op_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_candidate_op_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let coord =
@@ -5714,7 +5719,8 @@ fn test_delete_word_candidate_removes_both_user_and_temp_records() {
         return;
     }
     use aurora_ui_types::CandidateOp;
-    let store_path = std::env::temp_dir().join("wind_delete_dual_record.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_delete_dual_record.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store
@@ -5762,7 +5768,8 @@ fn test_candidate_op_delete_single_char_hides() {
     use aurora_ui_types::CandidateOp;
     // 单字保护已取消：隐藏候选对单字同样生效（shadow 按 code+word 键控，
     // 仅该编码下隐藏，设置页可恢复）。
-    let store_path = std::env::temp_dir().join("wind_candidate_op_single_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_candidate_op_single_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let coord =
@@ -5953,7 +5960,8 @@ fn test_web_theme_accent_defaults_to_current_and_falls_back() {
 /// 覆盖反查要测「方案文件与 override 层写同一个键」，而测试不能往真实 `build_dev/data`
 /// 的方案文件里写字，故自带方案文件；引擎只需一张一行的小码表能建起来即可。
 fn override_summary_data_dir(tag: &str, schemas: &[(&str, &str)]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_ovsum_data_{tag}_{}", std::process::id()));
+    let dir = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_ovsum_data_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let sd = dir.join("schemas");
     for (id, extra) in schemas {
@@ -5994,7 +6002,10 @@ fn test_web_override_summary_counts_each_schema_once() {
             ("ovs_c", "[engine.codetable]\ntop_code_commit = true\n"),
         ],
     );
-    let ov = std::env::temp_dir().join(format!("wind_ovsum_ov_once_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let ov = tmp
+        .path()
+        .join(format!("wind_ovsum_ov_once_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).unwrap();
     for id in ["ovs_a", "ovs_b"] {
@@ -6053,7 +6064,8 @@ fn test_stats_recorded_through_deferred_policed() {
     use aurora_bridge::deferred::DeferredHandler;
     use std::sync::Arc;
 
-    let store_path = std::env::temp_dir().join("wind_stats_deferred_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_stats_deferred_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let coord = Coordinator::new_headless_with_store(
@@ -6462,7 +6474,8 @@ fn temp_word_promotes_after_threshold_selections() {
     // handle_addword.rs 内 learn_phrase_on_commit 单元测试覆盖。
     use std::sync::Arc;
 
-    let store_path = std::env::temp_dir().join("wind_promote_thresh_integ.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_promote_thresh_integ.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = Arc::new(aurora_store::Store::open(&store_path).unwrap());
 
@@ -6688,7 +6701,8 @@ fn test_shuangpin_userword_appears_in_candidates() {
     }
 
     // 构造带用户词的 store
-    let store_path = std::env::temp_dir().join("wind_sp_userword_test.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_sp_userword_test.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // 用户词存在 "pinyin" 域（拼音族共享存储的规范 schema_id）
@@ -6788,7 +6802,8 @@ fn coord_with_skce_phrase(
     mode: aurora_config::TopCommitMode,
     tag: &str,
 ) -> std::sync::Arc<Coordinator> {
-    let store_path = std::env::temp_dir().join(format!("wind_top_code_phrase_{tag}.redb"));
+    let store_path =
+        aurora_utils::testing::scratch(tag).join(format!("wind_top_code_phrase_{tag}.redb"));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // build() 构造期读 enabled_phrases_for_input()，故须在建 coordinator 前入库。
@@ -6819,7 +6834,10 @@ fn phrase_and_codetable_exact_compete_by_weight() {
     }
     // 「可能」的词频会随词库重排变动，故断言只比「谁在前」，不写死 2301。
     for (weight, want_first) in [(100, "可能"), (3000, "短语文本")] {
-        let store_path = std::env::temp_dir().join(format!("wind_phrase_vs_exact_{weight}.redb"));
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp
+            .path()
+            .join(format!("wind_phrase_vs_exact_{weight}.redb"));
         let _ = std::fs::remove_file(&store_path);
         let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
         store.add_phrase("skce", "短语文本", 0, weight).unwrap();
@@ -6899,7 +6917,8 @@ fn top_code_phrase_code_no_codetable_char_still_commits() {
     // 引擎 handle_top_code 原 `first()?` 在 prefix 无字时短路 None → 顶码不触发（datea 累积）；
     // 修复后返回 Some(("", 余码))，coordinator 用短语显示首选顶码。用内置 date 日期短语验证
     // （系统短语须真 store 才同步，见 test_phrase_date_expansion）。
-    let store_path = std::env::temp_dir().join("wind_top_code_datecode.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_top_code_datecode.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let mut cfg = config_with("wubi86");
@@ -6941,7 +6960,8 @@ fn phrase_auto_commit_unique_exact_no_longer() {
     // 引擎 decide_auto_commit 只认码表候选（短语 code 空、且在引擎 convert 后追加），故短语原不进
     // 判据；phrase_auto_commit 补齐。注入短语码 kkkkx（五笔码表 4 码封顶，5 码处必无码表候选，
     // 短语成唯一候选）；kkkk 处有多个码表候选（非唯一）→ 第 4 键不会提前自动上屏。
-    let store_path = std::env::temp_dir().join("wind_phrase_autocommit.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_autocommit.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase("kkkkx", "唯一测试短语", 0, 100).unwrap();
@@ -6980,7 +7000,8 @@ fn top_code_yields_to_overlong_phrase() {
     if !has_schemas() {
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_phrase_overlong_topcode.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_overlong_topcode.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase("kkkkx", "唯一测试短语", 0, 100).unwrap();
@@ -7009,7 +7030,8 @@ fn top_code_never_hijacked_overlong_user_word() {
     if !has_schemas() {
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_userword_overlong_topcode.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_userword_overlong_topcode.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store
@@ -7044,7 +7066,8 @@ fn phrase_commit_keeps_real_newline() {
     if !has_schemas() {
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_phrase_keep_newline.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_keep_newline.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // 与 phrase_auto_commit 同构造：kkkkx 在五笔 5 码处必无码表候选 → 短语唯一 → 自动上屏。
@@ -7075,7 +7098,8 @@ fn phrase_auto_commit_effect_command_executes() {
     // 含副作用 $CC 命令（Effect 动作）作唯一精确码短语：不再被自动上屏排除，
     // 应清组合并异步执行（与空格选中命令同语义 → ClearComposition）。
     // ask() 为未实现 Effect（异步执行仅 warn 降级），测试无真实副作用。
-    let store_path = std::env::temp_dir().join("wind_phrase_autocmd_effect.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_autocmd_effect.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store
@@ -7108,8 +7132,8 @@ fn phrase_auto_commit_effect_command_executes() {
 /// 回归：原 `allow_prefix` 在补全分支放行整串前缀命中，致空码补全冒出多条「后续」。
 /// 注入同前缀 zzq 的三条短语（码 zzqa/zzqb/zzqc，五笔无 zzq 精确字 → 触发补全分支）。
 fn coord_with_prefix_phrases(complete: bool) -> std::sync::Arc<Coordinator> {
-    let store_path =
-        std::env::temp_dir().join(format!("wind_phrase_complete_{}.redb", complete as u8));
+    let store_path = aurora_utils::testing::scratch("coord_with_prefix_phrases")
+        .join(format!("wind_phrase_complete_{}.redb", complete as u8));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // 权重递增：首选应为权重最高的 zzqc。
@@ -7174,8 +7198,8 @@ fn exact_mode_without_complete_suppresses_phrase_prefix() {
 /// `aab` 的选取依据：六个 wubi86 词库均无 code=="aab" 的精确项，主库有 4 条 aab? 后继——
 /// 即「码表侧必然想补、且补得出来」，是这个 bug 的最小复现条件。
 fn coord_exact_completion(with_phrase: bool) -> std::sync::Arc<Coordinator> {
-    let store_path =
-        std::env::temp_dir().join(format!("wind_exact_completion_{}.redb", with_phrase as u8));
+    let store_path = aurora_utils::testing::scratch("coord_exact_completion")
+        .join(format!("wind_exact_completion_{}.redb", with_phrase as u8));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     if with_phrase {
@@ -7234,7 +7258,8 @@ fn exact_mode_completion_fires_without_phrase() {
 /// 复用 kkkkx（5 码，五笔 4 码封顶 → 必无更长后继）隔离出 min_len 单一变量：
 /// 显式设 6 → 5 < 6 应被拦；设 5 → 恰好达标应放行（边界为 >=）。
 fn coord_with_phrase_min_len(min_len: usize, tag: &str) -> std::sync::Arc<Coordinator> {
-    let store_path = std::env::temp_dir().join(format!("wind_phrase_minlen_{tag}.redb"));
+    let store_path =
+        aurora_utils::testing::scratch(tag).join(format!("wind_phrase_minlen_{tag}.redb"));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase("kkkkx", "唯一测试短语", 0, 100).unwrap();
@@ -7294,7 +7319,8 @@ fn phrase_auto_commit_at_min_len_boundary() {
 // text=display 标签 → 复核不匹配被否决；recheck 因意向已 Some 不跑；phrase_auto_commit
 // 只认 is_phrase。修复=复核按 phrase_template 补匹配 + 首选命令分流(command_auto_outcome)。
 fn coord_with_dict_command(template: &str, tag: &str) -> std::sync::Arc<Coordinator> {
-    let store_path = std::env::temp_dir().join(format!("wind_dict_autocmd_{tag}.redb"));
+    let store_path =
+        aurora_utils::testing::scratch(tag).join(format!("wind_dict_autocmd_{tag}.redb"));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store
@@ -7353,7 +7379,8 @@ fn special_mode_effect_command_auto_commit_executes() {
     // 快符特殊模式（引用 wubi86 方案）：编码命中唯一含副作用 $CC 词条时，
     // 自动上屏应走命令执行路径（退出模式 + 异步执行 → ClearComposition），
     // 而非因引擎意向(原始 $CC 源)与展开后 display 文本复核不匹配而静默不触发。
-    let store_path = std::env::temp_dir().join("wind_special_autocmd_effect.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_special_autocmd_effect.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store
@@ -7401,7 +7428,8 @@ fn special_mode_auto_commit_recovers_after_shadow_resolves_ambiguity() {
         eprintln!("跳过：缺少 schema");
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_special_autocommit_shadow.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_special_autocommit_shadow.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // 用一个真实词库必然没有的 5 码占位（wubi86 max_code_length=4，见 schema toml），
@@ -7485,7 +7513,8 @@ fn special_mode_exact_completion_shows_longer_code() {
     // 方案一致。single_code_input/single_code_complete 配在全局 schema.codetable、方案未覆盖 →
     // tri-state 回落全局（manager.rs resolved），故特殊模式独立引擎也拿到这两个开关。
     // `aab` 复用 project_phrase_candidate_commit §三 的回归码（六库均无精确 aab、主库有 4 条 aab? 后继）。
-    let store_path = std::env::temp_dir().join("wind_special_exact_completion.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_special_exact_completion.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let mut cfg = config_with("wubi86");
@@ -7525,8 +7554,10 @@ fn special_mode_show_all_on_enter_lists_candidates() {
     // 需求：show_all_on_enter 开启时，进入模式（空编码、尚未敲码）即枚举方案码表首页候选；
     // 关闭时（默认）进入模式候选为空、敲码才出。用同一份配置的开/关两态对照。
     let make = |show_all: bool| {
-        let store_path =
-            std::env::temp_dir().join(format!("wind_special_showall_{}.redb", show_all));
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp
+            .path()
+            .join(format!("wind_special_showall_{}.redb", show_all));
         let _ = std::fs::remove_file(&store_path);
         let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
         let mut cfg = config_with("wubi86");
@@ -7566,8 +7597,10 @@ fn special_mode_show_all_respects_single_code_input() {
     // show_all_on_enter 遵循方案 single_code_input：精确匹配模式下进入即展示最多补 1 条
     // （与空码补全「取首位后续码」同语义）；非精确模式枚举整页（多条）。
     let make = |single_code: bool| {
-        let store_path =
-            std::env::temp_dir().join(format!("wind_special_showall_single_{}.redb", single_code));
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp
+            .path()
+            .join(format!("wind_special_showall_single_{}.redb", single_code));
         let _ = std::fs::remove_file(&store_path);
         let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
         let mut cfg = config_with("wubi86");
@@ -7606,7 +7639,8 @@ fn clear_on_empty_max_keeps_phrase_candidate() {
     // 精确码短语候选 → 不应清空缓冲。原 bug：`None if should_clear => Clear` 未复查叠加短语后的
     // 最终候选，把短语列表连同缓冲一并误清（handle_candidate.rs）。
     // 复用 kkkkx（五笔码表 4 码封顶，5 码处必无码表候选 → is_empty 且满码 → should_clear 成立）。
-    let store_path = std::env::temp_dir().join("wind_phrase_clear_empty.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_clear_empty.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase("kkkkx", "空码短语文本", 0, 100).unwrap();
@@ -8049,7 +8083,7 @@ fn test_shuangpin_backspace_restores_raw_keys() {
 
 /// 把内置 shuangpin 方案的布局换成指定 id（override 层，不动真实方案文件）。
 fn shuangpin_layout_override(tag: &str, layout: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_sp_layout_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_sp_layout_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -8136,7 +8170,7 @@ fn test_shuangpin_fuzzy_preedit_ziranma() {
 fn shuangpin_custom_layout_data(tag: &str, layout: &str, edit: (&str, &str)) -> (PathBuf, PathBuf) {
     use std::os::unix::fs::symlink;
     let src = data_dir().canonicalize().unwrap();
-    let root = std::env::temp_dir().join(format!("wind_sp_custom_{tag}"));
+    let root = aurora_utils::testing::scratch(tag).join(format!("wind_sp_custom_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let farm = |from: &std::path::Path, to: &std::path::Path, skip: &str| {
         std::fs::create_dir_all(to).unwrap();
@@ -8622,7 +8656,7 @@ use std::sync::Arc;
 fn auto_phrase_coord(tag: &str, enabled: bool) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
     let mut cfg = config_with("wubi86");
     cfg.schema.codetable.auto_phrase.enabled = enabled;
-    let db = std::env::temp_dir().join(format!("wind_auto_phrase_{tag}.redb"));
+    let db = aurora_utils::testing::scratch(tag).join(format!("wind_auto_phrase_{tag}.redb"));
     let _ = std::fs::remove_file(&db);
     let store = Arc::new(Store::open(&db).unwrap());
     let coord = Coordinator::new_headless_with_store(cfg, Some(&data_dir()), Arc::clone(&store));
@@ -8937,7 +8971,8 @@ fn test_codetable_auto_phrase_single_char_is_not_a_word() {
 /// `weight=hit.weight`。低权重（1）确保 marker 可靠沉到码表候选之下，隔离出「避让」这一单一断言。
 /// 构造组短语码 `nia`（严格长于输入 `ni` → 前缀枚举命中）。
 fn coord_with_group_phrase(schema: &str, tag: &str) -> std::sync::Arc<Coordinator> {
-    let store_path = std::env::temp_dir().join(format!("wind_group_marker_{tag}.redb"));
+    let store_path =
+        aurora_utils::testing::scratch(tag).join(format!("wind_group_marker_{tag}.redb"));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store
@@ -9305,7 +9340,8 @@ fn special_op_fixture(
     std::path::PathBuf,
     std::sync::Arc<aurora_store::Store>,
 ) {
-    let store_path = std::env::temp_dir().join(format!("wind_special_op_{}.redb", tag));
+    let store_path =
+        aurora_utils::testing::scratch(tag).join(format!("wind_special_op_{}.redb", tag));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let mut cfg = config_with("pinyin");
@@ -9564,7 +9600,8 @@ fn special_mode_browse_exact_mode_hides_first_shows_next() {
         return;
     }
     use aurora_ui_types::CandidateOp;
-    let store_path = std::env::temp_dir().join("wind_special_browse_exact.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_special_browse_exact.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     let mut cfg = config_with("pinyin");
@@ -9618,7 +9655,8 @@ fn completion_hint_command_shows_display_label_not_source() {
         eprintln!("跳过：缺少 schema");
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_completion_hint_cc.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_completion_hint_cc.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // `aab` 复用既有回归码：六库均无精确 `aab`，但主库有 `aab?` 后继（见
@@ -9682,7 +9720,8 @@ fn completion_fills_after_shadow_empties_the_list() {
         eprintln!("跳过：缺少 schema");
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_completion_after_shadow.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_completion_after_shadow.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     // 短语占住 aab（引擎层对 aab 无精确候选，故 completion_hints 已备货）。
@@ -10105,7 +10144,8 @@ fn top_code_splits_at_phrase_code_length() {
     if !has_schemas() {
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_phrase_topcode_split.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_topcode_split.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase("zzsfz", "词条内容", 0, 100).unwrap();
@@ -10144,7 +10184,8 @@ fn top_code_rejects_prefix_only_phrase_hit() {
     if !has_schemas() {
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_phrase_topcode_prefixhit.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_topcode_prefixhit.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase("zzsfz", "词条内容", 0, 100).unwrap();
@@ -10188,7 +10229,8 @@ fn top_code_overlong_phrase_in_mixed_schema() {
     if !has_schemas() {
         return;
     }
-    let store_path = std::env::temp_dir().join("wind_phrase_topcode_mixed.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("wind_phrase_topcode_mixed.redb");
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase("zzsfz", "TEST", 1800, 0).unwrap();

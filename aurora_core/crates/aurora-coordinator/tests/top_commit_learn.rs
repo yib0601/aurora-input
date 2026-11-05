@@ -66,7 +66,7 @@ fn open(
     c.input.default.chinese_mode = true;
     c.schema.pinyin.auto_learn.enabled = true;
     edit(&mut c);
-    let db = std::env::temp_dir().join(format!(
+    let db = aurora_utils::testing::scratch(tag).join(format!(
         "wind_top_commit_learn_{tag}_{}.redb",
         std::process::id()
     ));

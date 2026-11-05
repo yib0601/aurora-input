@@ -14,11 +14,11 @@
 //! 已知差异：B 类（单音节串）约 2% 位次差 1~8 位——协调器的检索范围过滤滤掉了生僻单字
 //! （`rua` 的「挼」），评测不模拟这一步。只看纠错 / 排序时用 `AURORA_UI_PARITY_CLASSES=A,C,D,E,F,G`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 const VK_ESCAPE: u32 = 0x1B;
 

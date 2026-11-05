@@ -548,8 +548,8 @@ mod tests {
     }
 
     fn tmp_store(tag: &str) -> std::sync::Arc<aurora_store::Store> {
-        let p =
-            std::env::temp_dir().join(format!("wind_text_codes_{tag}_{}.redb", std::process::id()));
+        let p = aurora_utils::testing::scratch("text_codes")
+            .join(format!("wind_text_codes_{tag}_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         std::sync::Arc::new(aurora_store::Store::open(&p).unwrap())
     }

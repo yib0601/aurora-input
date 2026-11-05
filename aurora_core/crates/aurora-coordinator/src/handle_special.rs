@@ -914,7 +914,7 @@ mod tests {
     /// 实例集合的真相源已是**方案文件目录**（带 `[overlay]` 段者入表），不再是
     /// `config.schema.special_modes` 数组——故装置从「造 Config」改成「造方案文件」。
     fn data_dir_with_overlays(tag: &str, ids: &[&str]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("wind_special_hk_data_{tag}"));
+        let dir = aurora_utils::testing::scratch(&format!("wind_special_hk_data_{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
@@ -937,7 +937,8 @@ mod tests {
     }
 
     fn coord_with_overlays(tag: &str, cfg: Config, ids: &[&str]) -> Arc<Coordinator> {
-        let path = std::env::temp_dir().join(format!("wind_special_hk_{tag}.redb"));
+        let path = aurora_utils::testing::scratch("special_hk")
+            .join(format!("wind_special_hk_{tag}.redb"));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
         let dir = (!ids.is_empty()).then(|| data_dir_with_overlays(tag, ids));
@@ -1598,7 +1599,7 @@ mod tests {
             // 带 pid：并发跑同一条用例时，一方的 `remove_dir_all` 会在另一方正扫
             // `schemas/` 时把目录抽走，表现为偶发红在下面那句 `expect` 上、而错误信息
             // 完全指不到真因。同 `handle_punct.rs` 夹具的做法。
-            let dir = std::env::temp_dir().join(format!(
+            let dir = aurora_utils::testing::scratch(&format!(
                 "wind_special_completion_{}_{tag}",
                 std::process::id()
             ));

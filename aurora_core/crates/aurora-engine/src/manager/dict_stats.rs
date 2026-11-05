@@ -18,8 +18,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use serde::Serialize;
-use tracing::info;
 use aurora_config::Config;
 use aurora_config::schema::DictSpec;
 use aurora_dict::cached::{CachedDict, for_each_code_group};
@@ -27,6 +25,8 @@ use aurora_dict::stats::{
     Charset, CharsetStats, CodeLenDist, DupStats, LayerCounts, PinyinExtra, RankOrder,
     STATS_ALGO_VERSION, ShortCodes, StatsBuilder, StatsKind, StatsLayer, StatsOptions, TotalCounts,
 };
+use serde::Serialize;
+use tracing::info;
 
 use super::{EngineManager, weight_norm_of};
 
@@ -379,8 +379,10 @@ mod tests {
 
     /// 夹具数据根：码表方案（主库 + 启用扩展 + 停用扩展）、拼音方案、字频字表、通规字表。
     fn fixture(tag: &str) -> std::path::PathBuf {
-        let base =
-            std::env::temp_dir().join(format!("wind_dict_stats_{tag}_{}", std::process::id()));
+        let base = aurora_utils::testing::scratch(&format!(
+            "wind_dict_stats_{tag}_{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         let s = base.join("schemas");
         write(

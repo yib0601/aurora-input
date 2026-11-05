@@ -511,7 +511,8 @@ mod tests {
             <annotation cp="⚽">足球 | 球 | 运动</annotation>
             <annotation cp="⚽" type="tts">足球</annotation>
         </annotations></ldml>"#;
-        let dir = std::env::temp_dir().join("gen_emoji_names_test_ann.xml");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_emoji_names_test_ann.xml");
         std::fs::write(&dir, xml).unwrap();
         let mut ann = Annotations::default();
         let n = load_annotations(&dir, &mut ann).unwrap();
@@ -526,8 +527,9 @@ mod tests {
     #[test]
     fn earlier_file_wins_on_conflict() {
         // annotations 先加载，derived 不得覆盖它
-        let a = std::env::temp_dir().join("gen_emoji_a.xml");
-        let b = std::env::temp_dir().join("gen_emoji_b.xml");
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("gen_emoji_a.xml");
+        let b = tmp.path().join("gen_emoji_b.xml");
         std::fs::write(&a, r#"<annotation cp="⚽" type="tts">足球</annotation>"#).unwrap();
         std::fs::write(&b, r#"<annotation cp="⚽" type="tts">皮球</annotation>"#).unwrap();
         let mut ann = Annotations::default();
@@ -538,7 +540,8 @@ mod tests {
 
     #[test]
     fn stopwords_strip_inline_comments() {
-        let p = std::env::temp_dir().join("gen_emoji_stop.txt");
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("gen_emoji_stop.txt");
         std::fs::write(&p, "# 头部注释\n旗      # 265\n脸\n\n").unwrap();
         let s = load_stopwords(Some(&p)).unwrap();
         assert_eq!(s.len(), 2);

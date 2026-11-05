@@ -780,7 +780,10 @@ mod tests {
     /// 文件路径是内置主题资产的唯一形态，改造不能碰坏它。
     #[test]
     fn fill_still_reads_file_path_sources() {
-        let dir = std::env::temp_dir().join(format!("wind-ui-imgcache-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-ui-imgcache-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("建临时目录");
         let path = dir.join("solid.png");
         image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]))
@@ -832,7 +835,10 @@ mod tests {
     /// 被 usvg 读进来渲染（那是 usvg 的默认行为，本模块显式关掉了）。
     #[test]
     fn inline_svg_does_not_load_local_files() {
-        let dir = std::env::temp_dir().join(format!("wind-ui-svghref-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-ui-svghref-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("建临时目录");
         let secret = dir.join("secret.png");
         image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255]))

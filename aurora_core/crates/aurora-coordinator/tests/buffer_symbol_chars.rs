@@ -15,11 +15,11 @@
 //! 冷启动 5.6s，此后每次 0.17–0.19s，正好落在它所说的「跳过」区间里——照它判会得出
 //! 「一直在跳过」的反向结论。要确认真的跑了，就看 `--nocapture` 里有没有「跳过：」那行。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

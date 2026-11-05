@@ -1035,7 +1035,10 @@ mod tests {
         b.merge_single("ab".into(), "戊".into(), 7, 0);
         b.merge_single("b".into(), "己".into(), 2, 0);
 
-        let dir = std::env::temp_dir().join(format!("wind-groups-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-groups-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut w = WdatWriter::new();
         a.export_to_wdat(&mut w);
@@ -1170,7 +1173,11 @@ mod tests {
     }
 
     fn wdat_only_dir(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind-wdat-only-{}-{}", std::process::id(), tag));
+        let d = aurora_utils::testing::scratch(&format!(
+            "wind-wdat-only-{}-{}",
+            std::process::id(),
+            tag
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -1464,7 +1471,10 @@ mod tests {
     /// 加载，第二轮起**零重建**——两份各有各的文件，不再互相顶掉。
     #[test]
     fn alternating_sources_on_one_slot_do_not_rebuild_each_other() {
-        let dir = std::env::temp_dir().join(format!("wind-slot-pingpong-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-slot-pingpong-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let yaml = dir.join("x.dict.yaml");
@@ -1505,7 +1515,10 @@ mod tests {
     /// 但没人再按它取摘要。
     #[test]
     fn a_rebuild_lands_on_a_new_content_addressed_file() {
-        let dir = std::env::temp_dir().join(format!("wind-stale-fp-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind-stale-fp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let yaml = dir.join("x.dict.yaml");

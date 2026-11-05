@@ -13,10 +13,10 @@
 //! 让后台线程放手词库映射。
 //! 「新鲜」那几次的页缓存是热的——与生产一致：启动后台刚校验过缓存。
 
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -34,7 +34,10 @@ fn switch_to_unloaded_schema_fresh_vs_stale_cache() {
         eprintln!("跳过：缺少 build_dev/data");
         return;
     }
-    let xdg = std::env::temp_dir().join(format!("wind_switch_probe-{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let xdg = tmp
+        .path()
+        .join(format!("wind_switch_probe-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&xdg);
     std::fs::create_dir_all(&xdg).unwrap();
     // SAFETY: 本二进制只有这一条用例，此时尚无任何线程读环境变量。

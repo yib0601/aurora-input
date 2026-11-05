@@ -66,7 +66,7 @@ fn main() -> anyhow::Result<()> {
 
 /// 合成旧库：19 万词，2–4 音节轮换，带边界未知、同码多词、# 开头与含 tab 的文本。
 fn synth() -> anyhow::Result<std::path::PathBuf> {
-    let p = std::env::temp_dir().join("wind_p2_migrate_synth.redb");
+    let p = aurora_utils::testing::scratch("p2_migrate_synth").join("wind_p2_migrate_synth.redb");
     let _ = std::fs::remove_file(&p);
     let _ = std::fs::remove_dir_all(aurora_store::store::derived_state_dir(&p));
     let _ = std::fs::remove_dir_all(aurora_store::store::derived_text_dir(&p));

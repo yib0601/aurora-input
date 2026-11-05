@@ -498,9 +498,10 @@ mod tests {
         cfg.schema.available = vec!["pinyin".into()];
         cfg.schema.active = "pinyin".into();
         cfg.input.default.chinese_mode = true;
-        let user = UserDir(
-            std::env::temp_dir().join(format!("wind_tipmenu_{tag}_{}", std::process::id())),
-        );
+        let user = UserDir(aurora_utils::testing::scratch(&format!(
+            "wind_tipmenu_{tag}_{}",
+            std::process::id()
+        )));
         let _ = std::fs::remove_dir_all(&user.0);
         let (c, rx) = Coordinator::new_headless_with_ui_at(cfg, Some(&data_dir()), Some(&user.0));
         c.debug_mark_coords_ready();

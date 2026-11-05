@@ -645,7 +645,7 @@ mod tests {
 
     /// 自造码表方案：一个字「好」、拆字库一行、方案级注释模板引用 `${chaizi}`（或不引用）。
     fn schema_fixture(tag: &str, id: &str, plain: bool) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("wind_dn_{}_{tag}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!("wind_dn_{}_{tag}", std::process::id()));
         let schemas = dir.join("schemas");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(schemas.join(id)).unwrap();
@@ -792,7 +792,10 @@ mod tests {
             eprintln!("跳过：缺 build_dev 词库");
             return;
         }
-        let path = std::env::temp_dir().join(format!("wind_dn_ut_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_dn_ut_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(aurora_store::Store::open(&path).unwrap());
         let c = Coordinator::new_headless_with_store(wubi(|_| {}), Some(&data_dir()), store);
@@ -823,7 +826,10 @@ mod tests {
             eprintln!("跳过：缺 build_dev 词库");
             return;
         }
-        let path = std::env::temp_dir().join(format!("wind_dn_s3_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_dn_s3_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(aurora_store::Store::open(&path).unwrap());
         let c =
@@ -867,7 +873,10 @@ mod tests {
             eprintln!("跳过：缺 build_dev 词库");
             return;
         }
-        let path = std::env::temp_dir().join(format!("wind_dn_s2_{}.redb", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_dn_s2_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(aurora_store::Store::open(&path).unwrap());
         let cfg = wubi(|c| {
@@ -1118,7 +1127,7 @@ mod tests {
 
     /// 自造拼音方案：「中国」一词，开 zh↔z，`hint` 关。
     fn fuzzy_fixture() -> (PathBuf, Config) {
-        let dir = std::env::temp_dir().join(format!("wind_dn_{}_fzpy", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!("wind_dn_{}_fzpy", std::process::id()));
         let schemas = dir.join("schemas");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(schemas.join("fh")).unwrap();

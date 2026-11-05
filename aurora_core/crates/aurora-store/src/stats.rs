@@ -744,7 +744,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(name);
+        let p = aurora_utils::testing::scratch(name).join(name);
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -1072,7 +1072,8 @@ mod tests {
     /// 之前写进去的虚高 max_speed，重算一次即可回落到真实值。
     #[test]
     fn recalculate_ignores_small_samples_for_max_speed() {
-        let path = std::env::temp_dir().join("wind_recalc_speed_test.redb");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_recalc_speed_test.redb");
         let _ = std::fs::remove_file(&path);
         let s = Store::open(&path).unwrap();
 

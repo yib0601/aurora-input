@@ -14,9 +14,9 @@
 //! **必须用真实词库**：内联夹具的 `boundary` 恒为 0，边界校验一律降级放行，
 //! 测不出任何东西。词典缺失时自动跳过。
 
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::path::PathBuf;
 
 fn data_dir() -> Option<PathBuf> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

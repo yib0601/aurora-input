@@ -1,11 +1,11 @@
 //! 用户分库（`data/<数据方案>/dicts/*.dict.yaml`）登记为方案的扩展词库：id `user:<名>`、码表档位
 //! 与用户词同档（-3）、开关取 `dicts.toml`、拼音族共用 `data/pinyin/`。自造夹具，不依赖 build_dev/data。
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
 use aurora_store::Store;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 struct Fx {
     dir: PathBuf,
@@ -25,7 +25,7 @@ impl Drop for Fx {
 impl Fx {
     fn new(tag: &str, schema_toml: &dyn Fn(&str) -> String, main: &str) -> Fx {
         let id = format!("zz_udl_{tag}_{}", std::process::id());
-        let dir = std::env::temp_dir().join(format!("wind_udl_{id}"));
+        let dir = aurora_utils::testing::scratch(&format!("wind_udl_{id}"));
         let _ = std::fs::remove_dir_all(&dir);
         let s = dir.join("schemas");
         std::fs::create_dir_all(s.join(&id)).unwrap();

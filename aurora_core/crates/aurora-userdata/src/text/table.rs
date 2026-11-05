@@ -84,7 +84,8 @@ fn escape_field(escape: bool, s: &str) -> String {
 pub fn parse_table(bytes: &[u8], _path: &Path) -> Result<TableDoc, ParseError> {
     let s = std::str::from_utf8(bytes).map_err(|_| ParseError::NotUtf8)?;
     let s = s.strip_prefix('\u{feff}').unwrap_or(s);
-    let (body_offset, comment_cutoff) = aurora_dict::rime_body_layout(s).ok_or(ParseError::NoBody)?;
+    let (body_offset, comment_cutoff) =
+        aurora_dict::rime_body_layout(s).ok_or(ParseError::NoBody)?;
     let yaml = s[..body_offset]
         .trim_start_matches("---")
         .trim_end()
@@ -402,7 +403,8 @@ mod tests {
     }
 
     fn tmpdir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_tbl_{name}-{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(name)
+            .join(format!("wind_tbl_{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

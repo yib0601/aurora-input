@@ -12,13 +12,13 @@
 //!
 //! ⚠️ 词典缺失时整族静默跳过（判据是耗时而非通过条数），worktree 需自备 `build_dev`。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SEMICOLON: u32 = 0xBA;
 const VK_SPACE: u32 = 0x20;
@@ -57,7 +57,7 @@ fn quick_config(commit_space: bool) -> Config {
 }
 
 fn coord_with(cfg: Config, tag: &str) -> Arc<Coordinator> {
-    let path = std::env::temp_dir().join(format!("wind_quick_en_commit_{tag}.redb"));
+    let path = aurora_utils::testing::scratch(tag).join(format!("wind_quick_en_commit_{tag}.redb"));
     let _ = std::fs::remove_file(&path);
     Coordinator::new_headless_with_store(
         cfg,
@@ -320,8 +320,9 @@ fn full_width_mode_switch_converts_raw() {
     c.handle_menu_command("toggle_width");
     enter_quick(&c, "very");
     let mut ev = key(0x4A);
-    ev.modifiers =
-        aurora_ipc::protocol::MOD_CTRL | aurora_ipc::protocol::MOD_ALT | aurora_ipc::protocol::MOD_SHIFT;
+    ev.modifiers = aurora_ipc::protocol::MOD_CTRL
+        | aurora_ipc::protocol::MOD_ALT
+        | aurora_ipc::protocol::MOD_SHIFT;
     let act = c.handle_key_event(&ev);
     assert_eq!(commit_text(&act), "ｖｅｒｙ");
 }

@@ -15,7 +15,7 @@ use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 
 /// `you|gai|lun|ma` 四段，中间两段各有两个字可选 ⇒ 至少 4 种互不相同的整句。
 fn dict(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_nbest_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_nbest_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");

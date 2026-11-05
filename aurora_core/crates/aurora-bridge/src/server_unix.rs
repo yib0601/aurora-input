@@ -4,13 +4,13 @@
 //! 阻塞读 8 字节 header + payload，dispatch_command 复用平台无关逻辑。
 use crate::handler::*;
 use crate::server::{ClientCtx, dispatch_command};
+use aurora_ipc::codec::decode_focus_gained;
+use aurora_ipc::protocol::*;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
-use aurora_ipc::codec::decode_focus_gained;
-use aurora_ipc::protocol::*;
 
 pub fn run_uds_server(socket_path: PathBuf, handler: Arc<dyn MessageHandler>) {
     if let Some(parent) = socket_path.parent() {
@@ -125,10 +125,10 @@ mod tests {
         CaretData, CommitRequestData, CommitResultData, FocusData, KeyAction, KeyEventData,
         MessageHandler, StatusUpdateData,
     };
+    use aurora_ipc::protocol::{CMD_KEY_EVENT, CMD_PASS_THROUGH, IpcHeader};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     use std::sync::Arc;
-    use aurora_ipc::protocol::{CMD_KEY_EVENT, CMD_PASS_THROUGH, IpcHeader};
 
     // 最小 handler：对 KEY_EVENT 回 PassThrough，便于断言一个合法响应帧
     struct EchoHandler;
@@ -172,7 +172,10 @@ mod tests {
 
     #[test]
     fn uds_key_event_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("wind_uds_test_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_uds_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bridge.sock");
         let p2 = path.clone();

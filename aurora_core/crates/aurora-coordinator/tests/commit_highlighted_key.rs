@@ -285,7 +285,10 @@ fn rare_char_mode_commits_highlighted_like_space() {
 #[test]
 fn special_mode_commits_highlighted_like_space() {
     skip_without_data!();
-    let ov = std::env::temp_dir().join(format!("wind_kv_special_ov_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let ov = tmp
+        .path()
+        .join(format!("wind_kv_special_ov_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov);
     std::fs::create_dir_all(&ov).unwrap();
     std::fs::write(ov.join("wubi86.toml"), "[overlay]\nkind = \"special\"\n").unwrap();

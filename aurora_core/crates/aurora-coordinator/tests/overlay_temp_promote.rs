@@ -12,13 +12,13 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_BACKTICK: u32 = 0xC0;
 const VK_SEMICOLON: u32 = 0xBA;
@@ -60,7 +60,7 @@ fn cfg() -> Config {
 
 /// 预置 `count = seeded` 的拼音临时词「你好」，返回 (coord, store, 库路径)。
 fn open(tag: &str, seeded: usize) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
-    let db = std::env::temp_dir().join(format!(
+    let db = aurora_utils::testing::scratch(tag).join(format!(
         "wind_overlay_promote_{tag}_{}.redb",
         std::process::id()
     ));
@@ -182,7 +182,8 @@ fn temp_pinyin_synthesized_sentence_counts_once() {
     }
     const CODE: &str = "wojintianqushangban";
     const SENT: &str = "我今天去上班";
-    let db = std::env::temp_dir().join(format!(
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join(format!(
         "wind_overlay_promote_sent_{}.redb",
         std::process::id()
     ));

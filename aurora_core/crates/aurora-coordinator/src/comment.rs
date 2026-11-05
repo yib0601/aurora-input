@@ -2484,7 +2484,8 @@ mod eval_var_tests {
 
     /// 挂两个注释库：英汉释义 + IT 术语，都收了 `configure`。
     fn two_comment_libs(tag: &str) -> (PathBuf, aurora_reverse::ReverseLookup) {
-        let dir = std::env::temp_dir().join(format!("wind_dict_all_{}_{tag}", std::process::id()));
+        let dir =
+            aurora_utils::testing::scratch(&format!("wind_dict_all_{}_{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let head = "name: t\ncolumns:\n  - text\n  - comment\n...\n";
@@ -2614,7 +2615,8 @@ mod eval_var_tests {
     fn case_projected_candidate_queries_dictionary_original() {
         use crate::english_candidates::{CaseVariant, apply_english_case};
         let co = coord("pinyin");
-        let dir = std::env::temp_dir().join(format!("wind_t281_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("wind_t281_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let lib = |name: &str, body: &str| {
@@ -2667,7 +2669,10 @@ mod eval_var_tests {
     fn case_variant_head_candidate_queries_display_text() {
         use crate::english_candidates::{CaseVariant, apply_english_case, english_head_candidates};
         let co = coord("pinyin");
-        let dir = std::env::temp_dir().join(format!("wind_t281h_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_t281h_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("it.dict.yaml");
@@ -3809,7 +3814,8 @@ mod separator_tests {
 
     /// 夹具拆字表：好 = 女子 [vbg]、人 = 人 [w]、丂 = （空） [gnv]（有编码无字根）。
     fn chaizi() -> aurora_reverse::ReverseLookup {
-        let dir = std::env::temp_dir().join(format!("wind_sep_chaizi_{}", std::process::id()));
+        let dir =
+            aurora_utils::testing::scratch(&format!("wind_sep_chaizi_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("chaizi.txt");
         std::fs::write(&p, "好\t女子\tvbg\n人\t人\tw\n丂\t\tgnv\n").unwrap();
@@ -4196,7 +4202,7 @@ mod comment_reverse_regular_tests {
 
     fn coord() -> (std::sync::Arc<Coordinator>, Cleanup) {
         let id = format!("zz_crs_on_{}", std::process::id());
-        let dir = std::env::temp_dir().join(format!("wind_crs_{id}"));
+        let dir = aurora_utils::testing::scratch(&format!("wind_crs_{id}"));
         let _ = std::fs::remove_dir_all(&dir);
         let s = dir.join("schemas");
         std::fs::create_dir_all(s.join(&id)).unwrap();

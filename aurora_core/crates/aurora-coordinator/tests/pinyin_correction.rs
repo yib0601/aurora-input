@@ -3,14 +3,14 @@
 //! 走协调器断言界面序（引擎位次不作数，协调器还会整体重排）。真实词库在 `build_dev/data`，
 //! 缺失时跳过。
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 use aurora_bridge::handler::{CaretData, KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, caret_source};
 use aurora_ui_types::{CandidateItem, UiCommand};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 const MARK: &str = "*";
 
@@ -162,7 +162,10 @@ fn corrected_never_takes_top_when_complete_exists() {
     if !has_data() {
         return;
     }
-    let dir = std::env::temp_dir().join(format!("wind_corr_top_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp
+        .path()
+        .join(format!("wind_corr_top_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let store = Arc::new(aurora_store::Store::open(dir.join("u.redb")).unwrap());

@@ -1,11 +1,12 @@
 //! 词频 / 联想历史 API 与 aurora-store/src/{freq,assoc_history}.rs 的行为对拍。
-use std::sync::Arc;
 use aurora_userdata::engine::{Dirs, UserData};
 use aurora_userdata::record::Target;
 use aurora_userdata::runtime::{FreqRec, Runtime};
+use std::sync::Arc;
 
 fn open(name: &str) -> (std::path::PathBuf, Runtime) {
-    let d = std::env::temp_dir().join(format!("wind_rtf_{name}-{}", std::process::id()));
+    let d = aurora_utils::testing::scratch(name)
+        .join(format!("wind_rtf_{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     let r = Runtime::new(Arc::new(
         UserData::open(Dirs {

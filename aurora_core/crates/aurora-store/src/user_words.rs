@@ -10,8 +10,8 @@
 
 use crate::store::Store;
 use crate::wdict;
-use serde::{Deserialize, Serialize};
 use aurora_userdata::runtime::UserWord;
+use serde::{Deserialize, Serialize};
 
 /// 遍历期的**借用视图**：`code` / `text` 直接借引擎条目里的字符串，不分配。
 ///
@@ -673,7 +673,7 @@ mod tests {
     };
 
     fn tmp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(name);
+        let p = aurora_utils::testing::scratch(name).join(name);
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -1538,7 +1538,10 @@ mod tests {
     /// 方案名取磁盘上的实际目录名。区分大小写的平台上照旧拒绝。
     #[test]
     fn text_path_matching_folds_case_when_asked() {
-        let d = std::env::temp_dir().join(format!("wind_uw_ci-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_uw_ci-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let base = d.join("User");
         std::fs::create_dir_all(base.join("WubiEx")).unwrap();

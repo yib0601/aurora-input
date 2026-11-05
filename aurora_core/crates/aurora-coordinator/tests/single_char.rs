@@ -16,11 +16,11 @@
 //! vs 0.0x s）——本仓栽过一次，见 `codetable_filter_scope_consistency.rs` 的文件头。
 //! 恢复命令 `.\scripts\dev.ps1 gd`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -271,7 +271,7 @@ fn single_char_enables_auto_commit_at_full_code() {
 /// 建一个隔离的 override 目录（同 `schema_key_actions.rs` 的做法：`new_headless` 会取真实
 /// 用户目录，测试写进去要污染用户配置）。
 fn make_override(tag: &str, schema_id: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_sc_ov_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_sc_ov_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(format!("{schema_id}.toml")), body).unwrap();

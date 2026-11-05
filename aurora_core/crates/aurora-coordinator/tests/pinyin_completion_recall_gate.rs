@@ -28,11 +28,11 @@
 //! 是一对：上限 = `started < min ? started : started + max_extra`。4 + 5 = 9 恰好够
 //! 「冰冻三尺非一日之寒」在打到第 4 个音节时进来，最后一条用例钉的就是这个配合。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

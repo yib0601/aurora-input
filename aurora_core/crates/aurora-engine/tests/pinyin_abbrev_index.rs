@@ -18,7 +18,7 @@ use aurora_engine::pinyin::{Config as PyConfig, PinyinEngine};
 ///
 /// 简拼 `xa` 指向的是前者的码。扁平码丢了音节切分，回查主表会把后者一并捞出来。
 fn fixture(tag: &str) -> CachedDict {
-    let dir = std::env::temp_dir().join(format!("wind_abbrev_idx_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_abbrev_idx_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -140,7 +140,8 @@ fn boundary_lookup_is_exact_not_inferred() {
 /// 本测试只断言**同层**（都标 `is_abbrev`），不断言谁在前——那由权重与词频决定。
 #[test]
 fn system_and_user_abbrev_share_one_layer() {
-    let dir = std::env::temp_dir().join("wind_abbrev_layer");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("wind_abbrev_layer");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let wdat = dir.join("t.wdat");
@@ -156,7 +157,8 @@ fn system_and_user_abbrev_share_one_layer() {
     let dict = CachedDict::load_at(&dir.join("t.dict.yaml"), &wdat).expect("夹具");
 
     // 用户词「大菠萝哥」da|bo|luo|ge → 简拼同为 dblg
-    let p = std::env::temp_dir().join("wind_abbrev_layer.redb");
+    let tmp2 = tempfile::tempdir().unwrap();
+    let p = tmp2.path().join("wind_abbrev_layer.redb");
     let _ = std::fs::remove_file(&p);
     let store = std::sync::Arc::new(aurora_store::Store::open(&p).unwrap());
     store

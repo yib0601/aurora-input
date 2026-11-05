@@ -10,9 +10,9 @@
 //! 跑法：`cargo test -p aurora-engine --test pinyin_abbrev_recall_latency -- --ignored --nocapture`
 //! 先例同 `tests/single_char_codes_cache.rs` 的基准用例。
 
-use std::time::Instant;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::time::Instant;
 
 /// 最坏形状：`l` 同属 `n↔l` 与 `r↔l` 两组，等价集 `{l,n,r}` 是唯一大于 2 的，
 /// 键变体数的上界由它决定（`lll` ⇒ 3³ = 27 个变体键）。

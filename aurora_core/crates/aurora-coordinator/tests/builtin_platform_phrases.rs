@@ -336,7 +336,8 @@ fn keys_of(v: &[aurora_phrase::SystemPhraseEntry]) -> Vec<(String, String)> {
 }
 
 fn temp_root(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("wind_plat_{tag}_{}", std::process::id()));
+    let d =
+        aurora_utils::testing::scratch(tag).join(format!("wind_plat_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -426,14 +427,14 @@ fn windows_upgrade_keeps_every_row() {
 #[cfg(all(target_os = "linux", ext_presenter))]
 mod e2e {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
     use aurora_bridge::handler::{KeyEventData, MessageHandler};
     use aurora_config::Config;
     use aurora_coordinator::Coordinator;
     use aurora_ipc::protocol::EVENT_KEY_DOWN;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     const VK_SPACE: u32 = 0x20;
 
@@ -514,7 +515,10 @@ mod e2e {
              工作树整份拷来 build_dev/data（只拷一部分会让别的用例假绿）",
             build_data().display()
         );
-        let root = std::env::temp_dir().join(format!("wind_plat_phr_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp
+            .path()
+            .join(format!("wind_plat_phr_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();

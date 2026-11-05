@@ -25,9 +25,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Value, json};
 use aurora_ipc::rpc::Request;
 use aurora_rpc::{CoreRpc, DispatchState, dispatch};
+use serde_json::{Value, json};
 
 /// 最小 CoreRpc 桩：本测试只走 config.* 分支，其余走 trait 默认实现。
 struct StubCore;
@@ -74,7 +74,8 @@ const USER_MAPPING: &str = "\"'1\" = [\"①\"]";
 
 #[test]
 fn degraded_section_blocks_map_write_back() {
-    let tmp = std::env::temp_dir().join("wind_rpc_degraded_write_back_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_rpc_degraded_write_back_e2e");
     let root = tmp.join("install");
     let data = root.join("data");
     let user = tmp.join("UserData");

@@ -14,11 +14,11 @@
 //! 3. **中英切换的回程** —— `toggle_mode` 绑组合键时**不得**带 `CHINESE_ONLY`，
 //!    否则切到英文态后 TSF 不再转发，再也切不回来（单程票）。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_ALT, MOD_CTRL, MOD_SHIFT};
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

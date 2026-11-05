@@ -353,8 +353,8 @@ mod tests {
     }
 
     fn tmp_store(tag: &str) -> aurora_store::Store {
-        let p =
-            std::env::temp_dir().join(format!("wind_user_assoc_{tag}_{}.redb", std::process::id()));
+        let p = aurora_utils::testing::scratch("user_assoc")
+            .join(format!("wind_user_assoc_{tag}_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&p);
         aurora_store::Store::open(&p).unwrap()
     }

@@ -15,11 +15,11 @@
 //! ⚠️ 全文件仅此一个 `#[test]`，理由同 `aurora-engine/tests/custom_layer_hide.rs`。
 //! ⚠️ 不依赖 `build_dev/data`：主题夹具全自造，故不会静默跳过。
 
-use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_webdata::WebDataRpc;
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -35,7 +35,8 @@ fn theme_toml(name: &str) -> String {
 #[test]
 fn hidden_theme_slug_is_refused_by_both_import_and_export() {
     // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-    let tmp = std::env::temp_dir().join(format!(
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join(format!(
         "wind_webdata_custom_hide_import-{}",
         std::process::id()
     ));

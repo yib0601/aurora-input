@@ -9,11 +9,11 @@
 //!
 //! ⚠️ 本用例**不依赖 `build_dev/data`**：夹具全部自造，不会静默跳过。
 
-use std::path::Path;
 use aurora_bridge::handler::{FocusData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ui_types::MenuCmd;
+use std::path::Path;
 
 /// IS_DEFAULT + IS_PASSWORD：t197 楼主那个输入框报出的 InputScope 掩码。
 const MASK_T197: u64 = 0x8000_0001;
@@ -53,7 +53,10 @@ fn focus(coord: &Coordinator) {
 #[test]
 fn per_app_password_force_english_menu_writes_and_applies() {
     // ⚠️ 目录名带 pid：多 worktree / 多会话并行跑测试时固定名会互删夹具。
-    let tmp = std::env::temp_dir().join(format!("wind_coord_pw_perapp-{}", std::process::id()));
+    let tmpdir = tempfile::tempdir().unwrap();
+    let tmp = tmpdir
+        .path()
+        .join(format!("wind_coord_pw_perapp-{}", std::process::id()));
     let root = tmp.join("install");
     let user = tmp.join("UserData");
     let conf = tmp.join("datadir.conf");

@@ -72,8 +72,7 @@ const SETTING_TEMPLATE: &str =
     include_str!("../../../../scripts/linux/pkg/aurora-input-setting.desktop");
 const IMPORT_TEMPLATE: &str =
     include_str!("../../../../scripts/linux/pkg/aurora-input-import.desktop");
-const MIME_XML_TEMPLATE: &str =
-    include_str!("../../../../scripts/linux/pkg/aurora-input-mime.xml");
+const MIME_XML_TEMPLATE: &str = include_str!("../../../../scripts/linux/pkg/aurora-input-mime.xml");
 /// 包里 `Exec=` 写死的安装路径；用户级写入时换成本程序路径。
 const PACKAGED_EXEC: &str = "/usr/lib/aurora-input/aurora_setting";
 /// 用户级 `.desktop` 的归属标记。取消注册只删带它的文件：同名文件可能是用户自己写的。
@@ -917,6 +916,8 @@ mod tests {
 
     /// 一次性的隔离根目录：用户目录、系统目录、「程序」都在里面，测完删掉。
     struct Sandbox {
+        /// 持有临时目录：drop 即删（原来靠测试末尾手工 remove_dir_all）。
+        _tmp: tempfile::TempDir,
         root: PathBuf,
     }
 
@@ -924,14 +925,13 @@ mod tests {
         fn new(tag: &str) -> Self {
             use std::sync::atomic::{AtomicUsize, Ordering};
             static N: AtomicUsize = AtomicUsize::new(0);
-            let root = std::env::temp_dir().join(format!(
-                "wind_setting_xdg_{tag}_{}_{}",
-                std::process::id(),
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join(format!(
+                "wind_setting_xdg_{tag}_{}",
                 N.fetch_add(1, Ordering::Relaxed)
             ));
-            let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("bin")).unwrap();
-            Self { root }
+            Self { _tmp: tmp, root }
         }
         fn xdg(&self) -> Xdg {
             Xdg {
@@ -1199,9 +1199,9 @@ mod tests {
         r.set_default(PACKAGE.mime, "ark.desktop");
         let ctx = sb.ctx(&r, &exe);
         ctx.register(&PACKAGE).unwrap();
-        assert!(
-            r.called("xdg-mime default aurora-input-import.desktop application/x-aurora-input-package")
-        );
+        assert!(r.called(
+            "xdg-mime default aurora-input-import.desktop application/x-aurora-input-package"
+        ));
         assert!(sb.read(USER_IMPORT).is_none());
         assert!(sb.read(USER_XML).is_none(), "系统已认得类型，不重复写");
         assert_eq!(ctx.facts(&PACKAGE).reg, Registration::Ours);

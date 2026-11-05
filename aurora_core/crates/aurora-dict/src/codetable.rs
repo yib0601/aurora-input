@@ -1402,7 +1402,8 @@ mod tests {
     /// 这是 `dict weight-check` 的**全部实质**——CLI 只是把它排版打印。
     #[test]
     fn scan_weight_stats_profiles_a_dict() {
-        let path = std::env::temp_dir().join("wind_wscan_demo.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_wscan_demo.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(
@@ -1442,7 +1443,8 @@ columns:
     /// 守约词库：`is_compliant` 为真，CLI 据此不给建议。
     #[test]
     fn scan_weight_stats_marks_compliant_dict() {
-        let path = std::env::temp_dir().join("wind_wscan_ok.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_wscan_ok.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(
@@ -1470,7 +1472,8 @@ columns:
     /// 整库无权重列：`weighted == 0`，算守约（那是「退化为文件顺序」的有意设计）。
     #[test]
     fn scan_weight_stats_handles_dict_without_weights() {
-        let path = std::env::temp_dir().join("wind_wscan_nw.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_wscan_nw.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(
@@ -1549,7 +1552,8 @@ columns:
     /// 这是 v4 的核心契约——此前边界在解析期就被 replace(' ',"") 丢弃，根本到不了磁盘。
     #[test]
     fn boundary_survives_wdat_roundtrip() {
-        let dir = std::env::temp_dir().join("wind_boundary_roundtrip");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_boundary_roundtrip");
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("py.dict.yaml");
         {
@@ -1591,7 +1595,8 @@ columns:
     /// 保留 text 原样，使大小写不敏感前缀匹配生效。
     #[test]
     fn load_lowercased_english() {
-        let path = std::env::temp_dir().join("wind_en_lowercase_test.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_en_lowercase_test.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: en\n...").unwrap();
@@ -1648,7 +1653,8 @@ columns:
 
     #[test]
     fn parallel_parse_pinyin_format_small() {
-        let path = std::env::temp_dir().join("wind_parrime_small.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_parrime_small.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             // 声明 columns 才会取权重列（未声明时保守只认 text/code）
@@ -1685,7 +1691,8 @@ columns:
     /// 跨 1MB 阈值触发并行切块：构造大量行，断言总数与抽样正确、块边界不丢/不重行。
     #[test]
     fn parallel_parse_large_chunked_no_loss() {
-        let path = std::env::temp_dir().join("wind_parrime_large.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_parrime_large.dict.yaml");
         let n = 60_000; // 每行约 20+ 字节 → 正文 > 1MB，触发并行分支
         {
             let mut f = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
@@ -1827,7 +1834,8 @@ columns:
     /// 降级探测会把权重列当成编码（`is_code_shape("100")` 为真），静默灌进一整库垃圾编码。
     #[test]
     fn missing_code_column_skips_whole_dict() {
-        let path = std::env::temp_dir().join("wind_cols_no_code.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_cols_no_code.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: auto\ncolumns:\n  - text\n  - weight\n...").unwrap();
@@ -1846,7 +1854,8 @@ columns:
     /// `str::trim()` 当缩进削掉（U+3000 属 Unicode White_Space），整行字段左移一格。
     #[test]
     fn leading_fullwidth_space_text_is_preserved() {
-        let path = std::env::temp_dir().join("wind_leading_ws.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_leading_ws.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: ws\n...").unwrap();
@@ -1877,7 +1886,8 @@ columns:
     /// 的用户写 `\\n` 即可。
     #[test]
     fn text_escape_sequences_are_unescaped() {
-        let path = std::env::temp_dir().join("wind_text_escape.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_text_escape.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: esc\n...").unwrap();
@@ -1915,7 +1925,8 @@ columns:
     /// 同时锁住转义序列仍然存活（它在 trim 阶段本就是可见字符，剥不掉）。
     #[test]
     fn trailing_whitespace_in_last_text_column_is_preserved() {
-        let path = std::env::temp_dir().join("wind_trail_ws.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_trail_ws.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: t\ncolumns:\n  - code\n  - text\n...").unwrap();
@@ -1946,7 +1957,8 @@ columns:
     /// 出现 `"abc "` 这样打不出来的编码、和 `"5 ".parse()` 失败退化成 0 的权重。
     #[test]
     fn trailing_whitespace_in_code_and_weight_still_trimmed() {
-        let path = std::env::temp_dir().join("wind_trail_ws_code.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_trail_ws_code.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: t2\n...").unwrap(); // 无声明 → 默认 text/code/weight
@@ -1972,7 +1984,8 @@ columns:
     /// 内部空格是词间分隔（必须原样），末尾空格同理——两者是同一套约定的两处体现。
     #[test]
     fn mongolian_two_column_dict_keeps_inner_and_trailing_spaces() {
-        let path = std::env::temp_dir().join("wind_toli_shape.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_toli_shape.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(
@@ -2001,7 +2014,8 @@ columns:
     /// text 或 code 为空的行必须跳过：空 code 会让条目全挤进 `entries[""]`。
     #[test]
     fn empty_text_or_code_rows_are_skipped() {
-        let path = std::env::temp_dir().join("wind_empty_fields.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_empty_fields.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: e\n...").unwrap();
@@ -2020,7 +2034,8 @@ columns:
     /// 双拼与整句逻辑集体降级回 DAG 猜切分。空格是音节的正面证据，应胜过列顺序惯例。
     #[test]
     fn code_first_pinyin_dict_keeps_syllables() {
-        let py = std::env::temp_dir().join("wind_syl_codefirst.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let py = tmp.path().join("wind_syl_codefirst.dict.yaml");
         {
             let mut f = std::fs::File::create(&py).unwrap();
             writeln!(
@@ -2052,7 +2067,8 @@ columns:
     /// 故沿用列顺序惯例兜底。
     #[test]
     fn spaceless_code_first_is_form_code_but_text_first_keeps_single_syllable() {
-        let wubi = std::env::temp_dir().join("wind_syl_wubi.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let wubi = tmp.path().join("wind_syl_wubi.dict.yaml");
         {
             let mut f = std::fs::File::create(&wubi).unwrap();
             writeln!(
@@ -2067,7 +2083,9 @@ columns:
         assert_eq!(boundary_of(&e, "工"), Some(0), "形码不应有音节边界");
         assert!(ab.is_empty(), "形码不应产出简拼");
 
-        let py = std::env::temp_dir().join("wind_syl_single.dict.yaml");
+        let tmp2 = tempfile::tempdir().unwrap();
+
+        let py = tmp2.path().join("wind_syl_single.dict.yaml");
         {
             let mut f = std::fs::File::create(&py).unwrap();
             writeln!(f, "---\nname: s\n...").unwrap(); // 无声明 → 探测得 text 在前
@@ -2126,7 +2144,8 @@ columns:
     /// 与用户报的 `@` 打不出来是同一类缺口——只是触发条件不同。
     #[test]
     fn hash_becomes_data_after_no_comment_directive() {
-        let path = std::env::temp_dir().join("wind_no_comment.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_no_comment.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: kf\n...").unwrap();
@@ -2153,7 +2172,8 @@ columns:
     /// 无指令时，`#` 一律仍是注释（保持既有行为，别把普通词库搞坏）。
     #[test]
     fn hash_stays_comment_without_directive() {
-        let path = std::env::temp_dir().join("wind_no_directive.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_no_directive.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: x\n...").unwrap();
@@ -2171,7 +2191,8 @@ columns:
     /// 注释开关是跨行有状态的，若不预先求出全局偏移，后面的块会误判为「注释仍生效」。
     #[test]
     fn no_comment_directive_survives_parallel_chunking() {
-        let path = std::env::temp_dir().join("wind_no_comment_parallel.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_no_comment_parallel.dict.yaml");
         let n = 60_000; // 正文 > 1MB，触发并行分块
         {
             let mut f = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
@@ -2196,7 +2217,8 @@ columns:
     /// 缺 `...` 分隔行 → 零条目（此前是全链路最沉默的一处，现已有 warn）。
     #[test]
     fn missing_body_separator_yields_zero_entries() {
-        let path = std::env::temp_dir().join("wind_no_sep.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_no_sep.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: broken\n你好\tni hao\t1").unwrap(); // 没有 `...`
@@ -2211,7 +2233,8 @@ columns:
     /// 第 3 列为空（→ 权重 0）、第 4 列是行政区划编号——它不得被当成权重。
     #[test]
     fn undeclared_columns_ignore_everything_past_weight() {
-        let path = std::env::temp_dir().join("wind_cols_undeclared_extra.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_cols_undeclared_extra.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: district\n...").unwrap(); // 无 columns 声明
@@ -2231,7 +2254,8 @@ columns:
     /// 未声明 `columns:` 时按 librime 默认 `[text, code, weight]` 取第 3 列作权重。
     #[test]
     fn undeclared_columns_follow_rime_default_weight() {
-        let path = std::env::temp_dir().join("wind_cols_undeclared_w.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_cols_undeclared_w.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: x\n...").unwrap();
@@ -2250,7 +2274,8 @@ columns:
     /// 权重是「有则取、无则 0」，不能进最低列数门槛。
     #[test]
     fn two_column_rows_survive_when_weight_column_absent() {
-        let path = std::env::temp_dir().join("wind_cols_two_only.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_cols_two_only.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: kf\n...").unwrap();
@@ -2267,7 +2292,8 @@ columns:
     /// 只有声明能救。这正是 wubi86_jidian_english（`abs\tABS\t100`）的形状。
     #[test]
     fn declared_columns_win_over_ambiguous_content() {
-        let path = std::env::temp_dir().join("wind_cols_declared.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_cols_declared.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(
@@ -2291,7 +2317,8 @@ columns:
     /// 当成码列，与编码整个对调、静默装出镜像垃圾词条。列序须由全文一次判定，不受单行影响。
     #[test]
     fn ascii_text_entries_not_mistaken_for_code_column() {
-        let path = std::env::temp_dir().join("wind_kf_ascii.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_kf_ascii.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             // 无 columns: 声明 —— 正是 12_kf.dict.yaml 的情况，走探测
@@ -2362,7 +2389,8 @@ columns:
     /// （旧实现逐行猜，同文件可出现两种列序并存。）
     #[test]
     fn layout_is_file_level_not_per_line() {
-        let path = std::env::temp_dir().join("wind_layout_filelevel.dict.yaml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("wind_layout_filelevel.dict.yaml");
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "---\nname: mixed\n...").unwrap();
@@ -2385,8 +2413,10 @@ columns:
     /// 真有 marker 时照旧对调（正例）。
     #[test]
     fn cmdbar_swap_requires_marker_not_bare_brace() {
-        let path =
-            std::env::temp_dir().join(format!("wind_cmdbar_swap_{}.dict.yaml", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(format!("wind_cmdbar_swap_{}.dict.yaml", std::process::id()));
         std::fs::write(
             &path,
             "---\nname: t\ncolumns:\n  - text\n  - code\n...\n甲\t{ab}\n$SS(\"x\", \"y\")\tuu\n",

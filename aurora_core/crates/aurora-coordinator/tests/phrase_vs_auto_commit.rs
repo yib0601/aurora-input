@@ -12,11 +12,11 @@
 //! `default_enabled = false`，故码表侧 `aqgy` 只有「葡」一条——这既是 `decide_auto_commit` 判
 //! 「唯一」的前提，也是用户要手动加这条短语的原因。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -52,7 +52,7 @@ fn coord_with_phrase(
     weight: i32,
     at_full: bool,
 ) -> (std::sync::Arc<Coordinator>, PathBuf) {
-    let store_path = std::env::temp_dir().join(format!("wind_phrase_ac_{tag}.redb"));
+    let store_path = aurora_utils::testing::scratch(tag).join(format!("wind_phrase_ac_{tag}.redb"));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase(code, text, 0, weight).unwrap();
@@ -183,8 +183,10 @@ fn shuangpin_phrase_is_not_auto_committed() {
         eprintln!("跳过：缺少 build_dev/data 双拼方案");
         return;
     }
-    let store_path =
-        std::env::temp_dir().join(format!("wind_phrase_ac_t308_{}.redb", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp
+        .path()
+        .join(format!("wind_phrase_ac_t308_{}.redb", std::process::id()));
     let _ = std::fs::remove_file(&store_path);
     let store = std::sync::Arc::new(aurora_store::Store::open(&store_path).unwrap());
     store.add_phrase("ofa", "音形短语", 0, 1200).unwrap();
@@ -219,7 +221,7 @@ fn mixed_coord_with_phrase(
     code: &str,
     text: &str,
 ) -> (std::sync::Arc<Coordinator>, PathBuf) {
-    let store_path = std::env::temp_dir().join(format!(
+    let store_path = aurora_utils::testing::scratch(tag).join(format!(
         "wind_phrase_ac_mixed_{tag}_{}.redb",
         std::process::id()
     ));
@@ -301,7 +303,7 @@ fn sentence_coord_with_phrase(
     text: &str,
     sentence: bool,
 ) -> (PathBuf, PathBuf, std::sync::Arc<Coordinator>) {
-    let root = std::env::temp_dir().join(format!(
+    let root = aurora_utils::testing::scratch(tag).join(format!(
         "wind_phrase_ac_sentence_{tag}_{}",
         std::process::id()
     ));

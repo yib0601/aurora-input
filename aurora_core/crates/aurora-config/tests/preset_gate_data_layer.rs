@@ -9,8 +9,8 @@
 //!
 //! ⚠️ 全文件仅此一个 `#[test]`：OnceLock 与两个环境变量在进程内只认一次。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -21,7 +21,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
 
 #[test]
 fn missing_data_config_disables_pruning_even_with_custom_layer() {
-    let tmp = std::env::temp_dir().join("wind_preset_gate_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_preset_gate_e2e");
     let root = tmp.join("install");
     let data = root.join("data");
     let custom = root.join("data_custom");

@@ -865,7 +865,7 @@ mod tests {
     use std::io::Write;
 
     fn tmp(name: &str, content: &[u8]) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("wind_fp_test_{name}"));
+        let p = aurora_utils::testing::scratch(name).join(format!("wind_fp_test_{name}"));
         let mut f = std::fs::File::create(&p).unwrap();
         f.write_all(content).unwrap();
         // 清掉上轮可能残留的指纹 sidecar，确保固定 temp 路径下测试可重复（否则
@@ -990,7 +990,8 @@ mod tests {
     #[test]
     fn absent_source_is_hashable_and_reappearing_invalidates() {
         let present = tmp("absent_src_present.txt", b"hello");
-        let absent = std::env::temp_dir().join("wind_fp_test_absent_then_added");
+        let tmpdir = tempfile::tempdir().unwrap();
+        let absent = tmpdir.path().join("wind_fp_test_absent_then_added");
         let _ = std::fs::remove_file(&absent);
 
         // ① 缺失不再毒化指纹——能算出来，才谈得上缓存。
@@ -1022,7 +1023,8 @@ mod tests {
     /// 用目录冒充文件来制造一个稳定的非 NotFound 错误（读目录必失败，且跨平台可复现）。
     #[test]
     fn unreadable_non_missing_source_still_forces_rebuild() {
-        let dir_as_src = std::env::temp_dir().join("wind_fp_test_dir_as_source");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir_as_src = tmp.path().join("wind_fp_test_dir_as_source");
         std::fs::create_dir_all(&dir_as_src).unwrap();
         assert!(
             fingerprint(&[&dir_as_src], "t").is_none(),
@@ -1047,7 +1049,8 @@ mod tests {
     #[test]
     fn missing_cache_not_fresh() {
         let src = tmp("src3.txt", b"x");
-        let cache = std::env::temp_dir().join("wind_fp_test_nope.cache");
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("wind_fp_test_nope.cache");
         let _ = std::fs::remove_file(&cache);
         assert!(!cache_is_fresh(&cache, &[&src], "t"));
     }
@@ -1070,7 +1073,8 @@ mod tests {
         assert!(by_fp.starts_with("fp:"), "有指纹时必须优先取指纹: {by_fp}");
         assert_ne!(by_fp, by_meta);
         // ③ 文件不在 → absent
-        let gone = std::env::temp_dir().join("wind_fp_test_digest_absent");
+        let tmp = tempfile::tempdir().unwrap();
+        let gone = tmp.path().join("wind_fp_test_digest_absent");
         let _ = std::fs::remove_file(&gone);
         let mut side = gone.clone().into_os_string();
         side.push(".fp");
@@ -1254,7 +1258,8 @@ mod tests {
     fn absent_source_has_stamp_and_appearing_invalidates() {
         let src = tmp("st_absent_src.txt", b"x");
         set_mtime(&src, 1_700_000_000);
-        let gone = std::env::temp_dir().join("wind_fp_test_st_absent_gone");
+        let tmpdir = tempfile::tempdir().unwrap();
+        let gone = tmpdir.path().join("wind_fp_test_st_absent_gone");
         let _ = std::fs::remove_file(&gone);
         let cache = tmp("st_absent.cache", b"cache");
         write_cache_fp(&cache, &[&src, &gone], "t");
@@ -1355,7 +1360,8 @@ mod tests {
     fn resolve_slot_fp_is_stable_and_tracks_content() {
         let src = tmp("slot_src.txt", b"alpha");
         set_mtime(&src, 1_700_000_000);
-        let slot = std::env::temp_dir().join("wind_fp_test_slot.wdat");
+        let tmp = tempfile::tempdir().unwrap();
+        let slot = tmp.path().join("wind_fp_test_slot.wdat");
         let _ = std::fs::remove_file(st_sidecar(&slot));
         let fp1 = resolve_slot_fp(&slot, &[&src], "t").unwrap();
         assert_eq!(fp1.len(), 16);
@@ -1372,7 +1378,10 @@ mod tests {
     /// 别的槽位（前缀相同但 stem 不同）与非变体文件不碰。
     #[test]
     fn prune_slot_keeps_current_plus_newest_and_removes_legacy() {
-        let dir = std::env::temp_dir().join(format!("wind_fp_prune_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_fp_prune_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let slot = dir.join("x.wdat");
@@ -1466,7 +1475,8 @@ mod tests {
         write_cache_fp(&cache, &[&src], "t");
         assert!(cache_is_fresh(&cache, &[&src], "t"));
         // 另建一个文件再 rename 过去：新 inode，内容等长不同，mtime 回拨到一样
-        let tmp_new = std::env::temp_dir().join("wind_fp_test_st_ino_new.txt");
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp_new = tmp.path().join("wind_fp_test_st_ino_new.txt");
         std::fs::write(&tmp_new, b"HELLO WORLD").unwrap();
         std::fs::rename(&tmp_new, &src).unwrap();
         set_mtime(&src, 1_700_000_000);
@@ -1491,7 +1501,8 @@ mod tests {
 
     /// 本测试独占的临时目录（`tmp()` 用的是固定路径，不适合多文件场景）。
     fn tmp_dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_fp_{name}_{}", std::process::id()));
+        let d = aurora_utils::testing::scratch(name)
+            .join(format!("wind_fp_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

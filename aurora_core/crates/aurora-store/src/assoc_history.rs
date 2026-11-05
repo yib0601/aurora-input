@@ -116,7 +116,7 @@ mod tests {
     use super::*;
 
     fn store(tag: &str) -> Store {
-        let p = std::env::temp_dir().join(format!("wind_assoc_hist_{tag}.redb"));
+        let p = aurora_utils::testing::scratch(tag).join(format!("wind_assoc_hist_{tag}.redb"));
         let _ = std::fs::remove_file(&p);
         Store::open(p).unwrap()
     }

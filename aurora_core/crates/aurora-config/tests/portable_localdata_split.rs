@@ -13,7 +13,8 @@ use aurora_config::Config;
 
 #[test]
 fn portable_local_dir_is_localdata_not_userdata() {
-    let tmp = std::env::temp_dir().join("wind_portable_localdata_split_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_portable_localdata_split_e2e");
     let root = tmp.join("PortableApp");
     let user = root.join("userdata");
     let local = root.join("localdata");

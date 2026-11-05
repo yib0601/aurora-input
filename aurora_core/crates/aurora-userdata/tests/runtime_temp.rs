@@ -1,11 +1,12 @@
 //! 临时词 API 与 aurora-store/src/temp_words.rs 的行为对拍。
-use std::sync::Arc;
 use aurora_userdata::engine::{Dirs, UserData};
 use aurora_userdata::record::{OpKind, Payload, Target};
 use aurora_userdata::runtime::{Runtime, TEMP_WORD_MAX_WEIGHT};
+use std::sync::Arc;
 
 fn rt(name: &str) -> Runtime {
-    let d = std::env::temp_dir().join(format!("wind_rt_{name}-{}", std::process::id()));
+    let d =
+        aurora_utils::testing::scratch(name).join(format!("wind_rt_{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     Runtime::new(Arc::new(
         UserData::open(Dirs {
@@ -149,14 +150,15 @@ fn listing_count_remove_clear() {
 fn import_merges_max_and_backfills_boundary() {
     let r = rt("import");
     r.learn_temp("py", "xian", "先", 100, 0).unwrap();
-    let row = |code: &str, text: &str, weight, count, boundary| aurora_userdata::runtime::TempWord {
-        code: code.into(),
-        text: text.into(),
-        weight,
-        count,
-        created_at: 0,
-        boundary,
-    };
+    let row =
+        |code: &str, text: &str, weight, count, boundary| aurora_userdata::runtime::TempWord {
+            code: code.into(),
+            text: text.into(),
+            weight,
+            count,
+            created_at: 0,
+            boundary,
+        };
     let n = r
         .import_temp_rows(
             "py",

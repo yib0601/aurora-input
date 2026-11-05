@@ -188,7 +188,8 @@ mod tests {
     /// 用户的配置落回 `%APPDATA%`，而 core 认旧名、仍读 `userdata\` —— 两边分家。
     #[test]
     fn portable_marker_accepts_new_and_legacy_names() {
-        let base = std::env::temp_dir().join(format!("wind_setting_marker_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("wind_setting_marker");
 
         for (i, name) in [PORTABLE_MARKER_NAME, LEGACY_PORTABLE_MARKER_NAME]
             .iter()
@@ -213,8 +214,8 @@ mod tests {
     /// 用 `exists()` 的话，谁在便携包里建了个叫 `portable_mode` 的文件夹就会误判。
     #[test]
     fn portable_marker_directory_is_not_a_marker() {
-        let dir =
-            std::env::temp_dir().join(format!("wind_setting_markerdir_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wind_setting_markerdir");
         std::fs::create_dir_all(dir.join(PORTABLE_MARKER_NAME)).unwrap();
         assert!(!has_portable_marker_in(&dir));
         let _ = std::fs::remove_dir_all(&dir);

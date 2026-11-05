@@ -590,7 +590,10 @@ mod p1_meta_tests {
     /// Review Focus 3：meta 为 1 的目录被新版打开 ⇒ 迁移后升到最新（认识 1 的旧版本随后只读）。
     #[test]
     fn opening_migrates_and_raises_format_version() {
-        let d = std::env::temp_dir().join(format!("wind_raise_fv-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_raise_fv-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("meta.toml"), "format_version = 1\ndir_id = \"d1\"\n").unwrap();
@@ -607,7 +610,8 @@ mod p1_meta_tests {
 
     /// 造一个「老版本写的」用户目录：meta 为 1，redb 旧表里有一条拼音临时词。
     fn legacy_user_dir(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("wind_p1fix_{name}-{}", std::process::id()));
+        let d =
+            aurora_utils::testing::scratch(&format!("wind_p1fix_{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("meta.toml"), "format_version = 1\ndir_id = \"d1\"\n").unwrap();
@@ -665,7 +669,10 @@ mod p1_meta_tests {
     /// P5 退出判据：删掉整个本机状态目录后重启，学到的数据、补全、统计全在。
     #[test]
     fn wiping_state_dir_keeps_all_user_data() {
-        let d = std::env::temp_dir().join(format!("wind_p5_wipe-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_p5_wipe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         {
             let (store, _) = Coordinator::open_user_store_checked(Some(&d), StateChoice::Derived);
@@ -782,7 +789,10 @@ mod p1_meta_tests {
     /// 只清派生状态目录，真源文本不动、重开即读回。
     #[test]
     fn derived_mode_keeps_user_text_in_user_dir() {
-        let d = std::env::temp_dir().join(format!("wind_p2b_m8-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_p2b_m8-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let (store, _) = Coordinator::open_user_store_checked(Some(&d), StateChoice::Derived);
         let s = store.unwrap();
@@ -808,7 +818,10 @@ mod p1_meta_tests {
     /// 每次打开都清掉运行时状态（移动端走派生模式，那等于每次启动丢掉学到的词）。
     #[test]
     fn derived_mode_fresh_dir_keeps_learned_data_across_reopen() {
-        let d = std::env::temp_dir().join(format!("wind_fresh_keep-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_fresh_keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let (store, _) = Coordinator::open_user_store_checked(Some(&d), StateChoice::Derived);
         let s = store.unwrap();
@@ -852,9 +865,15 @@ mod p1_meta_tests {
     /// 旧目录学到的词不混进来。
     #[test]
     fn runtime_state_is_per_user_dir() {
-        let base = std::env::temp_dir().join(format!("wind_p1fix_base-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind_p1fix_base-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        let a = std::env::temp_dir().join(format!("wind_p1fix_a-{}", std::process::id()));
+        let tmp2 = tempfile::tempdir().unwrap();
+        let a = tmp2
+            .path()
+            .join(format!("wind_p1fix_a-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&a);
         let sa = Store::open_with_state(
             a.join("userdata.redb"),

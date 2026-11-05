@@ -14,14 +14,14 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::FreeInputMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SEMICOLON: u32 = 0xBA;
 const VK_SPACE: u32 = 0x20;
@@ -77,7 +77,7 @@ fn open(tag: &str, edit: impl FnOnce(&mut Config)) -> (Arc<Coordinator>, Arc<Sto
     c.input.default.chinese_mode = true;
     c.schema.english.frequency.enabled = true;
     edit(&mut c);
-    let db = std::env::temp_dir().join(format!(
+    let db = aurora_utils::testing::scratch(tag).join(format!(
         "wind_quick_en_case_{tag}_{}.redb",
         std::process::id()
     ));

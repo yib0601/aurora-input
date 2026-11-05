@@ -8,12 +8,12 @@
 //!
 //! 词典缺失时整族静默跳过——核对 `--nocapture` 里有没有「跳过：」。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_keys::keymap::{VK_BACKTICK, VK_DOWN, VK_LEFT, VK_RIGHT};
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

@@ -26,7 +26,7 @@ fn data_dir() -> Option<PathBuf> {
 
 /// 激活双拼（出厂 `shuangpin.schema.toml` 用小鹤布局）。`words` = (code, text, weight, boundary)。
 fn shuangpin(dir: &Path, tag: &str, words: &[(&str, &str, i32, u64)]) -> EngineManager {
-    let root = std::env::temp_dir().join(format!("wind_sp_sep_{tag}"));
+    let root = aurora_utils::testing::scratch(&format!("wind_sp_sep_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));
@@ -200,7 +200,7 @@ fn separator_only_input_is_inert() {
 
 /// 全拼（非双拼）方案，用于对照。
 fn quanpin(dir: &Path, tag: &str) -> EngineManager {
-    let root = std::env::temp_dir().join(format!("wind_fp_sep_{tag}"));
+    let root = aurora_utils::testing::scratch(&format!("wind_fp_sep_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     let store = Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"));

@@ -128,10 +128,9 @@ fn texts(v: Vec<Rendered>) -> Vec<String> {
 // 成员 id 已下沉到 `aurora-ids`：配置层要用它们，而配置层不能反向依赖本 crate。
 // 这里原样 re-export，下游 `aurora_quick_input::MEMBER_*` 的写法与语义都不变。
 pub use aurora_ids::quick_input::{
-    is_quick_member, LEGACY_EXPANSION, MEMBER_CALC, MEMBER_DATE, MEMBER_HISTORY, MEMBER_LEGACY,
-    MEMBER_NUMBER, MEMBER_REPEAT,
+    LEGACY_EXPANSION, MEMBER_CALC, MEMBER_DATE, MEMBER_HISTORY, MEMBER_LEGACY, MEMBER_NUMBER,
+    MEMBER_REPEAT, is_quick_member,
 };
-
 
 /// 本 crate 实现的候选来源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

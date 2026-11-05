@@ -579,14 +579,16 @@ mod tests {
     use std::io::Cursor;
     use std::sync::atomic::AtomicUsize;
 
-    fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "wind_update_test_{}_{}_{tag}",
-            std::process::id(),
+    /// 返回 `TempDir` 一并交给调用方持有：它一旦 drop 就删掉整个临时目录，
+    /// 只返回 `PathBuf` 的话调用方拿到的是已被删掉的路径。
+    fn temp_dir(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!(
+            "wind_update_test_{tag}_{}",
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&d).unwrap();
-        d
+        (tmp, d)
     }
     static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -602,7 +604,7 @@ mod tests {
 
     #[test]
     fn downloads_and_verifies_happy_path() {
-        let dir = temp_dir("ok");
+        let (_tmp, dir) = temp_dir("ok");
         let dest = dir.join("pkg.exe");
         let data = vec![7u8; 300 * 1024];
         let sha = sha256_of(&data);
@@ -631,7 +633,7 @@ mod tests {
     /// 对端提前断开：读到 EOF 但字节数不足。
     #[test]
     fn rejects_truncated_download() {
-        let dir = temp_dir("trunc");
+        let (_tmp, dir) = temp_dir("trunc");
         let dest = dir.join("pkg.exe");
         let full = vec![1u8; 1000];
         let sha = sha256_of(&full);
@@ -657,7 +659,7 @@ mod tests {
     /// 内容被掉包：长度对得上但哈希不符。
     #[test]
     fn rejects_hash_mismatch() {
-        let dir = temp_dir("hash");
+        let (_tmp, dir) = temp_dir("hash");
         let dest = dir.join("pkg.exe");
         let expected = vec![1u8; 1000];
         let tampered = vec![2u8; 1000];
@@ -682,7 +684,7 @@ mod tests {
     /// 超长响应必须在超出的那一刻就停，而不是读完再判。
     #[test]
     fn aborts_when_exceeding_expected_size() {
-        let dir = temp_dir("over");
+        let (_tmp, dir) = temp_dir("over");
         let dest = dir.join("pkg.exe");
 
         let err = stream_to_file(
@@ -704,7 +706,7 @@ mod tests {
 
     #[test]
     fn cancel_stops_and_cleans_up() {
-        let dir = temp_dir("cancel");
+        let (_tmp, dir) = temp_dir("cancel");
         let dest = dir.join("pkg.exe");
         let data = vec![4u8; 500 * 1024];
         let sha = sha256_of(&data);
@@ -732,7 +734,7 @@ mod tests {
 
     #[test]
     fn reuses_cached_file_only_when_hash_matches() {
-        let dir = temp_dir("reuse");
+        let (_tmp, dir) = temp_dir("reuse");
         let dest = dir.join("pkg.exe");
         let data = vec![9u8; 2048];
         let sha = sha256_of(&data);
@@ -754,7 +756,7 @@ mod tests {
     /// 旧版的实际风险路径：大小对但内容是截断的旧文件，只比大小就会直接安装。
     #[test]
     fn cached_file_with_right_size_but_wrong_content_is_rejected() {
-        let dir = temp_dir("stale");
+        let (_tmp, dir) = temp_dir("stale");
         let dest = dir.join("pkg.exe");
         std::fs::write(&dest, vec![0u8; 2048]).unwrap();
 
@@ -766,7 +768,7 @@ mod tests {
 
     #[test]
     fn cached_file_with_wrong_size_is_discarded() {
-        let dir = temp_dir("size");
+        let (_tmp, dir) = temp_dir("size");
         let dest = dir.join("pkg.exe");
         std::fs::write(&dest, vec![0u8; 100]).unwrap();
 
@@ -800,7 +802,7 @@ mod tests {
 
     #[test]
     fn download_rejects_non_https() {
-        let dir = temp_dir("scheme");
+        let (_tmp, dir) = temp_dir("scheme");
         let err = download(
             "http://example.invalid/pkg.exe",
             &"a".repeat(64),
@@ -939,7 +941,7 @@ mod tests {
 
     #[test]
     fn parallel_download_assembles_parts_in_correct_order() {
-        let dir = temp_dir("par_ok");
+        let (_tmp, dir) = temp_dir("par_ok");
         let dest = dir.join("pkg.exe");
         let data = patterned(300 * 1024);
         let sha = sha256_of(&data);
@@ -978,7 +980,7 @@ mod tests {
     /// offset 上，文件彻底损坏 —— 必须在 fetch_part 层就拒掉。
     #[test]
     fn parallel_download_rejects_server_that_ignores_range() {
-        let dir = temp_dir("par_200");
+        let (_tmp, dir) = temp_dir("par_200");
         let dest = dir.join("pkg.exe");
         let data = patterned(300 * 1024);
         let sha = sha256_of(&data);
@@ -1009,7 +1011,7 @@ mod tests {
 
     #[test]
     fn parallel_download_rejects_hash_mismatch() {
-        let dir = temp_dir("par_hash");
+        let (_tmp, dir) = temp_dir("par_hash");
         let dest = dir.join("pkg.exe");
         let data = patterned(300 * 1024);
         let server = RangeServer::start(data.clone(), true);
@@ -1034,7 +1036,7 @@ mod tests {
 
     #[test]
     fn parallel_download_cancel_cleans_up() {
-        let dir = temp_dir("par_cancel");
+        let (_tmp, dir) = temp_dir("par_cancel");
         let dest = dir.join("pkg.exe");
         let data = patterned(300 * 1024);
         let sha = sha256_of(&data);

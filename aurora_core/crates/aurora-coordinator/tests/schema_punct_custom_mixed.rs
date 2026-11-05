@@ -19,13 +19,13 @@
 
 use std::path::PathBuf;
 
-use serde_json::json;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_host::KeyProbe;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_webdata::WebDataRpc;
+use serde_json::json;
 
 const VK_OEM_2: u32 = 0xBF; // `/`：中文标点表无映射 ⇒ 出厂在透传集里
 
@@ -69,7 +69,8 @@ fn save_schema_punct(c: &Coordinator, id: &str) {
 
 fn check(active: &str) {
     // 目录名带进程号：并发会话共用 TMPDIR 时不互相覆盖。
-    let ov_dir = std::env::temp_dir().join(format!("wind_gh144_{active}_{}", std::process::id()));
+    let ov_dir = aurora_utils::testing::scratch("check")
+        .join(format!("wind_gh144_{active}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov_dir);
     std::fs::create_dir_all(&ov_dir).unwrap();
     let mut cfg = Config::default();
@@ -133,7 +134,10 @@ fn schema_invalidate_refreshes_key_gate() {
     if !ready() {
         return;
     }
-    let ov_dir = std::env::temp_dir().join(format!("wind_gh144_inval_{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let ov_dir = tmp
+        .path()
+        .join(format!("wind_gh144_inval_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&ov_dir);
     std::fs::create_dir_all(&ov_dir).unwrap();
     let mut cfg = Config::default();

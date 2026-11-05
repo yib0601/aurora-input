@@ -38,7 +38,7 @@ fn data_dir() -> Option<PathBuf> {
 
 /// 每个用例独立的 redb 与 override 目录，避免串扰与污染真实用户目录。
 fn tmp_root(tag: &str) -> PathBuf {
-    let p = std::env::temp_dir().join(format!("wind_uw_short_input_{tag}"));
+    let p = aurora_utils::testing::scratch(&format!("wind_uw_short_input_{tag}"));
     let _ = std::fs::remove_dir_all(&p);
     let _ = std::fs::create_dir_all(&p);
     p

@@ -974,7 +974,8 @@ mod tests {
 
     #[test]
     fn dir_to_open_prefers_dicts_subdir() {
-        let base = std::env::temp_dir().join(format!("wind_ulibs_dir_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("wind_ulibs_dir");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         assert_eq!(dir_to_open(&base), base, "还没有 dicts 就开方案目录");
@@ -1393,12 +1394,14 @@ mod tests {
         });
     }
 
-    fn temp_file(tag: &str, body: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("wind_ulibs_{tag}_{}", std::process::id()));
+    /// 返回 `TempDir` 一并交给调用方持有：它一旦 drop 就删掉整个临时目录。
+    fn temp_file(tag: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("wind_ulibs_{tag}"));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("网络词.dict.yaml");
         std::fs::write(&p, body).unwrap();
-        p
+        (tmp, p)
     }
 
     /// 词库文件：传路径给 core 识别。
@@ -1406,7 +1409,7 @@ mod tests {
     fn import_dict_file_passes_path() {
         with_mock(|| {
             let st = state();
-            let p = temp_file("path", "---\nname: x\n...\n工\ta\n");
+            let (_tmp, p) = temp_file("path", "---\nname: x\n...\n工\ta\n");
             st.open_lib_import(&p);
             assert_eq!(st.libs.name.get(), "网络词");
             assert!(st.libs.importing.get());
@@ -1428,7 +1431,7 @@ mod tests {
     fn import_word_list_encodes_first() {
         with_mock(|| {
             let st = state();
-            let p = temp_file("words", "中国\n计算机\n");
+            let (_tmp, p) = temp_file("words", "中国\n计算机\n");
             st.open_lib_import(&p);
             assert_eq!(st.libs.format_note.get(), "纯词列表 · 2 个词，按本方案出码");
             crate::rpc::take_mock_calls();

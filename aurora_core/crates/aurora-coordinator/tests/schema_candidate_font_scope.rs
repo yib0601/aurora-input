@@ -15,12 +15,12 @@
 //! ⇒ 只测「五笔方案下拿到五笔的字体」是不够的：那条在两种判据下都通过。
 //! 必须有一条**进入临英**后再问一次的用例，两条一起才把归属钉住。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")
@@ -46,7 +46,7 @@ fn key(vk: u32, modifiers: u32) -> KeyEventData {
 
 /// 造一组只含 `[candidate] font_family` 的方案 override。
 fn font_overrides(tag: &str, entries: &[(&str, &str)]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_candfont_{tag}"));
+    let dir = aurora_utils::testing::scratch(tag).join(format!("wind_candfont_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     for (schema_id, family) in entries {

@@ -239,8 +239,10 @@ mod schema_scoped_punct_tests {
     /// 三张表在同一个源字符 `.` 上取值**互不相同**——这是本组用例能测出差别的前提。
     /// 若让它们碰巧同值，「取错了方案」和「取对了」会给出一样的断言结果。
     fn data_dir(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("wind_punct_scope_{}_{tag}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!(
+            "wind_punct_scope_{}_{tag}",
+            std::process::id()
+        ));
         let schemas = dir.join("schemas");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&schemas).unwrap();

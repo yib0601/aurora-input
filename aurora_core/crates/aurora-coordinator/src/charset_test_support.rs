@@ -34,7 +34,7 @@ pub(crate) fn copy_factory_charsets(base_dir: &Path) {
 ///
 /// `tag` 要在同一个测试二进制内唯一——测试并行跑，同名目录会互相删。
 pub(crate) fn charsets_only_data_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_charsets_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_charsets_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     copy_factory_charsets(&dir);

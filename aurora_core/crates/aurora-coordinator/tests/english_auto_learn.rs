@@ -4,13 +4,13 @@
 //! ⚠️ 依赖 `build_dev/data` 真实词库（英文方案要能加载，「是不是词库词」要问真词库）；
 //! 缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, MOD_SHIFT};
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SPACE: u32 = 0x20;
 const VK_RETURN: u32 = 0x0D;
@@ -56,7 +56,7 @@ fn open(tag: &str, active: &str, edit: impl FnOnce(&mut Config)) -> (Arc<Coordin
     c.input.temp_english.enabled = true;
     c.schema.english.auto_learn.enabled = true;
     edit(&mut c);
-    let path = std::env::temp_dir().join(format!(
+    let path = aurora_utils::testing::scratch(tag).join(format!(
         "wind_english_learn_{}_{tag}.redb",
         std::process::id()
     ));

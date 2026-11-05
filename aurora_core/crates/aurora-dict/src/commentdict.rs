@@ -253,7 +253,8 @@ mod tests {
     }
 
     fn build(tag: &str, v: &[(&str, &str, &str)]) -> (std::path::PathBuf, CommentReader) {
-        let p = std::env::temp_dir().join(format!("wind_wcmt_{}_{}.wcmt", std::process::id(), tag));
+        let dir = aurora_utils::testing::scratch(tag);
+        let p = dir.join(format!("wind_wcmt_{}_{}.wcmt", std::process::id(), tag));
         write_comment_wcmt(&p, &rows(v)).unwrap();
         let r = CommentReader::open(&p).unwrap();
         (p, r)
@@ -314,7 +315,10 @@ mod tests {
         for i in 0..2000 {
             v.push((format!("词{i:04}"), "后到的".into(), String::new()));
         }
-        let p = std::env::temp_dir().join(format!("wind_wcmt_dup_{}.wcmt", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_wcmt_dup_{}.wcmt", std::process::id()));
         write_comment_wcmt(&p, &v).unwrap();
         let r = CommentReader::open(&p).unwrap();
         assert_eq!(r.entry_count(), 2000, "同词同码只留一条");
@@ -360,7 +364,10 @@ mod tests {
     /// 非 wcmt 文件必须被拒绝而非当成空表——否则用户把路径写错时毫无提示。
     #[test]
     fn rejects_foreign_file() {
-        let p = std::env::temp_dir().join(format!("wind_wcmt_bad_{}.wcmt", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp
+            .path()
+            .join(format!("wind_wcmt_bad_{}.wcmt", std::process::id()));
         std::fs::write(&p, b"not a wcmt file at all, padding to exceed header size").unwrap();
         assert!(CommentReader::open(&p).is_err());
         // 过短文件同样拒绝

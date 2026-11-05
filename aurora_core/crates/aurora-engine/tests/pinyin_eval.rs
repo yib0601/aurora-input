@@ -236,7 +236,10 @@ fn apply_correction_env(c: &mut aurora_config::CorrectionConfig) {
                 known = true;
             }
         }
-        assert!(known, "AURORA_PINYIN_EVAL_CORRECTION 里有不认识的规则「{g}」");
+        assert!(
+            known,
+            "AURORA_PINYIN_EVAL_CORRECTION 里有不认识的规则「{g}」"
+        );
     }
 }
 

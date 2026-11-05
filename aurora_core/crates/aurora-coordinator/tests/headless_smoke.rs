@@ -8,12 +8,12 @@
 //! headless 门（CI）单独跑它：`cargo test -p aurora-coordinator --no-default-features
 //! --test headless_smoke`。
 
-use std::path::PathBuf;
 use aurora_bridge::handler::{CaretData, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, caret_source};
 use aurora_ui_types::UiCommand;
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../build_dev/data")

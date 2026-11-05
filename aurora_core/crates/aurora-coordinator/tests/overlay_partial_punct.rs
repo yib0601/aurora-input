@@ -8,8 +8,6 @@
 //!
 //! ⚠️ 依赖 `build_dev/data` 真实词库；缺失时**静默跳过**（判据是耗时 0.00s）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::FreeInputMode;
@@ -17,6 +15,8 @@ use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
 use aurora_store::stats::CommitSource;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_BACKTICK: u32 = 0xC0;
 const VK_SEMICOLON: u32 = 0xBA;
@@ -69,7 +69,7 @@ fn open(tag: &str) -> (Arc<Coordinator>, Arc<Store>, PathBuf) {
     c.schema.pinyin.auto_learn.enabled = true;
     c.schema.pinyin.frequency.enabled = true;
     c.schema.mix_modes[0].free_input = FreeInputMode::Off;
-    let db = std::env::temp_dir().join(format!(
+    let db = aurora_utils::testing::scratch(tag).join(format!(
         "wind_overlay_partial_punct_{tag}_{}.redb",
         std::process::id()
     ));

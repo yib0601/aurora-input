@@ -390,7 +390,8 @@ mod tests {
 
     #[test]
     fn main_dict_header_declares_column_order() {
-        let dir = std::env::temp_dir().join("gen_dict_writer_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_dict_writer_test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("out.dict.yaml");
         let cfg = Config {
@@ -417,7 +418,8 @@ mod tests {
 
     #[test]
     fn extra_dict_sorted_by_code_then_weight_desc() {
-        let dir = std::env::temp_dir().join("gen_dict_writer_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_dict_writer_test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("extra.dict.yaml");
         let mut entries = vec![
@@ -437,7 +439,8 @@ mod tests {
 
     #[test]
     fn passthrough_strips_sort_key_and_its_comment() {
-        let dir = std::env::temp_dir().join("gen_dict_writer_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_dict_writer_test");
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("district_src.yaml");
         let dst = dir.join("district_dst.yaml");
@@ -469,7 +472,8 @@ mod tests {
     #[test]
     fn passthrough_preserves_missing_trailing_newline() {
         // 上游 district 末尾没有换行；补一个就不再是"一字不改"
-        let dir = std::env::temp_dir().join("gen_dict_writer_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_dict_writer_test");
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("noeol_src.yaml");
         let dst = dir.join("noeol_dst.yaml");
@@ -481,7 +485,8 @@ mod tests {
 
     #[test]
     fn passthrough_preserves_crlf_line_endings() {
-        let dir = std::env::temp_dir().join("gen_dict_writer_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_dict_writer_test");
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("crlf_src.yaml");
         let dst = dir.join("crlf_dst.yaml");
@@ -498,7 +503,8 @@ mod tests {
 
     #[test]
     fn passthrough_is_idempotent_when_no_sort_key() {
-        let dir = std::env::temp_dir().join("gen_dict_writer_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_dict_writer_test");
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("nosort_src.yaml");
         let dst = dir.join("nosort_dst.yaml");
@@ -516,7 +522,8 @@ mod tests {
     #[test]
     fn passthrough_ignores_sort_like_lines_in_body() {
         // 数据区里恰好有以 sort: 开头的词条时不得被当成头部键删掉
-        let dir = std::env::temp_dir().join("gen_dict_writer_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_dict_writer_test");
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("body_src.yaml");
         let dst = dir.join("body_dst.yaml");
@@ -531,7 +538,8 @@ mod tests {
 
     #[test]
     fn atomic_write_leaves_no_tmp_behind() {
-        let dir = std::env::temp_dir().join("gen_dict_writer_test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("gen_dict_writer_test");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("atomic.dict.yaml");
         let cfg = Config {

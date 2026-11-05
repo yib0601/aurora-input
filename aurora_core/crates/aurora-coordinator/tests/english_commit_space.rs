@@ -11,13 +11,13 @@
 //! ⚠️ 词典缺失时整族静默跳过（判据是**耗时 0.00s**，不是通过条数）——见
 //! `build_dev/data` 相关记录。worktree 中需自备 `build_dev` 链接。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{CommitRequestData, KeyAction, KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_config::config::RawCandidateMode;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, EVENT_KEY_UP, MOD_SHIFT};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_SPACE: u32 = 0x20;
 const VK_RETURN: u32 = 0x0D;
@@ -418,7 +418,8 @@ fn appended_space_does_not_pollute_freq_key() {
     if !has_english_schema() {
         return;
     }
-    let path = std::env::temp_dir().join("wind_english_commit_space_freq.redb");
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("wind_english_commit_space_freq.redb");
     let _ = std::fs::remove_file(&path);
     let store = Arc::new(aurora_store::Store::open(&path).expect("建 store 失败"));
 

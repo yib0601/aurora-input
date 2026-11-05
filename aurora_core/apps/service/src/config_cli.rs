@@ -7,11 +7,11 @@
 
 mod custom_check;
 
-use serde_json::{Value, json};
 use aurora_config::Config;
 use aurora_config::config_schema::{
     FieldType, field, is_known_key, leaf_entries, parse_str_value, registry, validate,
 };
+use serde_json::{Value, json};
 
 // 变体后缀经 aurora_config::variant::pipe_suffix() 运行时取得：CLI 与 core 同一 exe，自辨一致。
 

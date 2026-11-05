@@ -18,9 +18,9 @@
 //! `USER_ABBREV` 兜底组在段里的等价物。同码异边界（xian 下的「先」与「西安」）各得各的键。
 
 use anyhow::bail;
+use aurora_dict::datformat::{WdatReader, WdatStreamWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use aurora_dict::datformat::{WdatReader, WdatStreamWriter};
 
 #[cfg(test)]
 thread_local! {
@@ -457,7 +457,8 @@ mod tests {
 
     #[test]
     fn build_open_query_and_meta_roundtrip() {
-        let d = std::env::temp_dir().join(format!("wind_snap-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join(format!("wind_snap-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let mut es = vec![
             se("nihao", "你好", 10, 0b101, 3),
@@ -504,7 +505,10 @@ mod tests {
     /// 每条的 sidecar 行按全局序号取：码多、叶长不一时，各查询入口取到的都得是自己那一行。
     #[test]
     fn meta_rows_line_up_across_codes_of_uneven_leaves() {
-        let d = std::env::temp_dir().join(format!("wind_snap_rows-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_snap_rows-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let mut es = Vec::new();
         for c in 0..40u32 {
@@ -550,7 +554,10 @@ mod tests {
     /// 同码异边界：xian 下「先」(x) 与「西安」(x'a) 两条，两个简拼都要召回。
     #[test]
     fn abbrev_keys_cover_every_boundary_under_one_code() {
-        let d = std::env::temp_dir().join(format!("wind_snap_ab-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_snap_ab-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let es = vec![
             se("xian", "先", 100, 0b1, 0),
@@ -568,7 +575,10 @@ mod tests {
     /// 崩溃落在「新 wdat 已写、新 sidecar 未写」之间：旧段必须原样可读。
     #[test]
     fn crash_between_wdat_and_meta_keeps_previous_snapshot() {
-        let d = std::env::temp_dir().join(format!("wind_snap_half-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_snap_half-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let old = vec![
             se("a", "甲", 1, 0, 1),
@@ -586,7 +596,10 @@ mod tests {
     /// 旧段还映射着（查询读者仍持有）时重建同名段：Windows 上不能因 sidecar 被映射而写不进。
     #[test]
     fn rebuild_while_previous_snapshot_is_still_mapped() {
-        let d = std::env::temp_dir().join(format!("wind_snap_live-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_snap_live-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let old = build(&d, "t", 1, vec![se("a", "甲", 1, 0, 1)].into_iter()).unwrap();
         let new = build(&d, "t", 2, vec![se("b", "乙", 1, 0, 1)].into_iter()).unwrap();
@@ -602,7 +615,10 @@ mod tests {
 
     #[test]
     fn mismatched_sidecar_is_an_error_not_a_silent_zero() {
-        let d = std::env::temp_dir().join(format!("wind_snap_bad-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_snap_bad-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let s = build(&d, "t", 1, vec![se("a", "甲", 1, 0, 1)].into_iter()).unwrap();
         drop(s);
@@ -614,7 +630,10 @@ mod tests {
     /// 零条目也是一个快照：它带着水位，清空之后 state 丢了也不会让旧记录复活。
     #[test]
     fn empty_build_keeps_watermark_and_drops_old_segment() {
-        let d = std::env::temp_dir().join(format!("wind_snap_empty-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_snap_empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         drop(build(&d, "t", 3, vec![se("a", "甲", 1, 0, 1)].into_iter()).unwrap());
         let s = build(&d, "t", 7, std::iter::empty()).unwrap();
@@ -632,7 +651,10 @@ mod tests {
     }
     #[test]
     fn order_survives_build_and_open() {
-        let d = std::env::temp_dir().join(format!("wind_snap_order-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp
+            .path()
+            .join(format!("wind_snap_order-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let mut a = se("ni", "你", 5, 0b1, 0);
         a.order = 7;

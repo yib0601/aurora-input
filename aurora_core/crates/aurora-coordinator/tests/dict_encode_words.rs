@@ -9,11 +9,11 @@
 //!
 //! 词典缺失时自动跳过（无数据 CI 环境）。判据是耗时 0.00s。
 
-use serde_json::{Value, json};
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_webdata::WebDataRpc;
+use serde_json::{Value, json};
+use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {
     // 三级：crates/aurora-coordinator → crates → aurora_input → 仓库根（build_dev 在仓库根）。

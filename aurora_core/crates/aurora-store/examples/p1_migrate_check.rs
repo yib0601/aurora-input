@@ -5,9 +5,9 @@ fn main() -> anyhow::Result<()> {
     let p = std::env::args()
         .nth(1)
         .expect("参数：userdata.redb 副本路径");
-    let _ = std::fs::remove_dir_all(aurora_store::store::derived_state_dir(std::path::Path::new(
-        &p,
-    )));
+    let _ = std::fs::remove_dir_all(aurora_store::store::derived_state_dir(
+        std::path::Path::new(&p),
+    ));
     let t = std::time::Instant::now();
     let s = aurora_store::Store::open(&p)?;
     println!("打开 + 迁移: {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);

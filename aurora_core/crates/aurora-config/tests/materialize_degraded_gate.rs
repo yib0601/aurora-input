@@ -13,8 +13,8 @@
 //! ⚠️ 全文件仅此一个 `#[test]`：`materialize_key_actions` 写用户层 config.toml，
 //! 漏设 `AURORA_DATADIR_CONF` 会真写 `%APPDATA%\AuroraInput\config.toml`。
 
-use std::path::{Path, PathBuf};
 use aurora_config::Config;
+use std::path::{Path, PathBuf};
 
 fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
     let p = dir.join(rel);
@@ -25,7 +25,8 @@ fn write_at(dir: &Path, rel: &str, body: &str) -> PathBuf {
 
 #[test]
 fn degraded_keys_section_blocks_materialization() {
-    let tmp = std::env::temp_dir().join("wind_materialize_gate_e2e");
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join("wind_materialize_gate_e2e");
     let root = tmp.join("install");
     let data = root.join("data");
     let user = tmp.join("UserData");

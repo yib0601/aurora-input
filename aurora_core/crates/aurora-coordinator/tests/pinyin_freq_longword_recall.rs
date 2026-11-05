@@ -24,13 +24,13 @@
 //! （`cmp_completion_extra`）解耦：档位只在显示序施加一次、经 `base_pos` 传入本重排，
 //! 拿跨档样本做对照会把两件事的回归绑在一起，任一侧调整都要重写这条。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 词库里的 9 音节长词（`base.dict.yaml`：`冰冻三尺非一日之寒 bing dong san chi fei yi ri zhi han 115`）。
 const WORD: &str = "冰冻三尺非一日之寒";
@@ -160,7 +160,7 @@ fn one_freq_record_does_not_let_extra_one_completion_take_top() {
 }
 
 fn fresh_store(tag: &str) -> Arc<Store> {
-    let root = std::env::temp_dir().join(format!("wind_freq_longword_{tag}"));
+    let root = aurora_utils::testing::scratch(tag).join(format!("wind_freq_longword_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(&root);
     Arc::new(Store::open(root.join("user_data.db")).expect("打开 store"))

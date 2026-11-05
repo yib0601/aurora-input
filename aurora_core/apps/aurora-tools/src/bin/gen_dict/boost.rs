@@ -268,7 +268,8 @@ mod tests {
 
     #[test]
     fn parses_three_adjust_forms() {
-        let p = std::env::temp_dir().join("gen_dict_boost_test.txt");
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("gen_dict_boost_test.txt");
         let mut f = std::fs::File::create(&p).unwrap();
         writeln!(f, "# 注释").unwrap();
         writeln!(f, "abcd\t甲").unwrap();

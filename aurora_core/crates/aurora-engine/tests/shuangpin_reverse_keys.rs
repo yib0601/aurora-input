@@ -183,7 +183,7 @@ fn cache_is_invalidated_when_layout_changes_under_same_schema_id() {
 
 /// 造一个只含双拼方案与内置布局的临时数据目录。
 fn temp_data_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("wind_sp_rev_{tag}"));
+    let dir = aurora_utils::testing::scratch(&format!("wind_sp_rev_{tag}"));
     let _ = std::fs::remove_dir_all(&dir);
     let sp = dir.join("schemas/shuangpin");
     std::fs::create_dir_all(&sp).expect("建临时 schemas 目录");

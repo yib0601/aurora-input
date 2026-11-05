@@ -16,9 +16,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Value, json};
 use aurora_ipc::rpc::Request;
 use aurora_rpc::{CoreRpc, DispatchState, dispatch};
+use serde_json::{Value, json};
 
 struct StubCore;
 
@@ -61,7 +61,8 @@ const POISONED_USER: &str = "[ui.candidate]\nper_page = 9\n\n[ui.font]\nscripts 
 
 #[test]
 fn degradation_is_readable_over_rpc_with_dotted_paths() {
-    let tmp = std::env::temp_dir().join(format!(
+    let td = tempfile::tempdir().unwrap();
+    let tmp = td.path().join(format!(
         "wind_rpc_config_degradation_{}",
         std::process::id()
     ));

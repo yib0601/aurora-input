@@ -4,14 +4,14 @@
 //!
 //! 自造夹具：误读表写在 `schemas/pinyin_misread.yaml`（内置表位置）。
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 use aurora_bridge::handler::{CaretData, KeyEventData, MessageHandler};
 use aurora_config::{Config, HintScope};
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::{EVENT_KEY_DOWN, caret_source};
 use aurora_ui_types::{CandidateItem, UiCommand};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 const DICT: &str = "欣欣\txin xin\t5000\n心心\txin xin\t3000\n莘莘\tshen shen\t100\n\
                     馄饨\thun tun\t800\n馄饨\thun dun\t50\n混沌\thun dun\t900\n";
@@ -31,7 +31,8 @@ impl Drop for Fixture {
 }
 
 fn fixture(tag: &str) -> Fixture {
-    let dir = std::env::temp_dir().join(format!("wind_misread_{tag}_{}", std::process::id()));
+    let dir = aurora_utils::testing::scratch(tag)
+        .join(format!("wind_misread_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let schemas = dir.join("schemas");
     std::fs::create_dir_all(schemas.join("mr")).unwrap();

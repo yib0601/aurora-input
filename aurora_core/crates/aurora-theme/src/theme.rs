@@ -273,8 +273,10 @@ mod tests {
     fn load_typed_dirs_rejects_missing_base() {
         // 派生主题引用不存在的 base：load_merged_dirs_at 的 find_theme_dir 应报错，
         // 供导入链路（web_theme_import_text）据此判定依赖校验失败并回滚。
-        let dir =
-            std::env::temp_dir().join(format!("wind_theme_missing_base_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_theme_missing_base_{}", std::process::id()));
         let theme_dir = dir.join("derived");
         std::fs::create_dir_all(&theme_dir).unwrap();
         std::fs::write(
@@ -428,7 +430,8 @@ mod tests {
     ///
     /// `tag` 只为让并发跑的用例各用各的目录。
     fn load_chain(tag: &str, base_toml: &str, derived_toml: &str) -> crate::schema::Theme {
-        let dir = std::env::temp_dir().join(format!("wind_theme_{}_{}", tag, std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("wind_theme_{tag}"));
         // 断言失败时下面的 remove 不会执行 —— 开头先清一次，免得上一轮的残留影响这一轮。
         let _ = std::fs::remove_dir_all(&dir);
         let base_dir = dir.join("themebase");
@@ -606,8 +609,10 @@ mod tests {
     /// 挂得住调用点、normalize 与类型化整条链。
     #[test]
     fn inherited_image_yields_through_the_real_load_chain() {
-        let dir =
-            std::env::temp_dir().join(format!("wind_theme_arrow_chain_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp
+            .path()
+            .join(format!("wind_theme_arrow_chain_{}", std::process::id()));
         let base_dir = dir.join("themebase");
         let derived_dir = dir.join("derived");
         std::fs::create_dir_all(&base_dir).unwrap();

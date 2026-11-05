@@ -4252,7 +4252,10 @@ mod compat_reload_tests {
 
     #[test]
     fn reload_compat_and_refresh_applies_new_rule_to_the_focused_process_immediately() {
-        let user = std::env::temp_dir().join(format!("wind_compat_reload_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_compat_reload_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         let (c, _rx) = Coordinator::new_headless_with_ui_at(Config::default(), None, Some(&user));

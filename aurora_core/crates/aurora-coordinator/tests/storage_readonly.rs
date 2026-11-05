@@ -5,7 +5,8 @@ use aurora_coordinator::Coordinator;
 #[test]
 fn newer_meta_version_puts_coordinator_in_readonly_mode() {
     // ⚠️ 目录名带 pid：多会话并行跑测试时固定名会互删夹具。
-    let root = std::env::temp_dir().join(format!("wind_ro-{}", std::process::id()));
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join(format!("wind_ro-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("data/schemas")).unwrap();
     std::fs::create_dir_all(root.join("userdata")).unwrap();

@@ -11,8 +11,8 @@
 
 use std::collections::BTreeMap;
 
-use super::format::Pattern;
 use super::Entry;
+use super::format::Pattern;
 
 /// 文件头 `[meta]`。
 #[derive(Debug, Clone, Default)]

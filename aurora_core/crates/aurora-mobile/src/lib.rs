@@ -1436,8 +1436,7 @@ mod user_words_tests {
     /// 直接拼 [`MobileCore`]：`MobileCore::new` 要挂环境变量与出厂目录，测这几个口用不着。
     /// ⚠️ 目录名带 pid：多会话并行跑测试时固定名会互删夹具。
     fn core(tag: &str, meta: Option<&str>) -> (MobileCore, std::path::PathBuf) {
-        let user =
-            std::env::temp_dir().join(format!("wind_mobile_uw_{tag}_{}", std::process::id()));
+        let user = aurora_utils::testing::scratch(&format!("wind_mobile_uw_{tag}"));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         if let Some(m) = meta {
@@ -1586,8 +1585,7 @@ mod dict_transfer_tests {
 
     /// 带真词库的 [`MobileCore`]，当前方案五笔。⚠️ 目录名带 pid：多会话并行跑测试时固定名会互删夹具。
     fn core(tag: &str) -> (MobileCore, std::path::PathBuf) {
-        let user =
-            std::env::temp_dir().join(format!("wind_mobile_dt_{tag}_{}", std::process::id()));
+        let user = aurora_utils::testing::scratch(&format!("wind_mobile_dt_{tag}"));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         let mut cfg = Config::default();
@@ -1722,7 +1720,10 @@ mod dict_transfer_tests {
     /// 只读模式：导入带着原因拒绝（不碰数据）；导出读不到存储也报错而不是给空文件。
     #[test]
     fn readonly_rejects_import_with_reason() {
-        let user = std::env::temp_dir().join(format!("wind_mobile_dt_ro_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_mobile_dt_ro_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         std::fs::write(
@@ -1778,7 +1779,10 @@ mod schema_dicts_tests {
             eprintln!("!!! 跳过：build_dev 词库不存在");
             return;
         }
-        let root = std::env::temp_dir().join(format!("wind_mobile_sd_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp
+            .path()
+            .join(format!("wind_mobile_sd_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let idiom = |m: &MobileCore| {
@@ -1830,7 +1834,10 @@ mod schema_dicts_tests {
             eprintln!("!!! 跳过：build_dev 词库不存在");
             return;
         }
-        let root = std::env::temp_dir().join(format!("wind_mobile_ds_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp
+            .path()
+            .join(format!("wind_mobile_ds_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let m = core_at(&root);
@@ -1855,7 +1862,10 @@ mod schema_dicts_tests {
             return;
         }
         use aurora_coordinator::web_host::WebDataHost;
-        let root = std::env::temp_dir().join(format!("wind_mobile_ah_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp
+            .path()
+            .join(format!("wind_mobile_ah_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let m = core_at(&root);
@@ -1874,7 +1884,10 @@ mod schema_dicts_tests {
     /// 只读模式：带着原因拒绝，且先于方案校验（不论方案在不在）。
     #[test]
     fn readonly_rejects_with_reason() {
-        let user = std::env::temp_dir().join(format!("wind_mobile_sd_ro_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_mobile_sd_ro_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         std::fs::write(
@@ -1955,7 +1968,10 @@ mod candidate_menu_tests {
             eprintln!("跳过：词库不存在");
             return;
         }
-        let user = std::env::temp_dir().join(format!("wind_mobile_cm_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_mobile_cm_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         let mut cfg = Config::default();
@@ -2014,7 +2030,10 @@ mod candidate_tooltip_tests {
             eprintln!("跳过：词库不存在");
             return;
         }
-        let user = std::env::temp_dir().join(format!("wind_mobile_tip_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_mobile_tip_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         let mut cfg = Config::default();
@@ -2069,7 +2088,10 @@ mod candidate_tooltip_tests {
             eprintln!("跳过：词库不存在");
             return;
         }
-        let user = std::env::temp_dir().join(format!("wind_mobile_cmt_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_mobile_cmt_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         let mut cfg = Config::default();
@@ -2107,7 +2129,10 @@ mod candidate_tooltip_tests {
             eprintln!("跳过：词库不存在");
             return;
         }
-        let user = std::env::temp_dir().join(format!("wind_mobile_grow_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_mobile_grow_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         let mut cfg = Config::default();
@@ -2149,7 +2174,10 @@ mod candidate_tooltip_tests {
             eprintln!("跳过：拼音方案不存在");
             return;
         }
-        let user = std::env::temp_dir().join(format!("wind_mobile_warm_{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp
+            .path()
+            .join(format!("wind_mobile_warm_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&user);
         std::fs::create_dir_all(&user).unwrap();
         let mut cfg = Config::default();
@@ -2186,7 +2214,7 @@ mod pinyin_hint_tests {
     /// 自造夹具：`pinguo` 精确命中「拼过」，in/ing 模糊命中「苹果」「平过」。
     /// ⚠️ 目录名带 pid：多会话并行跑测试时固定名会互删夹具。
     fn core(tag: &str, hint: bool, scope: HintScope) -> (MobileCore, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("wind_mobile_fh_{tag}_{}", std::process::id()));
+        let dir = aurora_utils::testing::scratch(&format!("wind_mobile_fh_{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         let schemas = dir.join("data/schemas");
         std::fs::create_dir_all(schemas.join("fh")).unwrap();

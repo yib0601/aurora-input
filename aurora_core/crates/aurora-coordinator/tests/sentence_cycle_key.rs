@@ -6,13 +6,13 @@
 //!
 //! 依赖 `build_dev/data`（真实拼音词库）；缺失时跳过。
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use aurora_bridge::handler::{KeyEventData, MessageHandler};
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_ipc::protocol::EVENT_KEY_DOWN;
 use aurora_store::Store;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const VK_TAB: u32 = 0x09;
 const VK_DOWN: u32 = 0x28;
@@ -47,7 +47,7 @@ fn coord(count: u8, max: u8, cycle_key: &str, tag: &str) -> Arc<Coordinator> {
     cfg.schema.pinyin.sentence_max_count = max;
     cfg.schema.pinyin.sentence_cycle_key = cycle_key.into();
     // 文件名带进程号：并发会话同时跑本文件时不互相覆盖（审查查出）。
-    let path = std::env::temp_dir().join(format!(
+    let path = aurora_utils::testing::scratch(tag).join(format!(
         "wind_sentence_cycle_{tag}_{}.redb",
         std::process::id()
     ));

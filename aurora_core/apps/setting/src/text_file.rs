@@ -25,31 +25,33 @@ pub(crate) fn read_utf8(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    fn write(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("ws_text_file_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join(name);
+    /// 返回 `TempDir` 一并交给调用方持有：它一旦 drop 就删掉整个临时目录。
+    fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join(name);
         std::fs::write(&p, bytes).unwrap();
-        p
+        (tmp, p)
     }
 
     #[test]
     fn utf8_with_or_without_bom_reads_verbatim() {
-        let p = write("ok.txt", "中文\n".as_bytes());
+        let (_t1, p) = write("ok.txt", "中文\n".as_bytes());
         assert_eq!(read_utf8(&p).unwrap(), "中文\n");
-        let p = write("bom.txt", "\u{FEFF}中文".as_bytes());
+        let (_t2, p) = write("bom.txt", "\u{FEFF}中文".as_bytes());
         assert_eq!(read_utf8(&p).unwrap(), "\u{FEFF}中文");
     }
 
     #[test]
     fn gbk_and_utf16_name_the_encoding() {
         // 「中文」的 GBK 字节
-        let gbk = read_utf8(&write("gbk.txt", b"\xd6\xd0\xce\xc4")).unwrap_err();
+        let (_t3, p) = write("gbk.txt", b"\xd6\xd0\xce\xc4");
+        let gbk = read_utf8(&p).unwrap_err();
         assert!(
             gbk.contains("不是 UTF-8") && gbk.contains("另存为"),
             "{gbk}"
         );
-        let u16 = read_utf8(&write("u16.txt", b"\xff\xfe-N\x87e")).unwrap_err();
+        let (_t4, p) = write("u16.txt", b"\xff\xfe-N\x87e");
+        let u16 = read_utf8(&p).unwrap_err();
         assert!(u16.contains("UTF-16"), "{u16}");
     }
 

@@ -465,7 +465,8 @@ mod tests {
     /// `entries_end > data.len()` 兜底）。
     #[test]
     fn load_rejects_corrupt_count() {
-        let dir = std::env::temp_dir().join(format!("wind-s2t-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("wind-s2t-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("bad.octrie");
 
@@ -546,7 +547,10 @@ mod tests {
     /// 夹具全部自造（不依赖 build_dev 的真实 opencc 数据），故本用例永远真的在跑。
     #[test]
     fn resolved_chain_falls_back_per_file_not_per_directory() {
-        let base = std::env::temp_dir().join(format!("wind-s2t-layers-{}", std::process::id()));
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp
+            .path()
+            .join(format!("wind-s2t-layers-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let data = base.join("data/opencc");
         let custom = base.join("custom/opencc");
