@@ -251,10 +251,15 @@ log_level = "debug"   # 或 "trace"
 
 | 能做什么 | 命令 |
 |---|---|
-| host 单测 / 检查（全 workspace，含 coordinator） | `cargo test` / `cargo check`（在 `aurora_core/` 下） |
+| host 单测 / 检查（**按 crate 范围**：改哪个测哪个） | `cargo test -p <crate>`；编译门用 `cargo check --workspace --all-targets`（在 `aurora_core/` 下） |
 | 候选逻辑速验 | `./scripts/dev.sh r`（repl） |
 | 设置程序交叉检查与 wine 测试 | `./scripts/dev.sh sk` / `st` / `sg`（见下节） |
 | 与设置端产物对账 | `cargo test -p aurora-rpc --test wind_setting_assets`（见下） |
+
+⚠️ **本机不要跑全量 `cargo test --workspace`**：113 个 test binary 并行编译 + 运行会把 load 打到
+190 上下（实测整机卡死、用户正常使用被打断）。全量测试是 CI 的事；本机验证只跑改动涉及的 crate
+（`cargo test -p <crate>`），需要跨 crate 的编译门时用 `cargo check --workspace --all-targets`
+（分钟级以内，不跑测试进程）。
 
 | 做不了 / 未配置 | 原因 |
 |---|---|
@@ -352,8 +357,9 @@ clang / cargo-xwin 交叉编出的 `wind_tsf.dll` 在带安全加固的宿主里
 `AURORA_BUILD_LOCAL=1` 可强行本机出二进制，那是用来看链接过不过的，**不能部署也不能发版**。
 
 - 编译检查：`dev.sh k` / `l`（cargo-xwin，目标 `x86_64-pc-windows-msvc`；本机缺 clang-19 时跑不起来）。
-- host 单测：`cargo test`（Linux 原生跑，`windows` crate 是 `cfg(windows)` 依赖不参与编译）；
-  `dev.sh t` 即全 workspace。注意 `build_dev/data` 的假绿判据（见下方「注意」）。
+- host 单测：`cargo test -p <crate>`（Linux 原生跑，`windows` crate 是 `cfg(windows)` 依赖不参与编译）。
+  ⚠️ `dev.sh t` / `cargo test --workspace` 是**全量**（113 个 test binary 并行），本机跑会把 load
+  打到 190 上下，只给 CI 用；注意 `build_dev/data` 的假绿判据（见下方「注意」）。
 - 候选逻辑速验：`dev.sh r`（repl）。
 - 部署 / 远程诊断：`dev.sh pd1`、`rproc`、`shot` 等（推的是编译机产出的产物）。
 
