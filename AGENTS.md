@@ -255,11 +255,15 @@ log_level = "debug"   # 或 "trace"
 | 候选逻辑速验 | `./scripts/dev.sh r`（repl） |
 | 设置程序交叉检查与 wine 测试 | `./scripts/dev.sh sk` / `st` / `sg`（见下节） |
 | 与设置端产物对账 | `cargo test -p aurora-rpc --test wind_setting_assets`（见下） |
+| CI 门禁（fmt --check + clippy -D warnings + 全 workspace 测试） | **不在这台机器跑**：GitHub Actions，见 `.github/workflows/ci.yml` |
 
-⚠️ **本机不要跑全量 `cargo test --workspace`**：113 个 test binary 并行编译 + 运行会把 load 打到
-190 上下（实测整机卡死、用户正常使用被打断）。全量测试是 CI 的事；本机验证只跑改动涉及的 crate
-（`cargo test -p <crate>`），需要跨 crate 的编译门时用 `cargo check --workspace --all-targets`
-（分钟级以内，不跑测试进程）。
+⚠️ **本机不跑 CI**：`dev.sh` / `dev.ps1` / `scripts/mac/dev.sh` 里原有的 `ci` 子命令与全量
+`t`（test）都已删除——fmt --check + clippy -D warnings + 全 workspace 测试是 GitHub Actions 的
+职责（`.github/workflows/ci.yml` 直接跑 cargo，不再回调本地脚本）。
+
+本机验证按改动范围：`cargo test -p <crate>`；需要跨 crate 的编译门时用
+`cargo check --workspace --all-targets`（不跑测试进程）。全量 `cargo test --workspace` 在本机会
+并行编译 + 运行 113 个 test binary，实测把 load 打到 190 上下、整机卡死，别在这里跑。
 
 | 做不了 / 未配置 | 原因 |
 |---|---|
@@ -273,12 +277,13 @@ log_level = "debug"   # 或 "trace"
 ### Windows 本机（MSVC，`scripts\dev.ps1` / `dev.bat`）
 
 - host 即 Windows 目标，无交叉编译限制：`cargo check` / `cargo test` 可直接跑全 workspace
-  （含 `aurora-coordinator`）。脚本快捷键：`k`=check、`l`=clippy、`t`=test、`f`=fmt、
-  `ci`=fmt+clippy+test。
+  （含 `aurora-coordinator`）。脚本快捷键：`k`=check、`l`=clippy、`f`=fmt、`fmt-check`、
+  `proto`、`wire`（**没有** `t` / `ci`：全量测试与 fmt/clippy 门禁交给 GitHub Actions；
+  本机测某个 crate 用 `.\scripts\rc.ps1 test -p <crate>`）。
 - 全构建：`1`（release → `build/`）/ `d1`（dev → `build_dev/`）；单模块 `m1..m4`（tsf/核心/
   setting/portable，前缀 `d` 为 dev）。系统安装：`p1`/`pd1`；安装包：`8`/`d8` → `dist\*-Setup.exe`。
 - 部署目标默认 `C:\Program Files\WindInput[Dev]`，可在 `scripts\deploy.local.ps1` 覆盖。
-- **照常用 `dev.ps1`**：`dm1` / `d1` / `t` / `ci` 等构建检查类命令自动转发，产物落回 `build[_dev]\`。
+- **照常用 `dev.ps1`**：`dm1` / `d1` / `k` / `l` 等构建检查类命令自动转发，产物落回 `build[_dev]\`。
 - **细粒度 cargo**：`.\scripts\rc.ps1 test -p aurora-coordinator`（直接敲 `cargo` 是在本机跑）。
 - **任意命令**：`.\scripts\remote-build.ps1 -Raw "<命令>"`，在编译机的 `aurora_input\` 下执行。
 - **临时回落本机**：`$env:AURORA_NO_REMOTE = "1"`（编译机关机 / 不在内网 / 要做 A-B 对照）。
@@ -358,8 +363,8 @@ clang / cargo-xwin 交叉编出的 `wind_tsf.dll` 在带安全加固的宿主里
 
 - 编译检查：`dev.sh k` / `l`（cargo-xwin，目标 `x86_64-pc-windows-msvc`；本机缺 clang-19 时跑不起来）。
 - host 单测：`cargo test -p <crate>`（Linux 原生跑，`windows` crate 是 `cfg(windows)` 依赖不参与编译）。
-  ⚠️ `dev.sh t` / `cargo test --workspace` 是**全量**（113 个 test binary 并行），本机跑会把 load
-  打到 190 上下，只给 CI 用；注意 `build_dev/data` 的假绿判据（见下方「注意」）。
+  `dev.sh` 不再提供 `t` / `ci` 子命令（本机不跑 CI）；改协议/线格式时用 `dev.sh proto` / `dev.sh wire`。
+  注意 `build_dev/data` 的假绿判据（见下方「注意」）。
 - 候选逻辑速验：`dev.sh r`（repl）。
 - 部署 / 远程诊断：`dev.sh pd1`、`rproc`、`shot` 等（推的是编译机产出的产物）。
 
@@ -406,9 +411,9 @@ cargo test -p aurora-rpc --test wind_setting_assets
 
 ### macOS 本机（`scripts/mac/dev.sh`）
 
-- host 即目标：`cargo check/test --workspace` 全 workspace 可直接跑（含 `aurora-coordinator`
-  ——`windows` crate 是 `cfg(windows)` 依赖，非 Windows 上不参与编译）。脚本快捷键与
-  `dev.ps1` 对齐：`k`/`l`/`t`/`f`/`fmt-check`/`ci`/`clean`/`gd`/`r`。
+- host 即目标：`cargo check -p <crate>` 可直接跑（含 `aurora-coordinator`——`windows` crate 是
+  `cfg(windows)` 依赖，非 Windows 上不参与编译）；测试按 crate 用 `cargo test -p <crate>`。
+  脚本快捷键与 `dev.ps1` 对齐：`k`/`l`/`f`/`fmt-check`/`clean`/`gd`/`r`（无 `t`/`ci`，理由同上）。
 - 模块映射：Win 的 `m1`(TSF DLL) ↔ mac 的 `m1`(`WindInput.app`，Swift/IMKit)；
   Win 的 `m2`(核心 exe) ↔ mac 的 `m2`(Rust 服务)。全构建 `1`/`d1`，系统安装 `p1`/`pd1`，
   安装包 `8`/`d8` → `.pkg`。

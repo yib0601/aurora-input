@@ -22,7 +22,7 @@
 - [ ] 已在 Windows 10/11 上测试
 - [ ] 已在 macOS 上测试（如涉及）
 - [ ] 已测试相关输入方案（五笔/拼音/混输）
-- [ ] `.\scripts\dev.ps1 ci` 通过（fmt 检查 + clippy + 测试）
+- [ ] 改动涉及的 crate 本地测试通过（`cargo test -p <crate>`）；完整门禁由 CI 执行
 
 ## 检查清单
 

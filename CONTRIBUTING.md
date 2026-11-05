@@ -53,7 +53,7 @@ macOS 额外需要：
 | 平台 | 命令 | 说明 |
 |------|------|------|
 | Windows | `.\scripts\dev.ps1` | 交互式菜单；`.\scripts\dev.ps1 1` 为 Release 全构建 |
-| Windows | `.\scripts\dev.ps1 ci` | fmt 检查 + clippy + 全部测试（提 PR 前请运行） |
+| Windows | `.\scripts\dev.ps1 l` | clippy 检查（本地不跑完整门禁，见下方「CI」） |
 | macOS | `scripts/mac/dev.sh` | macOS 构建/调试菜单 |
 | Linux | `scripts/dev.sh` | 交叉编译 Windows 产物（cargo-xwin） |
 
@@ -113,7 +113,9 @@ macOS 额外需要：
 ### Pull Request 流程
 
 1. Fork 本仓库并从 `main` 分支创建您的分支
-2. 完成修改后运行 `.\scripts\dev.ps1 ci`（Windows）确保 fmt 检查、clippy 与测试通过
+2. 完成修改后本地按改动范围验证：`cargo test -p <crate>`（必要时 `dev.sh l` / `dev.ps1 l`）。
+   完整门禁（fmt --check + clippy -D warnings + 全 workspace 测试）由 GitHub Actions
+   在 PR 上执行，本地不再重复跑
 3. 修改了某 crate 的对外接口/导出常量/文件结构时，同步更新对应的 `AGENTS.md`
 4. 按 PR 模板填写变更说明、测试情况与检查清单
 5. 提交 PR 并等待 CLA 检查和代码审查

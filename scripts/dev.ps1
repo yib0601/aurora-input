@@ -54,7 +54,10 @@
 #   verify-sign  验签 dist\ 下的产物 (发版门禁; 未配置签名时【也会失败】, 这是刻意的)
 #                签名会话有时限(2 小时), 过期时只警告不中断 —— 故发版前跑一次 verify-sign。
 #                模板 scripts\sign.local.ps1.example; 原理与取舍见 docs\design\code-signing.md。
-#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  clean
+#   k=check  l=clippy  f=fmt  fmt-check  proto  wire  clean
+#     ⚠️ 本机不跑 CI: 门禁 (fmt --check + clippy -D warnings + 全 workspace 测试) 只在
+#        GitHub Actions 上跑, 见 .github\workflows\ci.yml。本机验证按 crate 范围:
+#        cargo test -p <crate> (或 rc.ps1 test -p <crate>)。
 #   gd=gen-data  r=repl
 #     ↑ gd 支持 $env:AURORA_SLIM_DATA=1: 剔除「出厂默认关」的那几组数据 (瘦身包, 包内约 -8.25 MiB)。
 #       默认不设 = 行为完全不变; 清单、收益与后果见 Assemble-Data 上方的 $SlimDataPaths。
@@ -369,25 +372,22 @@ function Build-Portable ([string]$profile = "release", [string]$outdir = $null) 
 
 # ---------- 代码质量 ----------
 function Do-Check  { Say "`n正在运行 cargo check (全工作区)...";  Push-Location $ProjectRoot; try { cargo check --workspace }  finally { Pop-Location } }
-# -Deny 把警告升为错误(CI 走这条)。本地 `dev.ps1 l` 不带, 迭代中途的 warning 不该中断。
 # --all-targets 不可省: 不带它连测试代码都不检查, 而测试里同样会长出警告。
 # --keep-going 同样不可省, 且必须与 scripts/dev.sh 的 do_clippy 保持一致:
 # cargo 默认在首个 crate 失败后就不再调度新任务, 一轮只报得出一个错误。实测同一份代码
 # 不带它报 1 条, 带上报 22 条(分五层, 层与层之间是 crate 依赖关系, 前一层不修后一层
 # 根本不被检查)。
 # ⚠ 2026-09-11: 本函数曾漏掉 --keep-going 而 dev.sh 有 —— 两侧对同一件事的实现漂移,
-# 使得在 Windows 上跑本地 CI 只看得到第一个错, 修完推上去 CI 又报下一个, 退化成
+# 使得在同一份代码上只看得到第一个错, 修完推上去 CI 又报下一个, 退化成
 # "推一次修一个"。改这里时请同步查 dev.sh。
+# 门禁口径（-D warnings）只在 GitHub Actions 上跑（.github\workflows\ci.yml）:
+# 本机 `dev.ps1 l` 不把警告升成错误, 迭代中途的 warning 不该直接中断。
 function Do-Clippy {
-    param([switch]$Deny)
     Say "`n正在运行 cargo clippy (全工作区含测试)..."
     Push-Location $ProjectRoot
-    try {
-        if ($Deny) { cargo clippy --keep-going --workspace --all-targets -- -D warnings }
-        else { cargo clippy --keep-going --workspace --all-targets }
-    } finally { Pop-Location }
+    try { cargo clippy --keep-going --workspace --all-targets }
+    finally { Pop-Location }
 }
-function Do-Test   { Say "`n正在运行 cargo test (全工作区)...";   Push-Location $ProjectRoot; try { cargo test --workspace }   finally { Pop-Location } }
 function Do-Fmt    { Say "`n正在运行 cargo fmt...";                Push-Location $ProjectRoot; try { cargo fmt }                finally { Pop-Location } }
 function Do-FmtCheck { Say "`n正在运行 cargo fmt --check...";      Push-Location $ProjectRoot; try { cargo fmt --all -- --check } finally { Pop-Location } }
 function Do-Clean  { Say "`n正在运行 cargo clean...";              Push-Location $ProjectRoot; try { cargo clean }              finally { Pop-Location } }
@@ -410,23 +410,11 @@ function Do-ProtoCheck {
 # 日志里一个字都没有）。TSF 的 SendKeyEvent 直接 memcpy 结构体上送，
 # `static_assert(sizeof(...))` 连「两个 uint16_t 互换」都拦不住。
 #
-# 与 CI、dev.sh 的 do_wire_check 同一条命令。
+# 与 GitHub Actions 的 ci.yml、dev.sh 的 do_wire_check 同一条命令。
 function Do-WireCheck {
     Say "`n[wire] 线格式真值表..."
     Push-Location $ProjectRoot
     try { cargo test -q -p aurora-ipc --test wire_vectors } finally { Pop-Location }
-}
-
-function Do-Ci {
-    Push-Location $ProjectRoot
-    try {
-        Do-FmtCheck; if ($LASTEXITCODE -ne 0) { ErrMsg "fmt 检查失败!"; return $false }
-        Do-Clippy -Deny; if ($LASTEXITCODE -ne 0) { ErrMsg "clippy 失败!"; return $false }
-        Do-Test;     if ($LASTEXITCODE -ne 0) { ErrMsg "test 失败!";   return $false }
-    } finally { Pop-Location }
-    Do-ProtoCheck; if ($LASTEXITCODE -ne 0) { ErrMsg "协议常量对账失败!"; return $false }
-    Do-WireCheck;  if ($LASTEXITCODE -ne 0) { ErrMsg "线格式真值表失败!"; return $false }
-    Say "`nCI 全部通过 ✓"; return $true
 }
 
 # ---------- 词库下载 ----------
@@ -2400,7 +2388,8 @@ function Show-Menu {
     Write-Host "      不写 sign 则一次配额也不消耗; 已签过的文件会跳过, 不重复扣次数" -ForegroundColor DarkGray
     Write-Host "      配置模板 scripts\sign.local.ps1.example; 取舍见 docs\design\code-signing.md" -ForegroundColor DarkGray
     Write-Host "`n  代码质量:" -ForegroundColor Yellow
-    Write-Host "    k=check  l=clippy  t=test  f=fmt  ci=fmt+clippy+test"
+    Write-Host "    k=check  l=clippy  f=fmt  fmt-check  proto  wire"
+    Write-Host "      CI 门禁不在这台机器跑 (GitHub Actions); 本机按 crate 测: rc.ps1 test -p <crate>" -ForegroundColor DarkGray
     Write-Host "`n  数据 / 实测:" -ForegroundColor Yellow
     Write-Host "    gd=gen-data  r=repl(本机)"
     Write-Host "`n  构建环境:" -ForegroundColor Yellow
@@ -2423,7 +2412,7 @@ function Show-Menu {
 # 走远程的是「吃 CPU 的」命令。刻意排除三类:
 #   · 部署/卸载 (p* / u* / pb* / ub*) —— 要注册 COM、写注册表、装字体, 本机才是目标机;
 #   · 会改源码的 f/fmt —— cargo fmt 改的是编译机上的源码, 下次 /MIR 同步即被本机覆盖,
-#     白改且无声。(ci 走的是 Do-FmtCheck 只读, 故可以远程。)
+#     白改且无声。(fmt-check 走的是只读检查, 故可以远程。)
 #   · 本机状态类 (av* / r / wtinit / clean) —— Defender 排除项、交互
 #     repl, 以及「清哪台的 target」, 都只在本机有意义。
 $RemoteCommands = @(
@@ -2433,7 +2422,7 @@ $RemoteCommands = @(
     # (见 Dispatch 的「打包留本机」段)。⛔ 别把 8s/9s 加回来 —— 它们【不编译任何东西】,
     # 转发过去只是在编译机上打个包然后留在那儿, 本机 dist\ 一无所获。
     "8", "d8", "9", "d9",
-    "k", "check", "l", "clippy", "t", "test", "ci", "fmt-check",
+    "k", "check", "l", "clippy", "fmt-check",
     "gd", "gen-data"
 )
 function Test-RemoteCommand ([string]$cmd) {
@@ -2487,7 +2476,7 @@ function Dispatch ([string]$cmd, [string]$arg) {
         # 那一次(都是"产物齐全、尚未打包"), 后续 8s/9s 打包时按指纹识别为已签, 不重复
         # 消耗配额。
         #
-        # 只对【产 PE】的命令补签: k/t/ci/fmt-check 不产任何东西, gd 只产 data\。
+        # 只对【产 PE】的命令补签: k/fmt-check 不产任何东西, gd 只产 data\。
         # 判据用 $fwd 而不是 $cmd —— 8/9 已被改写成全构建转发, 按原命令判会漏掉补签,
         # 于是本机打包时封进包的还是未签名的 PE (且没有任何提示)。
         if ($rc -eq 0 -and $script:SignRequested -and $fwd -match '^(d?(1|m[1-4])|release|dev)$') {
@@ -2554,10 +2543,10 @@ function Dispatch ([string]$cmd, [string]$arg) {
         "unstage" { if (Do-Unstage $arg)  { 0 } else { 1 }; break }
         { $_ -in @("k", "check") }   { Do-Check;  $LASTEXITCODE; break }
         { $_ -in @("l", "clippy") }  { Do-Clippy; $LASTEXITCODE; break }
-        { $_ -in @("t", "test") }    { Do-Test;   $LASTEXITCODE; break }
         { $_ -in @("f", "fmt") }     { Do-Fmt;    $LASTEXITCODE; break }
         "fmt-check"                  { Do-FmtCheck; $LASTEXITCODE; break }
-        "ci"                         { if (Do-Ci) { 0 } else { 1 }; break }
+        "proto"                      { Do-ProtoCheck; $LASTEXITCODE; break }
+        "wire"                       { Do-WireCheck;  $LASTEXITCODE; break }
         "clean"                      { Do-Clean;  $LASTEXITCODE; break }
         { $_ -in @("gd", "gen-data") }  { if (Do-GenData) { 0 } else { 1 }; break }
         { $_ -in @("r", "repl") }       { Do-Repl $arg; 0; break }

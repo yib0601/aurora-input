@@ -37,13 +37,16 @@
 #   p1 / pd1     push 全部 build[_dev]/ → Windows 安装目录 (release / dev)
 #   pm1/pm2      push 单模块 (tsf/核心, release)
 #   pdm1/pdm2    push 单模块 (dev)
-#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt+clippy+test)  clean
+#   k=check  l=clippy  f=fmt  fmt-check  proto  wire  clean
+#     ⚠️ 本机不跑 CI：CI 门禁（fmt --check + clippy -D warnings + 全 workspace 测试）只在
+#        GitHub Actions 上跑，见 .github/workflows/ci.yml。本机验证按 crate 范围：
+#        cargo test -p <crate>；proto/wire 是改协议/线格式时的对账入口。
 #   sk=setting-check  st=setting-test  sg=setting-regen   aurora_core/apps/setting
 #     (交叉到 Windows 目标; st/sg 经 wine 执行。sg = 重生成检入的 capability 快照与 mockdata)
 #     ↑ 只改了 core 配置注册表的话, 先跑 cargo test -p aurora-rpc --test wind_setting_assets
 #       (在 core 这边对账设置程序三份检入产物, 不必编译它)
-#     ↑ 这几个【在本机跑】: 不产出交付物, cargo-xwin 在 Linux 上仅存的正当用途就是它们;
-#       t/test 更是原生 cargo test。想在本机直接出二进制看看链接过不过: AURORA_BUILD_LOCAL=1
+#     ↑ 这几个【在本机跑】: 不产出交付物, cargo-xwin 在 Linux 上仅存的正当用途就是它们。
+#       想在本机直接出二进制看看链接过不过: AURORA_BUILD_LOCAL=1
 #       (⚠️ 产物不能部署也不能发版, 见 lib/remote-build.sh)
 #   gd=gen-data  r=repl  dl=pull-data  pc=pull-config  pl=pull-log(pla=全部)
 #     ↑ gd 支持 AURORA_SLIM_DATA=1：剔除「出厂默认关」的那几组数据（瘦身包，包内约 −8.25 MiB）。
@@ -94,7 +97,7 @@ INSTALLER_DIR="${AURORA_INSTALLER_DIR:-$(cd "$PRODUCT_ROOT/.." && pwd)/wind-inst
 # 测试用临时目录。本机 /tmp 是 tmpfs，测试漏出来的 wdat/redb 直接吃内存；历史上攒到
 # 20G 就让 /tmp 报 ENOSPC。主修是测试代码统一用 tempfile::TempDir（RAII），这里只是
 # 兜底：跑测试时把 TMPDIR 指到磁盘上的 ~/.cache，漏网的那份也不进内存。
-# 覆盖：AURORA_TEST_TMPDIR=/path/to/dir ./scripts/dev.sh t
+# 覆盖：AURORA_TEST_TMPDIR=/path/to/dir ./scripts/dev.sh wire
 AURORA_TEST_TMPDIR="${AURORA_TEST_TMPDIR:-$HOME/.cache/aurora-test}"
 disk_tmp() {
     mkdir -p "$AURORA_TEST_TMPDIR" || return 0
@@ -305,26 +308,16 @@ do_check() {
 }
 
 do_clippy() {
-    # 传 "deny" 时把警告升为错误(CI 走这条)。本地 `dev.sh l` 不传, 迭代中途的 warning
-    # 不该直接中断; 门禁只在 CI 上生效。
+    # 门禁口径（-D warnings、--keep-going）只在 GitHub Actions 上跑，见
+    # .github/workflows/ci.yml。本机 `dev.sh l` 不把警告升成错误：迭代中途的 warning
+    # 不该直接中断。
     # --all-targets 不可省: 不带它连测试代码都不检查, 而测试里同样会长出警告。
     # --keep-going 同样不可省: cargo 默认在首个 crate 失败后就不再调度新任务, 一轮只
     # 报得出一个错误。实测同一份代码, 不带它报 1 条, 带上报 22 条(分五层, 层与层之间
     # 是 crate 依赖关系, 前一层不修后一层根本不被检查)。缺了它 CI 一红就是"推一次修
     # 一个", 8 月中连红 8 次即此。加上它仍需多轮, 但一轮能推进一整层。
-    local deny_args=()
-    [ "${1:-}" = "deny" ] && deny_args=(-- -D warnings)
     say "\n正在运行 cargo clippy ($TARGET, 全工作区含测试)..."
-    cd "$PROJECT_ROOT" && cargo_xwin clippy --keep-going --target "$TARGET" --workspace --all-targets "${deny_args[@]}"
-}
-
-do_test() {
-    disk_tmp
-    # --no-fail-fast: 默认首个失败的 test binary 就停, 排在它后面的整个不跑。本机
-    # Windows 有 113 个 test binary, CI 的 Linux job 曾在第 84 个(aurora-ui)停下 ——
-    # 中间 29 个在 CI 上从未执行过。代价是失败时更慢, 换来一次看全所有失败点。
-    say "\n正在运行 cargo test (本机, 全工作区)..."
-    cd "$PROJECT_ROOT" && cargo test --workspace --no-fail-fast
+    cd "$PROJECT_ROOT" && cargo_xwin clippy --keep-going --target "$TARGET" --workspace --all-targets
 }
 
 # ---------- 设置程序: 本机检查 / 测试 ----------
@@ -399,20 +392,10 @@ do_clean() {
     cd "$PROJECT_ROOT" && cargo clean
 }
 
-do_ci() {
-    cd "$PROJECT_ROOT" || return 1
-    do_fmt_check || { err "fmt 检查失败!"; return 1; }
-    do_clippy deny || { err "clippy 失败!"; return 1; }
-    do_test      || { err "test 失败!"; return 1; }
-    do_proto_check || { err "协议常量对账失败!"; return 1; }
-    do_wire_check  || { err "线格式真值表失败!"; return 1; }
-    say "\nCI 全部通过 ✓"
-}
-
 # 协议常量对账：Rust 真源 ↔ C++（BinaryProtocol.h / ExtProtocol.h）↔ Swift。
 #
 # 拦住「改了 protocol.rs 忘了镜像」。那类漂移的症状是**某类消息静默丢失**：两侧值都合法、
-# 都能编译、都在跑，零报错。与 CI 的「协议常量对账」步同一条命令。
+# 都能编译、都在跑，零报错。与 .github/workflows/ci.yml 的「协议常量对账」步同一条命令。
 do_proto_check() {
     say "\n[proto] 协议常量对账..."
     ( cd "$PROJECT_ROOT" && cargo run -q -p aurora-tools --bin gen_protocol )
@@ -424,8 +407,6 @@ do_proto_check() {
 # 这条管 **payload 的字节布局**（漂了症状是上屏一串错字 / preedit 残留，两端都不报错、
 # 日志里一个字都没有）。TSF 的 SendKeyEvent 直接 memcpy 结构体上送，
 # `static_assert(sizeof(...))` 连「两个 uint16_t 互换」都拦不住。
-#
-# 与 CI 同一条命令。
 do_wire_check() {
     disk_tmp
     say "\n[wire] 线格式真值表..."
@@ -1973,7 +1954,8 @@ show_menu() {
     echo  "    p1   push 全部 (release)        pd1   push 全部 (dev)"
     echo  "    pm1/pm2  push 模块(tsf/核心)    pdm1/pdm2 (dev)"
     printf '\n%b  代码质量:%b\n' "$C_YELLOW" "$C_RESET"
-    echo  "    k=check  l=clippy  t=test  f=fmt  ci=fmt+clippy+test"
+    echo  "    k=check  l=clippy  f=fmt  fmt-check  proto  wire"
+    echo  "    (CI 门禁不在这台机器跑：fmt/clippy/全量测试由 GitHub Actions 执行)"
     printf '\n%b  远程数据 / 实测:%b\n' "$C_YELLOW" "$C_RESET"
     echo  "    r=repl(本机)  dl=pull-data  pc=pull-config  pl=pull-log(pla=全部)"
     printf '\n%b  远程诊断 (靶机现场; 路径直接给 Windows 路径, 含空格不用加引号):%b\n' "$C_YELLOW" "$C_RESET"
@@ -2026,13 +2008,13 @@ dispatch() {
         pdm2)             do_push_module dev core ;;
         k|check)          do_check ;;
         l|clippy)         do_clippy ;;
-        t|test)           do_test ;;
         sk|setting-check) do_setting_check ;;
         st|setting-test)  do_setting_test ;;
         sg|setting-regen) do_setting_regen ;;
         f|fmt)            do_fmt ;;
         fmt-check)        do_fmt_check ;;
-        ci)               do_ci ;;
+        proto)            do_proto_check ;;
+        wire)             do_wire_check ;;
         clean)            do_clean ;;
         gd|gen-data)      do_gen_data ;;
         r|repl)           do_repl "${2:-}" ;;

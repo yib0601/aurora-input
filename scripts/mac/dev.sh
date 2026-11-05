@@ -23,8 +23,9 @@
 #   u/u1 / ud/ud1     系统卸载 release / dev (撤销 app+service+设置+LaunchAgent, 保留用户数据)
 #   8  / d8           生成 .pkg 安装包 (release / dev): 全构建后打包 (含设置 app)
 #   8s / d8s          生成 .pkg (跳过重建, 直接用现有产物打包)
-#   k=check  l=clippy  t=test  f=fmt  fmt-check  ci(=fmt-check+clippy+test)
-#   clean
+#   k=check  l=clippy  f=fmt  fmt-check  clean
+#     (本机不跑 CI: fmt --check + clippy -D warnings + 全 workspace 测试只在 GitHub
+#      Actions 上跑, 见 .github/workflows/ci.yml; 本机按 crate 验证 cargo test -p <crate>)
 #   gd=gen-data       下载词库 + 生成 unigram/pinyin_map + 组装 data/ → build_mac/data + 校验
 #   r=repl            候选 REPL (cargo run -p wind-repl -- <data>; data 默认 build_mac/data)
 #
@@ -2192,7 +2193,7 @@ show_menu() {
     echo   "    8    生成安装包 (release)        d8    生成安装包 (dev)"
     echo   "    8s   跳过重建直接打包 (release)  d8s   跳过重建直接打包 (dev)"
     printf "\033[33m  代码质量:\033[0m\n"
-    echo   "    k=check  l=clippy  t=test  f=fmt  fmt-check  ci  clean"
+    echo   "    k=check  l=clippy  f=fmt  fmt-check  clean"
     printf "\033[33m  数据 / 实测:\033[0m\n"
     echo   "    gd=gen-data  r=repl(本机)"
     printf "\033[33m  macOS 便利命令:\033[0m\n"
@@ -2229,10 +2230,8 @@ dispatch() {
         d8s)  pkg_build dev ;;
         k|check)   do_cargo check ;;
         l|clippy)  do_cargo clippy ;;
-        t|test)    do_cargo test ;;
         f|fmt)     ( cd "$RUST_DIR" && bold "==> cargo fmt" && cargo fmt ) ;;
         fmt-check) ( cd "$RUST_DIR" && bold "==> cargo fmt --check" && cargo fmt --all -- --check ) ;;
-        ci)        do_ci ;;
         clean)     do_cargo clean ;;
         gd|gen-data) apply_variant release; do_gendata && verify_dist_data ;;
         run)       apply_variant release; do_run ;;
@@ -2244,13 +2243,6 @@ dispatch() {
 }
 
 do_cargo() { bold "==> cargo $1 --workspace"; ( cd "$RUST_DIR" && cargo "$1" --workspace ); }
-
-do_ci() {
-    ( cd "$RUST_DIR" && bold "==> cargo fmt --check" && cargo fmt --all -- --check ) || return $?
-    do_cargo clippy || return $?
-    do_cargo test   || return $?
-    bold "==> CI 全部通过 ✓"
-}
 
 # 顺序执行一串命令 token (空格分隔); 前者失败即停。每个命令在子 shell 里跑, 保留内联函数的
 # `exit` 语义又不终止整个脚本。

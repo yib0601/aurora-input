@@ -44,14 +44,32 @@ jobs:
         with:
           workspaces: aurora_core
 
-      # fmt --check + clippy(msvc target) + test(本机)
+      # 门禁三步直接在 runner 上跑，不经 dev.sh：本机脚本已不再提供 ci 子命令
+      # （本地不跑 CI，测试与 lint 的门禁只在这里，见 AGENTS.md「构建 / 测试」）。
+      - name: fmt --check
+        working-directory: aurora_core
+        run: cargo fmt --all -- --check
+
+      # clippy 对着 msvc target 跑（与 `dev.sh l` 同口径，差别只在把警告升成错误）。
+      # 需要 xwin 的软链桥：apt 的 llvm-19 只提供带版本号的名字，而 cargo-xwin 按无版本名
+      # 搜索 clang-cl / lld-link / llvm-rc / llvm-lib / llvm-dlltool。
+      - name: clippy (msvc target, -D warnings)
+        working-directory: aurora_core
+        run: |
+          set -e
+          . ../scripts/lib/xwin-env.sh
+          setup_xwin_env
+          RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static" \
+            cargo xwin clippy --keep-going --target x86_64-pc-windows-msvc \
+              --workspace --all-targets -- -D warnings
+
       # 测试临时目录指到 runner 的磁盘目录，别落在 /tmp：测试历史上会漏出 wdat/redb
-      # 临时目录，攒够就 ENOSPC（本机 /tmp 是 tmpfs 时直接吃内存）。主修是测试代码
-      # 统一用 tempfile::TempDir，这里只是兜底。
-      - name: dev.sh ci
+      # 临时目录，攒够就 ENOSPC。主修是测试代码统一用 tempfile::TempDir，这里只是兜底。
+      - name: test (host)
+        working-directory: aurora_core
         env:
           TMPDIR: ${{ runner.temp }}/aurora-test
-        run: mkdir -p "$TMPDIR" && ./scripts/dev.sh ci
+        run: mkdir -p "$TMPDIR" && cargo test --workspace --no-fail-fast
 
       # 协议常量对账：Rust 真源 ↔ C++ 两侧镜像 ↔ Swift。
       #
@@ -171,7 +189,7 @@ jobs:
         working-directory: aurora_macos
         run: swift test
 
-      # 与 Linux job 的 dev.sh ci 同一门禁口径：--all-targets 覆盖测试代码，-D warnings 挂新警告。
+      # 与 Linux job 的 clippy 步同一门禁口径：--all-targets 覆盖测试代码，-D warnings 挂新警告。
       # darwin 与 windows 走的 cfg 分支不同，本条是 macOS-only 代码的唯一 lint 关卡。
       # --keep-going 与下一步的 --no-fail-fast 同理由：两者默认都是首错即停，一轮只报得出
       # 一个问题，于是「推一次修一个」。macOS 是 darwin 侧代码的唯一关卡（上面的 check job

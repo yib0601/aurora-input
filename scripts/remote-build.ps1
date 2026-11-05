@@ -473,7 +473,7 @@ function Receive-Artifacts ([string]$cmd, [string]$outName, [string]$localOut) {
 # 就没有 data\, 远程 test 会给出一份漂亮的假绿。判据是耗时不是通过数, 但那要人去看;
 # 这里改成开跑前直接拦住, 让缺失变成一次明确失败, 而不是一次虚假成功。
 function Test-RemoteDataReady ([string]$cmdText) {
-    if ($cmdText -notmatch '(^|\s)(t|test|ci)(\s|$)' -and $cmdText -notmatch 'cargo\s+test') { return $true }
+    if ($cmdText -notmatch '(^|\s)test(\s|$)' -and $cmdText -notmatch 'cargo\s+test') { return $true }
     $n = Get-RemoteValue "@(Get-ChildItem '$RRoot\build_dev\data' -Recurse -File -EA SilentlyContinue).Count"
     if (-not $n -or [int]$n -eq 0) {
         ErrMsg "`n拒绝在编译机上跑测试: $RRoot\build_dev\data 不存在或为空。"

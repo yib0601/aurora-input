@@ -123,8 +123,8 @@ Windows 版：
 - `aurora_macos/Sources/WindInputKit/IPC/{ProtocolTypes,BinaryCodec}.swift`（本目录）
 
 > **值由机器把关**：命令码与真源的一致性、以及「同方向不重码」，由
-> `cargo run -p aurora-tools --bin gen_protocol`（在 `aurora_core/` 下）校验，已接入 CI 与
-> `dev.sh ci`。
+> `cargo run -p aurora-tools --bin gen_protocol`（在 `aurora_core/` 下）校验，已接入 GitHub
+> Actions 的 CI 与 `dev.sh proto`。
 >
 > **字节布局也由机器把关**：`Tests/WindInputKitTests/WireVectorTests.swift` 读
 > `aurora_core/crates/aurora-ipc/testdata/wire_vectors.json`（Rust 真源重录），TSF / Linux /
