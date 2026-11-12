@@ -51,12 +51,14 @@ command -v cmake    >/dev/null || { err "需要 cmake"; exit 1; }
   先跑 scripts/dev.sh gd 生成词库。"; exit 1; }
 [[ -f "$SETTING_DIR/Cargo.toml" ]] || { err "找不到设置程序仓库: $SETTING_DIR（用 SETTING_DIR 指定）"; exit 1; }
 # 拿真实路径再判断，这样 worktree / 任意克隆名下都能正确解析。
-# 设置程序的 path 依赖锚点现在是本仓内部；auroraui 仍按 ../aurora-ui-rust 解析，所以
-# aurora-input——克隆成别的名字时在这里明确报错，而不是让 cargo 报一堆找不到 crate 的错。
-CORE_LINK="$(readlink -f "$SETTING_DIR/../aurora-input")"
-[[ -d "$CORE_LINK/aurora_core" ]] || { err "设置程序的 path 依赖锚点 ../aurora-input 不可用: $CORE_LINK
-  本仓需以 aurora-input 为目录名（或在该位置建一个指向本仓的符号链接）"; exit 1; }
-[[ "$CORE_LINK" == "$REPO" ]] || { err "设置程序解析到的 core 仓库不是本仓: $CORE_LINK ≠ $REPO"; exit 1; }
+# 设置程序的 path 依赖全部指向本仓 aurora_core/crates（apps/setting/Cargo.toml 里写的是
+# `../../crates/<crate>`，auroraui 也已 vendored 进来），所以锚点是「设置程序目录的祖父 = 本仓
+# 的 aurora_core」。设置程序不在本仓内时在这里明确报错，而不是让 cargo 报一堆找不到 crate 的错。
+CORE_ROOT="$(readlink -f "$SETTING_DIR/../..")"
+[[ -d "$CORE_ROOT/crates/auroraui" ]] || { err "设置程序的 path 依赖锚点不可用: $CORE_ROOT
+  期望设置程序位于本仓 aurora_core/apps/setting（用 SETTING_DIR 指定）"; exit 1; }
+[[ "$CORE_ROOT" == "$(readlink -f "$REPO/aurora_core")" ]] \
+    || { err "设置程序解析到的 core 不在本仓: $CORE_ROOT ≠ $REPO/aurora_core"; exit 1; }
 
 mkdir -p "$WORK_DIR" "$OUT_DIR"
 
