@@ -800,8 +800,13 @@ do_repl() {
             data="$BUILD_DEV_DIR/data"
         fi
     fi
+    # 用 dev profile 而非 --release：REPL 只回答「这个编码出什么候选」，不做性能量化
+    # （量化工具是 scripts/perf/key-latency.sh）。release 的 lto=true + codegen-units=1
+    # 让 EDIT 一行就要重跑一次全图 LTO 链接（实测冷构建 1m32s、改一行重建 59s），且
+    # 与 cargo test 的产物完全不共用，白占 232M 一份依赖树。dev profile 与测试共用产物
+    # （实测改一行重建 47s，已构建过则 0.4s 起）。
     say "\n启动候选 REPL (data=$data)..."
-    cd "$PROJECT_ROOT" && AURORA_DATA="$data" cargo run --release -p aurora-repl --bin wind_repl -- "$data"
+    cd "$PROJECT_ROOT" && AURORA_DATA="$data" cargo run -p aurora-repl --bin wind_repl -- "$data"
 }
 
 require_remote() {
