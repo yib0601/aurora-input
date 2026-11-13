@@ -251,7 +251,7 @@ log_level = "debug"   # 或 "trace"
 
 | 能做什么 | 命令 |
 |---|---|
-| host 单测 / 检查（**按 crate 范围**：改哪个测哪个） | `cargo test -p <crate>`；编译门用 `cargo check --workspace --all-targets`（在 `aurora_core/` 下） |
+| host 单测 / 检查（**只测改动直接相关的目标**） | `cargo test -p <crate> --test <文件名>`（在 `aurora_core/` 下）；全量门交给 CI |
 | 候选逻辑速验 | `./scripts/dev.sh r`（repl） |
 | 设置程序交叉检查与 wine 测试 | `./scripts/dev.sh sk` / `st` / `sg`（见下节） |
 | 与设置端产物对账 | `cargo test -p aurora-rpc --test wind_setting_assets`（见下） |
@@ -261,10 +261,11 @@ log_level = "debug"   # 或 "trace"
 `t`（test）都已删除——fmt --check + clippy -D warnings + 全 workspace 测试是 GitHub Actions 的
 职责（`.github/workflows/ci.yml` 直接跑 cargo，不再回调本地脚本）。
 
-本机验证按改动范围：`cargo test -p <crate>`；需要跨 crate 的编译门时用
-`cargo check --workspace --all-targets`（不跑测试进程，实测 1m32s、产物 +3 G）。全量
-`cargo test --workspace` 在本机会并行编译 + 运行 113 个 test binary，实测把 load 打到 190
-上下、整机卡死，别在这里跑。
+本机只跑**与改动直接相关**的测试，推送门交给 CI：`fmt --check`、`clippy --all-targets
+-D warnings`、全 workspace 测试、三平台编译都是 `.github/workflows/ci.yml` 的职责，本机不重复跑
+（要复现 CI 红灯时才手动跑 `cargo check --workspace --all-targets`，实测 1m32s、产物 +3 G）。
+全量 `cargo test --workspace` 在本机会并行编译 + 运行 113 个 test binary，实测把 load 打到 190
+上下、整机卡死，尤其别在这里跑。
 
 ⚠️ **按 crate 仍是太粗的粒度**：`aurora-coordinator` 一个 crate 就带 138 个测试目标，每个都是
 独立二进制、各自静态链接整条 coordinator/UI 依赖图。实测改一行后：
