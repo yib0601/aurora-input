@@ -77,12 +77,8 @@ impl Default for CodePolicy {
 pub fn detect_dict_format(text: &str) -> DictFormat {
     let normalized = normalize_input(text);
     let text = normalized.as_ref();
-    if text
-        .split("\n---")
-        .next()
-        .unwrap_or("")
-        .contains("aurora_dict:")
-    {
+    let head = text.split("\n---").next().unwrap_or("");
+    if crate::wdict::has_wdict_header(head) {
         return DictFormat::WindDict;
     }
     if text.lines().any(|l| l.trim() == "...") {

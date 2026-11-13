@@ -149,6 +149,52 @@ const ALLOWED: &[(&str, &str)] = &[
          归一化要复制 9.7MB 的 base.dict.yaml 并打乱 offset 语义，得换修法：\
          在失败路径上探测 CR 报错，或往读文件那层挪。见 .omc A3-9。",
     ),
+    // ---- 设置程序 / GUI 层：处理「自己写自己读」的文本，不是用户从别处搬来的文件 ----
+    // 这层两个 crate（apps/setting、crates/auroraui）只在 dev-dependencies 里依赖
+    // aurora-utils（`testing` feature），生产代码里拿不到 normalize_input；而下面这些
+    // 输入全是本程序自己生成、或由系统接口给出且 `.lines()` 已吃掉 CRLF 的文本。
+    (
+        "apps/setting/src/dialogs/field_dialogs.rs",
+        "rows_to_map / rows_to_font_list / rows_to_font_scripts 解析的是**本对话框文本域里\
+         的当前内容**（设置页自己回填、用户就地编辑），build_text_rows_dialog_with 只用\
+         .lines() 估输入框高度；不读任何外部文件，CRLF 由 .lines() 处理。",
+    ),
+    (
+        "apps/setting/src/pages/dict/wordlist.rs",
+        "用户导入的纯词表：入口已自做 strip_bom，.lines() 已吃掉 CRLF；残留风险只有老 mac\
+         的纯 CR 文件（整份算一行 ⇒ 只进 1 条）。按守卫口径修要给 apps/setting 加一条\
+         运行期 aurora-utils 依赖，收益不抵接线面，故在此记录。",
+    ),
+    (
+        "apps/setting/src/search/pinyin.rs",
+        "table 解析的是**编译进 exe 的常量表** TABLE_SRC（源码内嵌字符串），不读文件，\
+         不可能出现 CRLF 或孤立回车。",
+    ),
+    (
+        "apps/setting/src/tsf_log.rs",
+        "parse / merge 处理设置程序自己写的那份 tsf 日志配置（ini 风格逐行键值）：写侧是\
+         本文件、读侧是 C++ FileLogger，双方都用 LF/CRLF 且经 .lines() 处理。",
+    ),
+    (
+        "apps/setting/src/update/notes.rs",
+        "to_plain_text / fallback_strip_noise 解析 GitHub Release 正文（API 返回的 markdown）\
+         与同一条链上的本地缓存，来源单一、.lines() 已处理 CRLF。",
+    ),
+    (
+        "apps/setting/src/xdg_assoc.rs",
+        "parse_desktop 解析 data/ 里我们自己发的 .desktop 模板（gen-data 产出、LF）；\
+         render_desktop 是**写侧**（逐行重写 Exec= / MimeType=），更不会喂进孤立回车。",
+    ),
+    (
+        "crates/auroraui/src/platform/linux/host.rs",
+        "parse_uri_list 解析 GTK/GIO 拖放传来的 URI 列表（换行分隔的 file://…），系统给的\
+         文本、行尾 CR 会被 trim 掉；解不出来只是这次拖放不生效。",
+    ),
+    (
+        "crates/auroraui/src/platform/linux/x11.rs",
+        "xft_dpi 解析 xrdb -query 的输出（X 资源行 Xft.dpi: 96），系统生成、只认冒号，\
+         取值失败退回默认 DPI。",
+    ),
 ];
 
 /// 自己不归一化、由**调用方**保证的函数。
@@ -190,6 +236,16 @@ const DELEGATED: &[(&str, &str)] = &[
     (
         "misread.rs::head_has_entries",
         "入参来自 MisreadTable::parse 已 normalize_input 的全文",
+    ),
+    (
+        "view.rs::comment_of",
+        "从已解析成 serde_json 的规则里取 comment 字段再取首行——文本来自 core 下发的 JSON，\
+         不是裸文件；即便含行尾回车也只影响这一行显示",
+    ),
+    (
+        "phrase_import.rs::is_phrase_text",
+        "只取首个非空行判 wind: 标记；真正的短语解析在 core 的 phrase_text.rs，\
+         那条链已由 parse_phrase_text 归一化（见上面的 first_content_line）",
     ),
 ];
 

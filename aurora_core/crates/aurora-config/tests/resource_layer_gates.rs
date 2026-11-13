@@ -61,14 +61,21 @@ const SCHEMAS_SITES: &[(&str, usize, &str)] = &[
          带 `--data` 时刻意只看指定的那一个目录（第 1 处）——那个标志的语义是「体检这个目录」",
     ),
     (
+        "apps/setting/src/dialogs/schema_manager.rs",
+        1,
+        "open_user_dict_dir **刻意只开用户目录这一层**：它要在那里 `create_dir_all` 再把\
+         目录交给资源管理器打开，而安装目录多半只读、用户放进去的东西升级时会被覆盖；\
+         故不走 resource_layers（core 扫描时用户层本就遮蔽安装层同名文件）",
+    ),
+    (
         "crates/aurora-engine/src/manager.rs",
-        13,
+        15,
         "4 处（scan_chars_in_range / 两个索引构建 / build_engine）把 data 层根交给\
          resolve_dict_file，层序在它内部展开；1 处 installed_schemas 的 scan_dirs 已按层序；\
          2 处 is_user_schema / delete_user_schema **刻意只查用户目录**——它们问的是\
          「这个方案文件是不是用户自己装的」，故 data / data_custom 的方案本来就已经是\
          `is_user_schema()==false`、`delete_user_schema()` 直接 bail，无需加层；\
-         3 处是 resolve_schema_file 的层内拼接与兜底；         1 处 warn_stale_common_chars **刻意只查用户目录**——它问的是「用户自己那份         已经失效的 common_chars.txt 还在不在」，data / data_custom 层的同名文件是我们         自己发的（且已随常用字表搬进 charsets/ 而删除），不该提醒用户去迁移它；         1 处 declared_dict_files 同前 4 处——只是把 data 层根交给 resolve_dict_file，         层序在它内部展开；1 处 read_schema 给发现目录注入读已声明词库的头部（查 import_tables），         同样只是把 data 层根交给 resolve_dict_file；发现目录本身的列举走 list_schema_resource_dir",
+         3 处是 resolve_schema_file 的层内拼接与兜底；         1 处 warn_stale_common_chars **刻意只查用户目录**——它问的是「用户自己那份         已经失效的 common_chars.txt 还在不在」，data / data_custom 层的同名文件是我们         自己发的（且已随常用字表搬进 charsets/ 而删除），不该提醒用户去迁移它；         1 处 declared_dict_files 同前 4 处——只是把 data 层根交给 resolve_dict_file，         层序在它内部展开；1 处 read_schema 给发现目录注入读已声明词库的头部（查 import_tables），         同样只是把 data 层根交给 resolve_dict_file；发现目录本身的列举走 list_schema_resource_dir；         2 处（pinyin_main_dict_path / schema_cache_present_at——预热与缓存探测要解析主词库路径）         同样只是把 data 层根交给 resolve_dict_file，层序在它内部展开，与上面那 4 处同理",
     ),
     (
         "crates/aurora-engine/src/manager/dict_stats.rs",

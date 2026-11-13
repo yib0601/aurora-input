@@ -9764,11 +9764,10 @@ mod tests {
     }
 
     /// 码表设置每次按键要取好几次（单字过滤、建候选、短语自动上屏），不能每次都重读方案文件。
-    fn codetable_cache_fixture(name: &str, auto_commit: bool) -> std::path::PathBuf {
-        let base = aurora_utils::testing::scratch(&format!(
-            "wind_eng_ct_cache-{name}-{}",
-            std::process::id()
-        ));
+    ///
+    /// 写方案文件单独拆一个函数：`scratch()` 每次调用都新建目录，想「在同一个路径上
+    /// 改一遍方案文件」必须复用同一个 `base`，否则缓存用例会写到两个目录里空转。
+    fn write_codetable_schema(base: &Path, auto_commit: bool) {
         let schemas = base.join("schemas");
         std::fs::create_dir_all(&schemas).unwrap();
         std::fs::write(
@@ -9778,6 +9777,14 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn codetable_cache_fixture(name: &str, auto_commit: bool) -> std::path::PathBuf {
+        let base = aurora_utils::testing::scratch(&format!(
+            "wind_eng_ct_cache-{name}-{}",
+            std::process::id()
+        ));
+        write_codetable_schema(&base, auto_commit);
         base
     }
 
@@ -9786,7 +9793,8 @@ mod tests {
         let base = codetable_cache_fixture("inv", true);
         let mgr = EngineManager::new(&Config::default(), Some(&base));
         assert!(mgr.codetable_settings_of("wb_c").auto_commit_at_full);
-        codetable_cache_fixture("inv", false);
+        // 同一个目录里改写成 false：缓存命中时不重读，失效后才读到新值。
+        write_codetable_schema(&base, false);
         assert!(
             mgr.codetable_settings_of("wb_c").auto_commit_at_full,
             "命中缓存：不重读方案文件"

@@ -5911,6 +5911,12 @@ mod tests {
     /// widget 的话，第 2 页会停在第 1 页滚到的那个位置。所有分页类别共用 `goto_page`。
     #[test]
     fn page_change_rebuilds_table_to_reset_scroll() {
+        // 本用例会经 `reload()` 间接读进程全局的 AURORA_RPC_MOCK（见 `rpc::ENV_LOCK`
+        // 的文档）：不持锁就可能与并行用例的 set/remove 撞在一起，reload 走 Err 分支
+        // 时 total 被清零而 offset 留在原页，第二次「跳同一页」就变成真的换页。
+        let _g = crate::rpc::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let st = DictManagerState::new();
         with_schemas(&st, vec![schema("wb", "五笔", "codetable")]);
         st.domain.set(GLOBAL_DOMAINS);
@@ -5929,6 +5935,11 @@ mod tests {
                 "{:?}: 换页须重建表格（滚动回顶）",
                 st.current_category()
             );
+            // reload 会按服务端返回的 total 回填（必要时还会回收 offset），mock 下
+            // 通常是 0 条 ⇒ 页数变成 1。把状态摆回「已在第 2 页、共 3 页」，
+            // 下一条断言才真的在测「页没变」而不是「页数变了被钳回首页」。
+            *st.offset.borrow_mut() = PAGE_SIZE;
+            st.total.set(PAGE_SIZE * 3);
             let before = st.table_epoch.get()[0];
             st.goto_page(2);
             assert_eq!(st.table_epoch.get()[0], before, "页没变不重建");

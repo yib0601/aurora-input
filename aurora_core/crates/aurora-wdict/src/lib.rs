@@ -176,7 +176,7 @@ pub fn parse_phrases_wdict(text: &str) -> Result<(Vec<PhraseIo>, usize), String>
     let text = normalized.as_ref();
     // 1. 头部 = 第一个 "\n---" 之前
     let header = text.split("\n---").next().unwrap_or("");
-    if !header.contains("aurora_dict:") {
+    if !has_wdict_header(header) {
         return Err("不是 WindDict 文件（缺 aurora_dict 头）".into());
     }
     // version 校验（简单行扫描，避免引入 yaml 依赖）
@@ -332,9 +332,24 @@ pub fn export_words_wdict(rows: &[WordIo], exported_at: &str) -> String {
     s
 }
 
+/// wdict 头部可接受的键名。
+///
+/// `aurora_dict:` 是现行写法；`wind_dict:` 是**改名前的老文件**——用户手上的旧备份与
+/// 旧导出都是那个形态，解析侧必须同样接受，否则「还原备份」当场失败（见 aurora-store
+/// `user_words` 的 legacy 用例）。
+const WDICT_HEADER_KEYS: [&str; 2] = ["aurora_dict:", "wind_dict:"];
+
+/// `header`（第一个 `\n---` 之前那一段）是否带任一可接受的 wdict 头部名。
+///
+/// 探测格式的一方（aurora-store 的 `detect_dict_format`）也用它，避免两处各记一份
+/// 「哪些头部算 WindDict」。
+pub fn has_wdict_header(header: &str) -> bool {
+    WDICT_HEADER_KEYS.iter().any(|k| header.contains(k))
+}
+
 /// 校验 wdict 头部（含 `aurora_dict:` 且 version==1）。各段解析器共用。
 fn check_wdict_header(header: &str) -> Result<(), String> {
-    if !header.contains("aurora_dict:") {
+    if !has_wdict_header(header) {
         return Err("不是 WindDict 文件（缺 aurora_dict 头）".into());
     }
     let version_ok = header.lines().any(|l| {
