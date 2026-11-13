@@ -320,6 +320,7 @@ pub struct DictManagerState {
     pub view_position: Signal<String>,
     /// 当前查看的系统短语原值 `(code, text, weight, position)`，供「转为用户短语」原样复制。
     /// 存原值而不是从 `view_*` 信号回 parse——那几个是给人看的字符串，parse 失败就得静默兜底。
+    #[allow(clippy::type_complexity)] // 四个字段各自有语义，起别名只是把类型挪到别处。
     viewing: Rc<RefCell<Option<(String, String, i64, i64)>>>,
 
     // ── 候选调整手动添加/编辑对话框 ──
@@ -728,11 +729,12 @@ impl DictManagerState {
                         py.members.push(s.id.clone());
                     }
                     // 已有拼音域：只在当前代表是双拼且新方案非双拼时，才升级代表
-                    if pinyin_rep_is_shuangpin && s.scheme != "shuangpin" {
-                        if let Some(py) = out.iter_mut().find(|d| d.kind == "pinyin") {
-                            py.rep_schema_id = s.id.clone();
-                            pinyin_rep_is_shuangpin = false; // 代表已升级为非双拼
-                        }
+                    if pinyin_rep_is_shuangpin
+                        && s.scheme != "shuangpin"
+                        && let Some(py) = out.iter_mut().find(|d| d.kind == "pinyin")
+                    {
+                        py.rep_schema_id = s.id.clone();
+                        pinyin_rep_is_shuangpin = false; // 代表已升级为非双拼
                     }
                     continue;
                 }
@@ -4312,6 +4314,7 @@ impl DictManagerState {
     /// 候选调整保存调用序列（纯函数，便于单测）。
     /// 新增/键不变编辑：单 addRule（同 code+word upsert 覆盖）；
     /// 编辑改了 code/word：先加新再删旧（加失败则旧规则完好，避免删成功/加失败丢规则）。
+    #[allow(clippy::type_complexity)] // 返回的是「调用序列 + toast 文案」，别名反而遮住语义。
     pub fn shadow_save_calls(&self) -> Result<(Vec<(&'static str, Value)>, &'static str), String> {
         let (m, p) = self.shadow_add_call()?;
         let orig = self.shadow_orig.borrow().clone();
@@ -6414,7 +6417,10 @@ mod tests {
         assert_eq!(sec["key"], json!("userWords"), "非数值字段取首批");
 
         // 单批原样返回（绝大多数情况，19 万词也只有一批）
-        assert_eq!(DictManagerState::merge_import_reports(&[b1.clone()]), b1);
+        assert_eq!(
+            DictManagerState::merge_import_reports(std::slice::from_ref(&b1)),
+            b1
+        );
 
         // toast 用合并后的数，不是最后一批的数
         let msg = DictManagerState::format_import_result(&m);

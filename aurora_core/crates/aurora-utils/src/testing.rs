@@ -40,8 +40,10 @@
 
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::sync::Mutex;
+#[cfg(unix)]
+use std::sync::Once;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, Once};
 
 /// 一个「随线程结束删除」的目录。
 struct Scratch(PathBuf);
@@ -110,8 +112,13 @@ pub fn process_scratch(tag: &str) -> PathBuf {
 }
 
 static PROC_DIRS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+// 只有 unix 的 atexit 钩子路径会用到这两项；其它平台不注册钩子（见 `register_exit_hook`），
+// 不加 cfg 会在 Windows 目标上变成 dead_code 警告，被 CI 的 `-D warnings` 拦下。
+#[cfg(unix)]
 static EXIT_HOOK: Once = Once::new();
 
+#[cfg(unix)]
 extern "C" fn cleanup_at_exit() {
     // 只做 fs 删除：不 panic、不碰已释放内存（atexit 回调里 panic 会 abort）。
     let dirs = PROC_DIRS.lock().unwrap_or_else(|e| e.into_inner()).clone();

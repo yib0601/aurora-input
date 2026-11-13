@@ -683,6 +683,9 @@ pub enum CardItem {
     /// （与 `card_with_attachment` 那段说的是同一个毛病）。[`card_items`] 据此算出
     /// 「前后还有没有可见行」，只在两条可见行之间画线。
     RowWhen(Element, Vis),
+    /// 无条件的静态小标题。当前调用点都用 [`CardItem::HeadingWhen`]（标题要能跟着显隐），
+    /// 保留这个变体是因为「标题永远在」也是合法形态，删了将来还得加回来。
+    #[allow(dead_code)]
     Heading(String),
     /// 运行期可隐显的小标题。用于「这一组下的每一项都被用户藏掉，标题也就没意义了」。
     ///

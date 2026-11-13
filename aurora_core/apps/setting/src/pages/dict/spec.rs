@@ -1431,6 +1431,38 @@ pub fn spec_for(cat: WordCategory) -> &'static CategorySpec {
     }
 }
 
+/// 字符类的「范围」摘要文本。
+///
+/// 码位段与离散成员**两支都要报**：emoji 类是纯字表（1427 条、零码位段），只报段会显示
+/// 空白，用户以为这个类什么都不管；常用汉字类反过来。段多于两条时省略后面的，
+/// 完整列表在配置文件里。
+fn charset_scope_text(v: &serde_json::Value) -> String {
+    let ranges: Vec<&str> = v
+        .get("ranges")
+        .and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+        .unwrap_or_default();
+    let members = v.get("memberCount").and_then(|x| x.as_u64()).unwrap_or(0);
+
+    let mut parts: Vec<String> = Vec::new();
+    if !ranges.is_empty() {
+        let shown = ranges.iter().take(2).cloned().collect::<Vec<_>>().join(" ");
+        parts.push(if ranges.len() > 2 {
+            format!("{shown} 等 {} 段", ranges.len())
+        } else {
+            shown
+        });
+    }
+    if members > 0 {
+        parts.push(format!("{members} 字"));
+    }
+    if parts.is_empty() {
+        "—".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2079,37 +2111,5 @@ mod tests {
         // 两个方向的标签都得拼得出来，且互不相同。
         assert_eq!(common_label(false), "生僻");
         assert_eq!(common_label(true), "常用");
-    }
-}
-
-/// 字符类的「范围」摘要文本。
-///
-/// 码位段与离散成员**两支都要报**：emoji 类是纯字表（1427 条、零码位段），只报段会显示
-/// 空白，用户以为这个类什么都不管；常用汉字类反过来。段多于两条时省略后面的，
-/// 完整列表在配置文件里。
-fn charset_scope_text(v: &serde_json::Value) -> String {
-    let ranges: Vec<&str> = v
-        .get("ranges")
-        .and_then(|x| x.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
-        .unwrap_or_default();
-    let members = v.get("memberCount").and_then(|x| x.as_u64()).unwrap_or(0);
-
-    let mut parts: Vec<String> = Vec::new();
-    if !ranges.is_empty() {
-        let shown = ranges.iter().take(2).cloned().collect::<Vec<_>>().join(" ");
-        parts.push(if ranges.len() > 2 {
-            format!("{shown} 等 {} 段", ranges.len())
-        } else {
-            shown
-        });
-    }
-    if members > 0 {
-        parts.push(format!("{members} 字"));
-    }
-    if parts.is_empty() {
-        "—".to_string()
-    } else {
-        parts.join(" · ")
     }
 }

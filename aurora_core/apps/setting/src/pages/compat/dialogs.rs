@@ -461,6 +461,8 @@ pub fn override_candidates(mgr: &CompatState) -> Vec<(String, Vec<Candidate>)> {
 }
 
 fn build_field_dialog(mgr: &CompatState) -> Element {
+    // 三层容器各自有语义（响应式/批量/字段+候选列表），起别名不会更好读。
+    #[allow(clippy::type_complexity)]
     let cands: Signal<Vec<Vec<(String, Vec<Candidate>)>>> = signal(vec![override_candidates(mgr)]);
     let sync = {
         let m = mgr.clone();

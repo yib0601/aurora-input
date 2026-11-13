@@ -201,32 +201,6 @@ impl ITfTextEditSink_Impl for TextEditSink_Impl {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn edit_state_starts_clean() {
-        let s = EditState::new();
-        assert!(s.last_caret().is_none());
-        assert_eq!(s.end_edit_count(), 0);
-    }
-
-    #[test]
-    fn end_edit_count_accumulates() {
-        let s = EditState::new();
-        s.note_end_edit();
-        s.note_end_edit();
-        assert_eq!(s.end_edit_count(), 2);
-    }
-
-    /// 默认高度必须 >0——服务端 `caret_is_valid` 要求它。
-    #[test]
-    fn default_caret_height_is_positive() {
-        const _: () = assert!(DEFAULT_CARET_HEIGHT > 0);
-    }
-}
-
 /// 从 context 读组合的两个矩形。
 ///
 /// 返回 `(组合起点矩形, 组合整体矩形)`，任一可为 `None`。
@@ -269,9 +243,7 @@ unsafe fn read_composition_rects(
     if enum_comp.Next(&mut buf, &mut fetched).is_err() || fetched == 0 {
         return None;
     }
-    let Some(comp_view) = buf[0].take() else {
-        return None;
-    };
+    let comp_view = buf[0].take()?;
 
     // 组合 range
     let Ok(comp_range) = comp_view.GetRange() else {
@@ -308,4 +280,30 @@ unsafe fn rect_of_range(view: &ITfContextView, range: &ITfRange) -> Option<Caret
     let mut clipped = windows::Win32::Foundation::BOOL(0);
     view.GetTextExt(0, range, &mut rc, &mut clipped).ok()?;
     Some(CaretRect::new(rc.left, rc.top, rc.right, rc.bottom))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edit_state_starts_clean() {
+        let s = EditState::new();
+        assert!(s.last_caret().is_none());
+        assert_eq!(s.end_edit_count(), 0);
+    }
+
+    #[test]
+    fn end_edit_count_accumulates() {
+        let s = EditState::new();
+        s.note_end_edit();
+        s.note_end_edit();
+        assert_eq!(s.end_edit_count(), 2);
+    }
+
+    /// 默认高度必须 >0——服务端 `caret_is_valid` 要求它。
+    #[test]
+    fn default_caret_height_is_positive() {
+        const _: () = assert!(DEFAULT_CARET_HEIGHT > 0);
+    }
 }

@@ -60,8 +60,12 @@ pub fn dll_release() -> u32 {
 /// 用来在**真实 Windows 加载器**下验证传输层。生产路径不用它。
 ///
 /// 返回 0 表示成功，其余为错误码。
+///
+/// # Safety
+///
+/// `pipe_name_utf16` 必须是调用方持有的、NUL 结尾的 UTF-16 字符串。
 #[unsafe(no_mangle)]
-pub extern "system" fn AuroraTsfTestRoundtrip(pipe_name_utf16: *const u16) -> i32 {
+pub unsafe extern "system" fn AuroraTsfTestRoundtrip(pipe_name_utf16: *const u16) -> i32 {
     use crate::ipc::transport::PipeConnection;
 
     if pipe_name_utf16.is_null() {
@@ -97,8 +101,13 @@ pub extern "system" fn AuroraTsfTestRoundtrip(pipe_name_utf16: *const u16) -> i3
 /// 测试专用导出：计算主命令管道名，写进调用方缓冲。
 ///
 /// 返回写入的 UTF-16 码元数（不含 NUL）；缓冲不够返回 -1。
+///
+/// # Safety
+///
+/// `variant_suffix_utf16` / `sid_suffix_utf16` 必须是 NUL 结尾的 UTF-16 字符串；
+/// `out` 必须指向调用方持有的、至少 `cap` 个 u16 的可写缓冲。
 #[unsafe(no_mangle)]
-pub extern "system" fn AuroraTsfTestPipeName(
+pub unsafe extern "system" fn AuroraTsfTestPipeName(
     variant_suffix_utf16: *const u16,
     sid_suffix_utf16: *const u16,
     out: *mut u16,
@@ -137,8 +146,15 @@ pub extern "system" fn AuroraTsfTestPipeName(
 /// 测试专用导出：走一次完整的「按键 → 服务端 → 响应 → 吃/不吃」流程。
 ///
 /// 返回：0 = 被吃（服务端消费了），1 = 未被吃（PassThrough），负数 = 错误。
+///
+/// # Safety
+///
+/// `pipe_name_utf16` 必须是调用方持有的、NUL 结尾的 UTF-16 字符串。
 #[unsafe(no_mangle)]
-pub extern "system" fn AuroraTsfTestKeyRoundtrip(pipe_name_utf16: *const u16, vk: u32) -> i32 {
+pub unsafe extern "system" fn AuroraTsfTestKeyRoundtrip(
+    pipe_name_utf16: *const u16,
+    vk: u32,
+) -> i32 {
     use crate::ipc::client::{IpcClient, IpcConfig, SyncOutcome};
     use crate::policy::response_type::ResponseType;
 
@@ -241,6 +257,8 @@ pub extern "system" fn AuroraTsfTestLangBar() -> i32 {
 ///
 /// 返回：0 = 全部正常，负数 = 某步失败。
 #[unsafe(no_mangle)]
+// 测试导出单线程使用；`CompositionRuntime` 的既定类型就是 Arc（内部是 COM 对象，非 Send/Sync）。
+#[allow(clippy::arc_with_non_send_sync)]
 pub extern "system" fn AuroraTsfTestComposition() -> i32 {
     use crate::com::composition::{CompositionRuntime, EditTask};
     use crate::policy::composition::{Action, CompositionState};
@@ -320,6 +338,8 @@ impl Drop for ClassFactory {
 }
 
 impl IClassFactory_Impl for ClassFactory_Impl {
+    // COM 契约：宿主保证 riid/ppvobject 有效（下面仍检查非空）。接口方法签名固定。
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn CreateInstance(
         &self,
         punkouter: Option<&IUnknown>,
@@ -433,6 +453,7 @@ pub extern "system" fn DllUnregisterServer() -> HRESULT {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::Foundation::E_NOINTERFACE;
 
     /// DLL 引用计数成对增减。
     #[test]

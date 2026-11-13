@@ -735,23 +735,24 @@ pub struct AppState {
     update_checking: std::cell::Cell<Option<bool>>,
 }
 
-/// 登记**方案页专有**的写回器与 side 提交器。
-///
-/// # 必须可重入，且必须在每次 `FieldRegistry::reset()` 之后重新调用
-///
-/// 这批登记原先写在 `AppState::empty()` 里、一辈子只跑一次。而 `shell::build` 开头会
-/// `fields.reset()` 清空整个注册表（主窗可关掉再开，见 `FieldRegistry::reset`）——
-/// `empty()` 早于 `shell::build`，于是设置树一建好，这批登记就全没了：
-///
-/// - `keys.key_actions` writer 没了 ⇒ 方案热键 / 引导键的改动**永远进不了 diff**，
-///   保存时提示「没有变更」；
-/// - `schema.available` / `schema.active` writer 没了 ⇒ 方案启用状态、「设为当前」同样存不下；
-/// - `SideCommitter` 没了 ⇒ 方案 override、词库开关也存不下。
-///
-/// 而 manifest 那批 writer 是在 `shell::build` 里注册的，reset 后照常重建——**所以症状
-/// 是「别的设置能存、只有方案页存不了」**，很容易误判成方案页自己的问题。
-///
-/// 守卫见 `builtin_registrations_survive_registry_reset`。
+// 登记**方案页专有**的写回器与 side 提交器（原文档：下面这批登记最初写在
+// `AppState::empty()` 里，一辈子只跑一次，而 `shell::build` 开头会 `fields.reset()`）。
+//
+// # 必须可重入，且必须在每次 `FieldRegistry::reset()` 之后重新调用
+//
+// 这批登记原先写在 `AppState::empty()` 里、一辈子只跑一次。而 `shell::build` 开头会
+// `fields.reset()` 清空整个注册表（主窗可关掉再开，见 `FieldRegistry::reset`）——
+// `empty()` 早于 `shell::build`，于是设置树一建好，这批登记就全没了：
+//
+// - `keys.key_actions` writer 没了 ⇒ 方案热键 / 引导键的改动**永远进不了 diff**，
+//   保存时提示「没有变更」；
+// - `schema.available` / `schema.active` writer 没了 ⇒ 方案启用状态、「设为当前」同样存不下；
+// - `SideCommitter` 没了 ⇒ 方案 override、词库开关也存不下。
+//
+// 而 manifest 那批 writer 是在 `shell::build` 里注册的，reset 后照常重建——**所以症状
+// 是「别的设置能存、只有方案页存不了」**，很容易误判成方案页自己的问题。
+//
+// 守卫见 `builtin_registrations_survive_registry_reset`。
 
 /// 登记 `[system]` 域的落地动作。
 ///

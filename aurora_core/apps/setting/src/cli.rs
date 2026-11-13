@@ -157,10 +157,10 @@ pub fn parse_dict_target(argv: &[String]) -> Option<DictTarget> {
             }
         } else if let Some(v) = a.strip_prefix("--type=") {
             t.set_tab(v);
-        } else if a == "--type" {
-            if let Some(v) = it.next() {
-                t.set_tab(v);
-            }
+        } else if a == "--type"
+            && let Some(v) = it.next()
+        {
+            t.set_tab(v);
         }
     }
     Some(t)
@@ -213,10 +213,10 @@ pub fn parse_add_word(argv: &[String]) -> Option<AddWordParams> {
             }
         } else if let Some(v) = a.strip_prefix("--schema=") {
             p.schema = v.to_string();
-        } else if a == "--schema" {
-            if let Some(v) = it.next() {
-                p.schema = v.to_string();
-            }
+        } else if a == "--schema"
+            && let Some(v) = it.next()
+        {
+            p.schema = v.to_string();
         }
     }
     Some(p)

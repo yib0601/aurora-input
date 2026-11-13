@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SettingConfig {
     #[serde(default)]
     pub update: UpdateConfig,
@@ -127,18 +127,6 @@ pub struct UpdateConfig {
 
 fn default_true() -> bool {
     true
-}
-
-impl Default for SettingConfig {
-    fn default() -> Self {
-        Self {
-            update: UpdateConfig::default(),
-            ui: UiStateConfig::default(),
-            protocol: ProtocolConfig::default(),
-            file_assoc: FileAssocConfig::default(),
-            log: LogConfig::default(),
-        }
-    }
 }
 
 impl Default for ProtocolConfig {

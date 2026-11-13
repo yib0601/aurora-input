@@ -475,7 +475,7 @@ mod tests {
         assert!(!schema.fields.is_empty() && !schema.groups.is_empty());
         for sec in Section::ALL {
             let l = ListResult::parse(&reply("compat.list", &json!({"section": sec.id()})))
-                .expect(sec.id());
+                .unwrap_or_else(|e| panic!("{}: {e}", sec.id()));
             assert!(!l.rules.is_empty(), "{} 的 mock 至少要有一条规则", sec.id());
             for r in &l.rules {
                 let want: std::collections::BTreeSet<_> = schema

@@ -308,7 +308,7 @@ fn download_parallel(
 
     let actual = sha256_of_file(&tmp)
         .map_err(|e| UpdateError::Download(format!("校验时读取失败：{e}")))
-        .map_err(&fail)?;
+        .map_err(fail)?;
     if actual != expected_sha256 {
         return Err(fail(UpdateError::Verify(
             "安装包校验值不匹配，已丢弃".to_string(),
@@ -319,7 +319,7 @@ fn download_parallel(
     let _ = std::fs::remove_file(dest);
     std::fs::rename(&tmp, dest)
         .map_err(|e| UpdateError::Download(format!("落盘失败：{e}")))
-        .map_err(&fail)?;
+        .map_err(fail)?;
 
     progress(expected_size, expected_size);
     Ok(dest.to_path_buf())

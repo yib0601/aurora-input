@@ -112,6 +112,7 @@ impl ITfDisplayAttributeInfo_Impl for DisplayAttributeInfo_Impl {
         Ok(BSTR::from(self.description))
     }
 
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn GetAttributeInfo(&self, pda: *mut TF_DISPLAYATTRIBUTE) -> Result<()> {
         if pda.is_null() {
             return Err(windows::Win32::Foundation::E_POINTER.into());
@@ -126,6 +127,7 @@ impl ITfDisplayAttributeInfo_Impl for DisplayAttributeInfo_Impl {
         Ok(())
     }
 
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn SetAttributeInfo(&self, pda: *const TF_DISPLAYATTRIBUTE) -> Result<()> {
         if pda.is_null() {
             return Err(windows::Win32::Foundation::E_POINTER.into());
@@ -176,6 +178,7 @@ impl ITfDisplayAttributeProvider_Impl for DisplayAttributeProvider_Impl {
     }
 
     /// 按 GUID 取属性定义。这是**主路径**。
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn GetDisplayAttributeInfo(&self, guid: *const GUID) -> Result<ITfDisplayAttributeInfo> {
         if guid.is_null() {
             return Err(windows::Win32::Foundation::E_POINTER.into());
@@ -205,7 +208,7 @@ mod tests {
     fn default_attribute_matches_cpp() {
         let a = make_display_attribute();
         assert_eq!(a.lsStyle, TF_LS_DOT, "点状下划线");
-        assert_eq!(a.fBoldLine.as_bool(), false, "不加粗");
+        assert!(!a.fBoldLine.as_bool(), "不加粗");
         assert_eq!(a.bAttr, TF_ATTR_INPUT);
         assert_eq!(a.crText.r#type, TF_CT_NONE, "文字色交给宿主主题");
         assert_eq!(a.crBk.r#type, TF_CT_NONE, "背景色交给宿主主题");

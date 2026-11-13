@@ -122,6 +122,7 @@ pub(crate) fn fetch_shuangpin_layouts() -> Vec<(String, String)> {
 
 /// `list_signal` 的数据项：行/分节标题/行间分隔线。
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)] // 行变体带整份 SchemaEntry；装箱会把所有构造点都改成 Box。
 pub enum SchemaListItem {
     Row {
         entry: SchemaEntry,
@@ -2591,10 +2592,10 @@ impl SchemaManagerState {
     pub fn move_schema_up(&self, schema_id: &str) {
         {
             let mut order = self.enabled_order.borrow_mut();
-            if let Some(idx) = order.iter().position(|id| id == schema_id) {
-                if idx > 0 {
-                    order.swap(idx, idx - 1);
-                }
+            if let Some(idx) = order.iter().position(|id| id == schema_id)
+                && idx > 0
+            {
+                order.swap(idx, idx - 1);
             }
         }
         self.notify(ToastKind::Success, "排序已调整（保存后生效）");
@@ -2605,10 +2606,10 @@ impl SchemaManagerState {
     pub fn move_schema_down(&self, schema_id: &str) {
         {
             let mut order = self.enabled_order.borrow_mut();
-            if let Some(idx) = order.iter().position(|id| id == schema_id) {
-                if idx + 1 < order.len() {
-                    order.swap(idx, idx + 1);
-                }
+            if let Some(idx) = order.iter().position(|id| id == schema_id)
+                && idx + 1 < order.len()
+            {
+                order.swap(idx, idx + 1);
             }
         }
         self.notify(ToastKind::Success, "排序已调整（保存后生效）");

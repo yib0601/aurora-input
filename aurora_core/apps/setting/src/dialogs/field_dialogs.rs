@@ -254,7 +254,7 @@ pub fn font_scripts_to_rows(map: &Map<String, Value>, known: &[String]) -> Strin
     let mut rows: Vec<String> = known
         .iter()
         .map(|k| {
-            let chain = map.get(k).map(&chain_of).unwrap_or_default();
+            let chain = map.get(k).map(chain_of).unwrap_or_default();
             format!("{k} = {chain}")
         })
         .collect();
@@ -1292,6 +1292,9 @@ fn hotkey_dialog_system_risk(
     .map(|(r, _)| r)
 }
 
+// 一次热键录制对话框要同时持有源值、显示值、默认值、四个修饰键信号与键位表，
+// 都是互不相关的入参，拆结构体只会让调用点更难读。
+#[allow(clippy::too_many_arguments)]
 pub fn build_hotkey_dialog(
     visible: Signal<bool>,
     title: &str,

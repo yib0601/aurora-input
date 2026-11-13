@@ -316,14 +316,11 @@ mod tests {
         ));
     }
 
-    /// 超时值必须小——服务卡死时不能拖住宿主 UI 线程。
-    #[test]
-    fn timeouts_are_small() {
-        assert!(
-            config::CONNECT_TIMEOUT_MS <= 200,
-            "连接超时过大会拖住 UI 线程"
-        );
-        assert!(config::READ_TIMEOUT_MS <= 500);
-        assert!(config::WRITE_TIMEOUT_MS <= 500);
-    }
+    // 超时值必须小——服务卡死时不能拖住宿主 UI 线程。三个都是常量，编译期就能判定。
+    const _: () = assert!(
+        config::CONNECT_TIMEOUT_MS <= 200,
+        "连接超时过大会拖住 UI 线程"
+    );
+    const _: () = assert!(config::READ_TIMEOUT_MS <= 500);
+    const _: () = assert!(config::WRITE_TIMEOUT_MS <= 500);
 }

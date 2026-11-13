@@ -63,6 +63,7 @@ pub const SUBNAV_H: i32 = 44;
 pub struct SubNavItem {
     pub label: String,
     /// 缩进层级。目前全是 0；留着是因为将来真有嵌套需求时，导航侧只差这一个值。
+    #[allow(dead_code)] // 见上：为将来的嵌套导航预留，当前无读取方。
     pub depth: u8,
     /// 对应的分块下标。
     pub section: usize,

@@ -125,10 +125,10 @@ impl LangBarState {
     /// | 中文 | 「中」 |
     /// | 英文 | 「英」 |
     pub fn display_text(&self) -> String {
-        if let Ok(g) = self.label.lock() {
-            if !g.is_empty() {
-                return g.clone();
-            }
+        if let Ok(g) = self.label.lock()
+            && !g.is_empty()
+        {
+            return g.clone();
         }
         if self.chinese() {
             "中".to_string()
@@ -193,6 +193,9 @@ fn write_fixed(dst: &mut [u16], src: &str) {
 }
 
 impl ITfLangBarItem_Impl for LangBarItemButton_Impl {
+    // COM 契约：宿主保证 pinfo 有效（下面仍检查非空）。实现的是固定签名的接口方法，
+    // 不能改成 unsafe fn —— 故就地放行 clippy 的指针参数检查。
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn GetInfo(&self, pinfo: *mut TF_LANGBARITEMINFO) -> Result<()> {
         if pinfo.is_null() {
             return Err(windows::Win32::Foundation::E_POINTER.into());
@@ -437,6 +440,6 @@ mod tests {
         let s = LangBarState::new();
         let p = mode_status_payload(crate::policy::mode_status::FLAG_FULL_WIDTH, 0, "拼音");
         assert!(apply_mode_status(&s, &p).is_some());
-        assert!(!s.chinese() == false, "仍是中文");
+        assert!(s.chinese(), "仍是中文");
     }
 }

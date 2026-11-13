@@ -78,6 +78,7 @@ pub struct SearchState {
     ///
     /// 索引本身不折用户清单（见 `crate::user_hide`：行照建、运行期显隐），故在这一层
     /// 按当前开关状态过滤。逃生口打开时它返回 true，条目照常搜得到——与页面一致。
+    #[allow(clippy::type_complexity)] // Rc/RefCell/Option/Rc<dyn Fn> 各承担一层语义。
     filter: Rc<RefCell<Option<Rc<dyn Fn(&SearchEntry) -> bool>>>>,
     /// 输入框绑定的查询串。
     pub query: Signal<String>,

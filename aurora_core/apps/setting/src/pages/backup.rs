@@ -84,7 +84,7 @@ impl BackupState {
         ctx.request_save_file(
             PickDialog::new()
                 .title("创建备份")
-                .file_name(&format!("windinput-backup-{stamp}.zip"))
+                .file_name(format!("windinput-backup-{stamp}.zip"))
                 .filter("备份包", &["zip"]),
             move |path| {
                 let Some(path) = path else {

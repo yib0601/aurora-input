@@ -1079,7 +1079,7 @@ thread_local! {
     /// 变了」，故给它一个显式的、测试主动摆值的开关，不用不可控的调用计数
     /// （那会让恰好共享同一测试线程的其它用例被悄悄牵连，破坏「测试要确定性」）。
     static MOCK_FOLLOWED_LAYOUT: std::cell::Cell<Option<&'static str>> =
-        std::cell::Cell::new(None);
+        const { std::cell::Cell::new(None) };
 }
 
 /// 供测试设置/清空上面那个顶替值。测试用完必须传 `None` 清空，否则会漏到下一个用例。
@@ -1276,7 +1276,7 @@ fn mock_stats_summary() -> Value {
         })
         .sum();
     let active_sec: u64 = days.iter().map(|d| num(d, "as")).sum();
-    let speed = |chars: u64, secs: u64| if secs == 0 { 0 } else { chars * 60 / secs };
+    let speed = |chars: u64, secs: u64| (chars * 60).checked_div(secs).unwrap_or(0);
 
     json!({
         "today_chars": today_chars,
@@ -1284,7 +1284,7 @@ fn mock_stats_summary() -> Value {
         "today_english": num(&last, "ec"),
         "total_chars": total_chars,
         "active_days": active_days,
-        "daily_avg": if active_days > 0 { total_chars / active_days } else { 0 },
+        "daily_avg": total_chars.checked_div(active_days).unwrap_or(0),
         "streak_current": streak_current,
         "streak_max": streak_max,
         "week_chars": week_chars,

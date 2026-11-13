@@ -262,10 +262,10 @@ impl CompositionEditSession_Impl {
         let sink: ITfCompositionSink = CompositionSink::new(self.runtime.clone()).into();
         match comp_iface.StartComposition(ec, &range, &sink) {
             Ok(comp) => {
-                if !self.text.is_empty() {
-                    if let Ok(comp_range) = comp.GetRange() {
-                        let _ = comp_range.SetText(ec, 0, &self.text);
-                    }
+                if !self.text.is_empty()
+                    && let Ok(comp_range) = comp.GetRange()
+                {
+                    let _ = comp_range.SetText(ec, 0, &self.text);
                 }
                 self.runtime.store(comp, range);
                 tracing::debug!("组合已开始，{} 个字", self.text.len());
@@ -298,10 +298,8 @@ impl CompositionEditSession_Impl {
             return;
         };
 
-        if clear_text {
-            if let Ok(range) = comp.GetRange() {
-                let _ = range.SetText(ec, 0, &[]);
-            }
+        if clear_text && let Ok(range) = comp.GetRange() {
+            let _ = range.SetText(ec, 0, &[]);
         }
 
         let _ = comp.EndComposition(ec);

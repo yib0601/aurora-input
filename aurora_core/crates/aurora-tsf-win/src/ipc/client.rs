@@ -147,10 +147,10 @@ impl IpcClient {
             let Ok(guard) = self.conn.lock() else {
                 return false;
             };
-            if let Some(c) = guard.as_ref() {
-                if c.is_connected() {
-                    return true;
-                }
+            if let Some(c) = guard.as_ref()
+                && c.is_connected()
+            {
+                return true;
             }
         }
 

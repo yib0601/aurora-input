@@ -267,7 +267,7 @@ pub fn selectable(
     let sel_on = is_selected.clone();
     let on = content(true)
         .bg_role_alpha(Role::Accent, auroraui::theme::SELECTED_ALPHA)
-        .visible_when(move || sel_on());
+        .visible_when(sel_on);
 
     let off = content(false)
         .clickable()

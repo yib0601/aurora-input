@@ -725,6 +725,8 @@ mod tests {
     }
 
     /// mock 模式 + 全 crate 唯一的锁（见 `rpc::ENV_LOCK`）；测完摘掉 mock 标记。
+    // 字段只用于 RAII：持锁到作用域结束，从不解引用。
+    #[allow(dead_code)]
     struct MockGuard(std::sync::MutexGuard<'static, ()>);
     impl MockGuard {
         fn new() -> Self {
@@ -953,7 +955,7 @@ mod tests {
         let _g = MockGuard::new();
         let st = loaded();
         let _ = crate::rpc::take_mock_calls();
-        assert_eq!(st.start_draft(id("  New.exe ")).unwrap(), true);
+        assert!(st.start_draft(id("  New.exe ")).unwrap());
         assert_eq!(st.draft.get(), Some(id("New.exe")), "进程名 trim");
         assert_eq!(st.selected.get(), id("New.exe").key());
         let vis = st.visible_rules();
@@ -1357,9 +1359,8 @@ mod tests {
         let st = loaded();
         st.filter.set(3);
         st.search.set("zzz".into());
-        assert_eq!(
-            st.start_draft(id("weixin.EXE")).unwrap(),
-            false,
+        assert!(
+            !st.start_draft(id("weixin.EXE")).unwrap(),
             "已存在（不区分大小写）不新建"
         );
         assert_eq!(st.draft.get(), None);

@@ -2021,7 +2021,7 @@ fn build_log_archive(state: &AppState) -> Element {
     let current = || {
         let dir = crate::tsf_log::log_dir(crate::mode::get())?;
         let (n, bytes) = crate::log_tools::summarize(&dir);
-        (n > 0).then(|| (dir, n, bytes))
+        (n > 0).then_some((dir, n, bytes))
     };
 
     let pack_btn = Element::button(crate::log_tools::archive_button_label())
@@ -4033,9 +4033,9 @@ fn dialog_extra_rows(state: &AppState, host_key: &str) -> Option<Element> {
 ///   `keys.key_actions`，而 `getDefaults` 返回的是**未折算**的系统预置 ⇒ 那张表恒为 `{}`。
 ///   引导键类字段的 loader 读的正是它，不补的话恢复后快捷输入的 `;`、临拼的 `` ` ``
 ///   一并消失，而**清空即禁用**。见 [`seed_key_action_defaults`]。
-/// ⚠️ `seed` 由 [`key_action_default_bindings`] **提前算好**再传进来：本函数的调用方多为
-/// `'static` 闭包，握不住 `&AppState`；而这份绑定只依赖清单与 capability，二者在进程内
-/// 不变，提前算与延后算等价。
+///   ⚠️ `seed` 由 [`key_action_default_bindings`] **提前算好**再传进来：本函数的调用方多为
+///   `'static` 闭包，握不住 `&AppState`；而这份绑定只依赖清单与 capability，二者在进程内
+///   不变，提前算与延后算等价。
 pub(crate) fn core_defaults_config(seed: &[(String, String)]) -> Config {
     let v = crate::rpc::call_core("config.getDefaults", &serde_json::json!({}))
         .unwrap_or(Value::Object(serde_json::Map::new()));

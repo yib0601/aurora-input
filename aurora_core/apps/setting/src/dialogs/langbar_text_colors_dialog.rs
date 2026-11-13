@@ -36,7 +36,7 @@ pub fn fallback_color(i: usize, theme_hex: Option<&str>) -> Color {
 }
 
 fn builtin_fallback_color(i: usize) -> Color {
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         Color::hex(0x000000)
     } else {
         Color::hex(0xFFFFFF)

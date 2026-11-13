@@ -306,23 +306,19 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         }
 
         // 移除语言栏按钮（宿主列表里不该留悬空条目）
-        if let Ok(mut g) = self.langbar_item.lock() {
-            if let Some(item) = g.take() {
-                if let Ok(source) = {
-                    self.thread_mgr
-                        .lock()
-                        .ok()
-                        .and_then(|m| *m)
-                        .map(|raw| unsafe { ITfThreadMgr::from_raw(raw as *mut _) })
-                        .ok_or(())
-                } {
-                    if let Ok(mgr) =
-                        source.cast::<windows::Win32::UI::TextServices::ITfLangBarItemMgr>()
-                    {
-                        let _ = unsafe { mgr.RemoveItem(&item) };
-                    }
-                }
+        if let Ok(mut g) = self.langbar_item.lock()
+            && let Some(item) = g.take()
+            && let Ok(source) = {
+                self.thread_mgr
+                    .lock()
+                    .ok()
+                    .and_then(|m| *m)
+                    .map(|raw| unsafe { ITfThreadMgr::from_raw(raw as *mut _) })
+                    .ok_or(())
             }
+            && let Ok(mgr) = source.cast::<windows::Win32::UI::TextServices::ITfLangBarItemMgr>()
+        {
+            let _ = unsafe { mgr.RemoveItem(&item) };
         }
 
         self.focus.on_kill_thread_focus();
@@ -340,6 +336,39 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
     /// 默认实现直接转 `Activate`——与原 C++ 版一致（它也没做额外的事）。
     fn ActivateEx(&self, ptim: Option<&ITfThreadMgr>, tid: u32, _dwflags: u32) -> Result<()> {
         self.Activate(ptim, tid)
+    }
+}
+
+impl ITfDisplayAttributeProvider_Impl for TextService_Impl {
+    /// 枚举所有显示属性。
+    ///
+    /// 未实现（`E_NOTIMPL`），与 `DisplayAttributeProvider` 的实现一致：
+    /// 宿主主路径是 `GetDisplayAttributeInfo(guid)` 按 GUID 取。
+    fn EnumDisplayAttributeInfo(
+        &self,
+    ) -> Result<windows::Win32::UI::TextServices::IEnumTfDisplayAttributeInfo> {
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+
+    /// 按 GUID 取显示属性定义。这是宿主的主路径。
+    // COM 契约：宿主保证 guid 有效（下面仍检查非空）。接口方法签名固定，不能改成 unsafe fn。
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    fn GetDisplayAttributeInfo(
+        &self,
+        guid: *const windows::core::GUID,
+    ) -> Result<windows::Win32::UI::TextServices::ITfDisplayAttributeInfo> {
+        use crate::com::display_attribute::DisplayAttributeInfo;
+        if guid.is_null() {
+            return Err(windows::Win32::Foundation::E_POINTER.into());
+        }
+        let requested = unsafe { *guid };
+        if requested == GUID_DISPLAY_ATTRIBUTE_INPUT {
+            Ok(DisplayAttributeInfo::input().into())
+        } else if requested == GUID_DISPLAY_ATTRIBUTE_CONVERTED {
+            Ok(DisplayAttributeInfo::converted().into())
+        } else {
+            Err(windows::Win32::Foundation::E_INVALIDARG.into())
+        }
     }
 }
 
@@ -373,11 +402,18 @@ mod tests {
     /// `Deactivate` 幂等：系统可能重复调用。
     #[test]
     fn deactivate_is_idempotent() {
+        use windows::Win32::UI::TextServices::ITfTextInputProcessor;
+
         let s = TextService::create();
-        // 未激活时直接 Deactivate 不该出错
-        assert!(s.Deactivate().is_ok());
-        assert!(s.Deactivate().is_ok());
-        assert!(!s.is_activated());
+        assert!(!s.is_activated(), "新建实例必须是未激活");
+        // `#[implement]` 只把接口方法实现在 COM 对象侧，`TextService` 本身没有这些方法；
+        // 故先转成 COM 对象再 cast 到接口——这也正是宿主的真实调用路径。
+        let unknown: windows::core::IUnknown = s.into();
+        let iface: ITfTextInputProcessor =
+            unknown.cast().expect("应能 cast 到 ITfTextInputProcessor");
+        // 未激活时直接 Deactivate 不该出错；重复调用同样不该出错。
+        assert!(unsafe { iface.Deactivate() }.is_ok());
+        assert!(unsafe { iface.Deactivate() }.is_ok());
     }
 
     /// 引用计数与实例数成对。
@@ -405,36 +441,5 @@ mod tests {
             windows::core::GUID::from_u128(0x99C2EE31_5C57_45A2_9C63_FB54B34FD90A)
         );
         assert_ne!(CLSID_TEXT_SERVICE, GUID_PROFILE, "两者不能相同");
-    }
-}
-
-impl ITfDisplayAttributeProvider_Impl for TextService_Impl {
-    /// 枚举所有显示属性。
-    ///
-    /// 未实现（`E_NOTIMPL`），与 `DisplayAttributeProvider` 的实现一致：
-    /// 宿主主路径是 `GetDisplayAttributeInfo(guid)` 按 GUID 取。
-    fn EnumDisplayAttributeInfo(
-        &self,
-    ) -> Result<windows::Win32::UI::TextServices::IEnumTfDisplayAttributeInfo> {
-        Err(windows::Win32::Foundation::E_NOTIMPL.into())
-    }
-
-    /// 按 GUID 取显示属性定义。这是宿主的主路径。
-    fn GetDisplayAttributeInfo(
-        &self,
-        guid: *const windows::core::GUID,
-    ) -> Result<windows::Win32::UI::TextServices::ITfDisplayAttributeInfo> {
-        use crate::com::display_attribute::DisplayAttributeInfo;
-        if guid.is_null() {
-            return Err(windows::Win32::Foundation::E_POINTER.into());
-        }
-        let requested = unsafe { *guid };
-        if requested == GUID_DISPLAY_ATTRIBUTE_INPUT {
-            Ok(DisplayAttributeInfo::input().into())
-        } else if requested == GUID_DISPLAY_ATTRIBUTE_CONVERTED {
-            Ok(DisplayAttributeInfo::converted().into())
-        } else {
-            Err(windows::Win32::Foundation::E_INVALIDARG.into())
-        }
     }
 }

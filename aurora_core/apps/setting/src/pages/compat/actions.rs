@@ -356,6 +356,8 @@ impl CompatState {
 mod tests {
     use super::*;
 
+    // 字段只用于 RAII：持锁到作用域结束，从不解引用。
+    #[allow(dead_code)]
     struct MockGuard(std::sync::MutexGuard<'static, ()>);
     impl MockGuard {
         fn new() -> Self {

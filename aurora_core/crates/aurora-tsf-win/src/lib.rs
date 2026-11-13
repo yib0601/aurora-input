@@ -37,21 +37,6 @@ pub mod skip_key_table;
 pub use passthrough_note::PassthroughState;
 pub use skip_key_table::SkipKeyTable;
 
-/// 编译期断言：本 crate 在非 Windows 上也能编过（只有纯逻辑部分）。
-///
-/// 这条测试存在的意思是「Linux CI 上这个 crate 不许因为缺 Win32 而整块跳过」——
-/// 那种跳过会让纯逻辑测试静默消失，而它们正是唯一能跑的部分。
-#[cfg(test)]
-mod build_guard {
-    #[test]
-    fn pure_logic_modules_are_always_compiled() {
-        // 只要这个测试能链接，`skip_key_table` 就在场。
-        let mut t = crate::SkipKeyTable::new();
-        t.push(0x41, false, 0);
-        assert_eq!(t.count(), 1);
-    }
-}
-
 /// Windows 下把四个导出钉住，防止 `cdylib` 链接时因「未使用」被剥掉。
 ///
 /// `#[no_mangle]` 已经让它们可见，但 release + LTO 下链接器仍可能判死；
@@ -67,4 +52,19 @@ fn _link_exports() {
         com::DllUnregisterServer as *const (),
     ];
     std::hint::black_box(keep);
+}
+
+/// 编译期断言：本 crate 在非 Windows 上也能编过（只有纯逻辑部分）。
+///
+/// 这条测试存在的意思是「Linux CI 上这个 crate 不许因为缺 Win32 而整块跳过」——
+/// 那种跳过会让纯逻辑测试静默消失，而它们正是唯一能跑的部分。
+#[cfg(test)]
+mod build_guard {
+    #[test]
+    fn pure_logic_modules_are_always_compiled() {
+        // 只要这个测试能链接，`skip_key_table` 就在场。
+        let mut t = crate::SkipKeyTable::new();
+        t.push(0x41, false, 0);
+        assert_eq!(t.count(), 1);
+    }
 }
