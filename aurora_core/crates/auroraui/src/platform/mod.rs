@@ -290,7 +290,9 @@ fn report_hit(handler: &dyn AppHandler, logical: (i32, i32), trace: bool) {
     let (x, y) = logical;
     match hit.node {
         None => {
-            eprintln!("[auroraui] --click {x} {y} 未命中任何节点（该坐标处是空白）——截图将与没点一样")
+            eprintln!(
+                "[auroraui] --click {x} {y} 未命中任何节点（该坐标处是空白）——截图将与没点一样"
+            )
         }
         Some(id) if !hit.consumed => {
             let b = hit.bounds;

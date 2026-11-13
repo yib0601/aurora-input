@@ -302,9 +302,11 @@ pub fn system_menu_items() -> Vec<MenuItem> {
     vec![
         // 「还原」只在最大化时可用。最小化态在这里不可达（窗口最小化时标题栏点不到），
         // 但 `ctx.restore()` 两种都能还原，故无需分支。
-        item(&crate::tr!("auroraui.window.restore"), st.maximized, |ctx| {
-            ctx.restore()
-        }),
+        item(
+            &crate::tr!("auroraui.window.restore"),
+            st.maximized,
+            |ctx| ctx.restore(),
+        ),
         item(
             &crate::tr!("auroraui.window.minimize"),
             st.minimizable,
