@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Entry, parse};
+use super::{parse, Entry};
 
 /// 一条问题的可读描述。返回 `Vec<String>` 而不是结构化错误类型：它唯一的消费者是
 /// `assert!(problems.is_empty(), "{problems:#?}")`，人读的字符串比枚举更有用。

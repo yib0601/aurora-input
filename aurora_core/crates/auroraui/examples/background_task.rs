@@ -2,8 +2,8 @@
 //!
 //! 运行：cargo run --example background_task
 //! 截屏：cargo run --example background_task -- --screenshot artifacts/bg.png
-use std::time::Duration;
 use auroraui::prelude::*;
+use std::time::Duration;
 
 fn main() {
     let progress = signal(0.0f32);

@@ -3,9 +3,9 @@
 //! 运行窗口：    cargo run --example phase0_window
 //! 截屏验证：    cargo run --example phase0_window -- --screenshot artifacts/phase0.png
 
-use tiny_skia::{Paint, PathBuilder, Rect as SkRect, Transform};
 use auroraui::prelude::*;
 use auroraui::render::RenderTarget;
+use tiny_skia::{Paint, PathBuilder, Rect as SkRect, Transform};
 
 fn main() {
     App::new("Phase 0 — auroraui", 480, 320)

@@ -123,8 +123,8 @@ impl auroraui::core::Widget for PolygonDemo {
         canvas: &mut dyn auroraui::render::Canvas,
         _style: &auroraui::style::Style,
     ) {
-        use std::f32::consts::{FRAC_PI_2, TAU};
         use auroraui::render::Paint;
+        use std::f32::consts::{FRAC_PI_2, TAU};
         let pal = auroraui::theme::current().palette.clone();
         let cell = |i: usize| {
             (

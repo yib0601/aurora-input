@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use serde_json::{Value, json};
 use aurora_config::Config;
 use aurora_ipc::rpc::{Request, Response};
+use serde_json::{Value, json};
 
 // 产品版本取 build.rs 从 docs/VERSION 注入的 AURORA_APP_VERSION（= 0.100.0），
 // 而非 workspace 的 CARGO_PKG_VERSION（兜底 0.x）。上报进 system_info.version / engine / appVersion。

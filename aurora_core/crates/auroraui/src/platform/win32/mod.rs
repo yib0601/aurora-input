@@ -2984,7 +2984,9 @@ unsafe fn apply_tray_ops() {
             crate::platform::tray::TrayOp::SetIcon { w, h: ih, rgba } => {
                 // 像素长度已在 `TrayHandle::set_icon_rgba` 校验过，走到这里失败是 GDI 的事。
                 let Some(hicon) = tray::hicon_from_rgba(w as i32, ih as i32, &rgba) else {
-                    eprintln!("[auroraui] TrayHandle::set_icon_rgba：创建 {w}×{ih} 图标失败，已忽略");
+                    eprintln!(
+                        "[auroraui] TrayHandle::set_icon_rgba：创建 {w}×{ih} 图标失败，已忽略"
+                    );
                     continue;
                 };
                 // 与 `SetTooltip` 同序：先 OS 调用，再借宿主记账（旧图标在记账时销毁）。

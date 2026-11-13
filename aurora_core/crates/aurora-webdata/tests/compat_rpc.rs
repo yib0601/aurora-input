@@ -3,10 +3,10 @@
 //! 只测「路由通了 + 坏请求是 Err」。规则的合并 / 写时复制 / 导入导出语义在
 //! `aurora-config` 的 `compat_admin` 单测里，写入后的重载在 `aurora-coordinator` 的
 //! `compat_reload_tests` 里——这里刻意不碰真实用户目录的写入路径。
-use serde_json::json;
 use aurora_config::Config;
 use aurora_coordinator::Coordinator;
 use aurora_webdata::WebDataRpc;
+use serde_json::json;
 
 /// `compat.schema` 是纯函数（不读目录），可以放心在测试里直接调。
 #[test]

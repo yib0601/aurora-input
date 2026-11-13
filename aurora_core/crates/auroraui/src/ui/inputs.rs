@@ -1600,7 +1600,8 @@ impl TextInput {
         };
         // VK_C / VK_A
         let copy = MenuItem::key(crate::tr!("auroraui.menu.copy"), ctrl(0x43), has_sel && !pw);
-        let select_all = MenuItem::key(crate::tr!("auroraui.menu.select_all"), ctrl(0x41), has_text);
+        let select_all =
+            MenuItem::key(crate::tr!("auroraui.menu.select_all"), ctrl(0x41), has_text);
         // 只读：不列剪切 / 粘贴（而不是列出来置灰）——它们在这个框里永远不可用，
         // 置灰会让人以为"换个状态就能用"。
         if self.config.read_only {

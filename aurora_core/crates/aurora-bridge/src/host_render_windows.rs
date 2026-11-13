@@ -8,12 +8,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, bail};
-use tracing::info;
-use tracing::warn;
 use aurora_ipc::protocol::{
     HOST_WINDOW_CANDIDATE, HOST_WINDOW_KIND_COUNT, HOST_WINDOW_STATUS, HOST_WINDOW_TOOLTIP,
     HostRenderSetupEntry, MAX_SHARED_RENDER_SIZE,
 };
+use tracing::info;
+use tracing::warn;
 
 use crate::named_event::NamedEvent;
 use crate::shared_memory_windows::WindowsSharedMemory;

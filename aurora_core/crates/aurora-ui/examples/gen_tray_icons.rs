@@ -33,10 +33,10 @@ fn main() {
 #[cfg(all(target_os = "linux", feature = "linux-host"))]
 mod tray {
     use ab_glyph_rasterizer::Point;
+    use aurora_ui::tray_icon::{self, Icon, PathSink, Variant};
     use std::fmt::Write as _;
     use std::path::{Path, PathBuf};
     use ttf_parser::Face;
-    use aurora_ui::tray_icon::{self, Icon, PathSink, Variant};
 
     /// 种子：图标名 → 状态 + 主字。**名字是与 addon 的契约**（`HostUi.cpp` 的 `seedIconName`）。
     const SEEDS: &[(&str, Variant, &str)] = &[

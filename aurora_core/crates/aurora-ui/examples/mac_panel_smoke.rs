@@ -61,11 +61,11 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use aurora_ui::softkeyboard_host_macos::{self as sk, SkCmd};
+    use aurora_ui_types::SoftKeyCap;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use aurora_ui::softkeyboard_host_macos::{self as sk, SkCmd};
-    use aurora_ui_types::SoftKeyCap;
 
     /// 与 `soft_keyboard::ROW_SLOTS`（13/13/11/10）对齐的 47 个键位名。
     /// 名字取真实布局，好让键帽上的角标看起来就是一块键盘。

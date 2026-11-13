@@ -11,8 +11,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
 use aurora_ipc::rpc::{EventMessage, encode_message};
+use serde_json::Value;
 
 /// 单个订阅者（writer 线程）的发送端。
 struct Subscriber {

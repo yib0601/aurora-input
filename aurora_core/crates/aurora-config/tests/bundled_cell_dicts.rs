@@ -10,9 +10,9 @@
 //!
 //! ⚠️ 读仓库里的真实出厂文件，不是夹具。
 
+use aurora_config::schema::Schema;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use aurora_config::schema::Schema;
 
 const CELL_DIR: &str = "pinyin/ext";
 

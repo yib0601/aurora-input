@@ -23,8 +23,8 @@
 //! 对所有该定制版用户相同），不是用户数据，故可进 INFO。定制层的**路径**属于用户机器
 //! 信息，不进这一行（`load_custom_manifest` 已在 DEBUG 打过）。
 
-use serde_json::{Value, json};
 use aurora_config::Config;
+use serde_json::{Value, json};
 
 /// 空字段的占位：宁可打一个显眼的占位符，也不要在日志/关于页上留一段空白——
 /// 空白既看不出「定制者没填」还是「程序没读到」，也让报障截图失去价值。

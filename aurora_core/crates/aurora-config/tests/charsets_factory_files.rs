@@ -7,8 +7,8 @@
 //! ⚠️ 本测试读仓库里的真实出厂文件，不是夹具——夹具只能证明解析器自洽，证明不了
 //! 我们实际发出去的那两个文件是对的。
 
-use std::path::{Path, PathBuf};
 use aurora_config::charset_def;
+use std::path::{Path, PathBuf};
 
 fn charsets_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR = <repo>/aurora_core/crates/aurora-config

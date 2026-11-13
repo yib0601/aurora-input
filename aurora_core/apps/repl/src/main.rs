@@ -6,10 +6,10 @@
 //! 用法：`wind_repl [data_dir]`（data_dir 默认取环境变量 AURORA_DATA，再退到 exe 同级 data/）。
 //! 交互：输入编码回车看候选；`:l` 列方案；`:s <id>` 切换方案；`:q` 退出。
 
-use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 use aurora_config::Config;
 use aurora_engine::EngineManager;
+use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 
 fn resolve_data_dir() -> Option<PathBuf> {
     if let Some(arg) = std::env::args().nth(1) {

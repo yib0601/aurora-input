@@ -5,8 +5,8 @@
 
 use std::io::{Read, Write};
 
-use serde_json::Value;
 use aurora_ipc::rpc::{PROTOCOL_VERSION, Request, Response, encode_message};
+use serde_json::Value;
 
 /// 向运行中的 core 发一条请求并取结果。连接失败或 core 返回 error 均为 Err。
 pub fn call(suffix: &str, method: &str, params: Value) -> anyhow::Result<Value> {

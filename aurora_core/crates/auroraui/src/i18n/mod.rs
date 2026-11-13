@@ -1067,11 +1067,10 @@ other = "{count} files selected"
             .embed(EN)
             .load_dir(&dir)
             .build();
-        assert!(
-            l.available()
-                .iter()
-                .any(|i| i.id == "fr" && i.name == "Français")
-        );
+        assert!(l
+            .available()
+            .iter()
+            .any(|i| i.id == "fr" && i.name == "Français"));
         assert_eq!(l.catalog("fr").text("app.hello"), "Bonjour");
     }
 

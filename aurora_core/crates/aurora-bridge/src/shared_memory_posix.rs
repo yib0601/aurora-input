@@ -2,9 +2,9 @@
 //!
 //! 与 Go `internal/bridge/host_render_darwin.go` 对齐：64 字节 SharedRenderHeader
 //! + 紧跟 BGRA 像素，sequence 单调递增。
+use aurora_ipc::protocol::SharedRenderHeader;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use aurora_ipc::protocol::SharedRenderHeader;
 
 use crate::shared_render_frame::{FrameParams, encode_frame_into, encode_hidden_into};
 

@@ -1200,7 +1200,6 @@ fn encode_status_update_from_data(status: &StatusUpdateData) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use aurora_ipc::codec::decode_uielement_page;
     use aurora_ipc::protocol::{
         CMD_ACK, CMD_CANDIDATE_SELECT, CMD_HOST_RENDER_FAILED, CMD_UIELEMENT_ACTION,
@@ -1208,6 +1207,7 @@ mod tests {
         UIELEMENT_ACTION_SET_SELECTION, UIELEMENT_FLAG_UI_LESS_THREAD, UiElementActionPayload,
         UiElementStatePayload,
     };
+    use std::sync::atomic::{AtomicU32, Ordering};
     // host-render 与按键投递是 Windows 专属通路，相应用例也只在 Windows 编译。
     #[cfg(windows)]
     use aurora_ipc::protocol::{

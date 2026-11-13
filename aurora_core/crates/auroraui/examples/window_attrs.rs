@@ -13,10 +13,10 @@
 //! - **高频消息**：后台线程每毫秒 `send` 一次，同时一条忙碌进度条在连续动画。CPU 应与
 //!   只有动画时相当，消息由帧循环按刷新率排空，而不是每条消息推一次整窗重画。
 
+use auroraui::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use auroraui::prelude::*;
 
 /// 浮窗：无边框、不可缩放、不进任务栏，外框左上角落在 `(x, y)`。
 fn floating(x: i32, y: i32) -> WindowRequest {

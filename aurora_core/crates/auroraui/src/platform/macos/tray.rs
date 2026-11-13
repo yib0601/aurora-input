@@ -237,7 +237,9 @@ impl TrayTarget {
                 // `materialize_window` 对称。请求留在队列里不取也不会出错——只是这一项
                 // 点了没反应，故这里打一行提示，免得表现为"菜单坏了"。
                 TrayAction::OpenWindow => {
-                    eprintln!("[auroraui] TrayCtx::open_window 在 macOS 上尚未实现，本次请求被忽略");
+                    eprintln!(
+                        "[auroraui] TrayCtx::open_window 在 macOS 上尚未实现，本次请求被忽略"
+                    );
                     let _ = crate::event::take_callback_window();
                 }
                 // TODO(macOS): 与上一条同批落地——按单例键找到那个 NSWindow，走
