@@ -137,7 +137,11 @@ jobs:
 
       - name: 交叉编译 TSF DLL (x64 + x86)
         run: |
-          V="$(tr -d '[:space:]' < docs/VERSION)"
+          # docs/VERSION 是入库的开发占位（发版时由 release.yml 按 tag 覆写）。
+          # 这里仍兜一个默认值：文件被误删时本步不该整条死在 `tr < docs/VERSION`
+          # （那会把「版本号缺失」报成「TSF 编不过」）。版本号只进资源段，不影响对账。
+          V="$(cat docs/VERSION 2>/dev/null | tr -d '[:space:]')"
+          [ -n "$V" ] || V="0.0.0-ci"
           make -C aurora_tsf VERSION="$V"
           make -C aurora_tsf x86 VERSION="$V"
 

@@ -276,9 +276,9 @@ log_level = "debug"   # 或 "trace"
 | 做不了 / 未配置 | 原因 |
 |---|---|
 | 任何写 `build[_dev]/`、`dist/` 的构建类命令 | **本机未创建 `scripts/build.local`**（模板见 `scripts/build.local.example`），构建类命令会**硬失败**而不是回落本机 |
-| `dev.sh k` / `l`（cargo-xwin 交叉检查） | 需 clang-19 / lld-19 / llvm-19（MSVC STL 要 clang≥19），**本机未装** |
+| `dev.sh k` / `l`（cargo-xwin 交叉检查） | 需 clang-19 / lld-19 / llvm-19（MSVC STL 要 clang≥19）；**本机已装**（`dnf install clang19 lld19 llvm19`），可直接跑 |
 | `cargo check-android` | 需 `rustup target add aarch64-linux-android`，**本机未装该 target** |
-| 发版 | 见下方「版本 / 发布」；另外 ⚠️ **本 checkout 缺 `docs/VERSION`**，「版本 / 发布」里有说明 |
+| 发版 | 见下方「版本 / 发布」 |
 
 已装工具：`cargo-xwin`、`wine-11.20 (Staging)`、`gh`、`podman`、`docker`。
 
@@ -369,7 +369,7 @@ clang / cargo-xwin 交叉编出的 `wind_tsf.dll` 在带安全加固的宿主里
 编的没这个问题。⇒ **发版与部署的产物一律走编译机**，本机交叉只用于「编不编得过 / 逻辑对不对」。
 `AURORA_BUILD_LOCAL=1` 可强行本机出二进制，那是用来看链接过不过的，**不能部署也不能发版**。
 
-- 编译检查：`dev.sh k` / `l`（cargo-xwin，目标 `x86_64-pc-windows-msvc`；本机缺 clang-19 时跑不起来）。
+- 编译检查：`dev.sh k` / `l`（cargo-xwin，目标 `x86_64-pc-windows-msvc`；本机已装 clang19/lld19/llvm19，可直接跑）。
 - host 单测：`cargo test -p <crate>`（Linux 原生跑，`windows` crate 是 `cfg(windows)` 依赖不参与编译）。
   `dev.sh` 不再提供 `t` / `ci` 子命令（本机不跑 CI）；改协议/线格式时用 `dev.sh proto` / `dev.sh wire`。
   注意 `build_dev/data` 的假绿判据（见下方「注意」）。
@@ -445,9 +445,10 @@ cargo test -p aurora-rpc --test wind_setting_assets
   （`aurora_input.exe` / `wind_tsf.dll` / `aurora_setting.exe` / `aurora_portable.exe` / 安装包），
   跨仓经环境变量 `AURORA_APP_VERSION` 注入（不经脚本独立构建时各仓自行回退）。
   发版只改 `docs/VERSION` 一处，**不要**手改各仓 `Cargo.toml` 的 `version`。
-  - ⚠️ **本 checkout 没有 `docs/VERSION`**（`scripts/dev.sh` 会回落成 `?`）。它由 CI 在构建时
-    写入（`.github/workflows/release.yml` 读 tag 后 `printf > docs/VERSION`），本地开发也需要
-    一份才能出正确版本号的产物——发版前先确认它存在。
+  - **`docs/VERSION` 入库，内容是开发占位（`0.0.1`）**：本地脚本（`dev.sh`）与 CI 的 check
+    作业（交叉编译 TSF 时当版本资源）都直接读它；发版时由 `.github/workflows/release.yml`
+    按 tag 覆写。**别把它从仓库里删掉**——缺了它 TSF 交叉编译会死在 `tr < docs/VERSION`，
+    报出来的是「TSF 编不过」而不是「版本号缺失」。
 - 发版入口：Linux 走 `scripts/release.sh`（直接跑进交互菜单；子命令 `check` → `push`
   → `wait` → `sign-draft`，或用 `auto-sign` 等 CI 跑完自动接签名上传），
   Windows 走 `scripts/release.ps1`。签名只能在 Windows 编译机上做（云签名客户端与
