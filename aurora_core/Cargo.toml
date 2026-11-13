@@ -166,11 +166,22 @@ panic = "abort"
 
 # dev 构建优化：让逐像素渲染等热路径接近 release 速度。
 # 注意 package."*" 只作用于依赖，不含本工作区代码；故本工作区代码另加 opt-level=1。
+#
+# 为什么要显式压 debug 级别：dev 默认 debug=2（完整 DWARF），而本工作区的集成测试
+# 每个都静态链接整条 coordinator/UI 依赖图，实测单个测试二进制 376 MB 里有 341 MB
+# （91%）是 .debug_info/.debug_str/.debug_loc 之类的调试段。330 个产物目标 × 多套
+# 构建配置（check / build / test / --all-targets / --no-default-features）各留一份
+# 永不回收的 hash 变体，两周就能把 target/debug 堆到 400 G+ 量级。
+#   debug = 1  → 只留行号表：断点、backtrace 行号仍在，丢变量/类型 inspect；
+#   debug = 0（依赖）→ 依赖本来不调试，符号与 backtrace 函数名仍可用。
+# 需要完整 DWARF 排查时临时 `CARGO_PROFILE_DEV_DEBUG=2` 覆盖即可。
 [profile.dev]
 opt-level = 1 # 本工作区代码：基础优化，仍保留可调试性（行号/断点）
+debug = 1
 
 [profile.dev.package."*"]
 opt-level = 2 # 所有依赖（含 tiny-skia/windows）：更高优化，编译一次后缓存
+debug = 0
 
 # dev 变体专用 profile：继承 dev 的快编译优化（工作区 opt-level=1 / 依赖 opt-level=2），
 # 仅关闭 debug_assertions → 令 windows_subsystem="windows" 生效（无控制台窗口）。
@@ -194,6 +205,7 @@ inherits = "dev"
 debug-assertions = false
 overflow-checks = false
 
-# inherits 不继承 package 专属覆盖，需复刻 dev 的依赖优化档。
+# inherits 不继承 package 专属覆盖，需复刻 dev 的依赖优化档（debug 档同上）。
 [profile.dev-variant.package."*"]
 opt-level = 2
+debug = 0
