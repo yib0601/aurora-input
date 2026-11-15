@@ -37,6 +37,8 @@ use crate::ui::Element;
 mod checkbox_motion_tests;
 #[cfg(test)]
 mod combo_tests;
+#[cfg(test)]
+mod cursor_tests;
 mod damage;
 mod fling;
 mod focus;
@@ -145,6 +147,7 @@ impl Window {
                 modal: false,
                 frameless: false,
                 system_menu: true,
+                cursor_shapes: true,
                 min_width: 0,
                 min_height: 0,
                 bg: None,
@@ -399,6 +402,15 @@ impl Window {
         self
     }
 
+    /// 控件能否改鼠标光标形状，同 [`App::cursor_shapes`]。
+    ///
+    /// 子窗**不**从主窗继承这一项：每个窗口自己声明。对话框想要与主窗一致，在建它的时候
+    /// 一并写上——这正是「设置界面里鼠标别变样」这类应用级口径需要逐个窗口表态的原因。
+    pub fn cursor_shapes(mut self, on: bool) -> Self {
+        self.req.cursor_shapes = on;
+        self
+    }
+
     /// 最小客户区尺寸（逻辑 dp）。
     pub fn min_size(mut self, w: i32, h: i32) -> Self {
         self.req.min_width = w;
@@ -635,6 +647,7 @@ fn build_new_window(
         resizable: req.resizable,
         frameless: req.frameless,
         system_menu: req.system_menu,
+        cursor_shapes: req.cursor_shapes,
         min_width: req.min_width,
         min_height: req.min_height,
         single: req.single,
@@ -704,11 +717,16 @@ pub(crate) const DECORATION_HEIGHT: i32 = 33;
 /// 全部现成控件拼成，视觉走主题角色（底 `Surface`、字 `Text`，失活转 `TextMuted`，底边
 /// `Divider`）；窗口按钮自带悬停 / 按下与关闭键的红底。与窗口共用 `theme_src`，所以运行期
 /// 换主题时标题栏跟着变。整条可拖（`window_drag`），按钮可聚焦、不算拖动区。
+///
+/// `cursor_shapes` 由窗口宿主传进来（`AppHandler::decoration`）：标题栏虽是一棵独立的
+/// 控件树加一个独立宿主，光标口径必须与那个窗口本体的内容区一致——否则设置类应用会出现
+/// 「内容区箭头、标题栏按钮手型」。
 fn build_decoration(
     theme_src: &ThemeHandle,
     hotkey_ops: &HotkeyOpQueue,
     title: &str,
     maximizable: bool,
+    cursor_shapes: bool,
 ) -> crate::platform::Decoration {
     use crate::style::Role;
     use crate::ui::WindowButtonKind as K;
@@ -749,6 +767,7 @@ fn build_decoration(
     });
     let cfg = WindowConfig {
         height: DECORATION_HEIGHT,
+        cursor_shapes,
         ..WindowConfig::default()
     };
     let bg = theme_src.current().palette.surface;
@@ -1170,6 +1189,7 @@ impl App {
                 resident: false,
                 frameless: false,
                 system_menu: true,
+                cursor_shapes: true,
                 motion: None,
                 reduced_motion: crate::anim::MotionLevel::Reduced,
                 screenshot_anim_at: None,
@@ -1949,6 +1969,26 @@ impl App {
         self
     }
 
+    /// 控件能否改鼠标光标形状（默认开启）。只管**这一个**窗口——子窗各自声明。
+    ///
+    /// 开：控件按交互语义声明形状——链接/可点卡片给手型、可编辑框给 I 形、分栏分隔条给
+    /// 左右箭头；关：客户区光标恒为箭头，控件那些声明一律不落到系统光标上。用于「整套界面
+    /// 不要光标变样」的产品口径。**窗口边缘的缩放光标不在管辖内**：那是窗口装饰——平台层
+    /// 按 hit-test 结果回缩放边框，系统随后在 `WM_SETCURSOR` 里把它落到光标上，与控件声明
+    /// 的形状无关。
+    ///
+    /// 这是**每个窗口**的设置，`ctx.open_window` 开出的子窗不继承主窗这一项（见
+    /// [`Window::cursor_shapes`]）。
+    ///
+    /// ```no_run
+    /// # use auroraui::prelude::*;
+    /// App::new("设置", 900, 640).cursor_shapes(false).run();
+    /// ```
+    pub fn cursor_shapes(mut self, on: bool) -> Self {
+        self.cfg.cursor_shapes = on;
+        self
+    }
+
     /// 单实例 + 二次运行激活/传参。`app_id` 唯一标识（建议含变体后缀，使 dev/release 互不干扰）。
     /// 仅首实例会被调用 `on_second_instance`（收到另一进程 argv 时，在 UI 线程）；
     /// 二次实例：argv 已转发给首实例，`run()` 直接返回、不建窗口。
@@ -2656,6 +2696,8 @@ struct UiHost {
     /// 最小化转为隐藏窗口。平台层经 `UiHost::hide_on_minimize` 拉取——最小化可以从
     /// 系统标题栏、任务栏、Win+Down 进来，那些路径不经过核心层。
     hide_on_minimize: bool,
+    /// 控件声明的光标形状是否落到系统光标上（`WindowConfig::cursor_shapes`）。
+    cursor_shapes: bool,
     /// 正在跑关闭决策链（防 `on_close_request` 回调内再请求关闭导致的自我递归）。
     resolving_close: bool,
     /// 待创建的子窗口（`ctx.open_window` 排入，平台在事件分发完全返回后取走）。
@@ -2931,6 +2973,7 @@ impl UiHost {
             last_present: None,
             frameless: cfg.frameless,
             system_menu: cfg.system_menu,
+            cursor_shapes: cfg.cursor_shapes,
             window_state,
         }
     }
@@ -4123,6 +4166,11 @@ impl AppHandler for UiHost {
     }
 
     fn cursor(&self) -> CursorShape {
+        // 应用关掉了光标形状变化：控件照常声明自己的形状，只是不落到系统光标上
+        // （见 `App::cursor_shapes`）。
+        if !self.cursor_shapes {
+            return CursorShape::Arrow;
+        }
         // 菜单浮层激活时用箭头（菜单项自管悬停高亮）。
         if self.menu.is_open() {
             return CursorShape::Arrow;
@@ -4241,6 +4289,7 @@ impl AppHandler for UiHost {
             &self.hotkey_ops,
             title,
             maximizable,
+            self.cursor_shapes,
         ))
     }
 
@@ -4337,7 +4386,7 @@ mod tests {
         crate::sync::reset_pumps();
         let theme_src = ThemeHandle::new(Rc::new(Theme::default()));
         let ops: HotkeyOpQueue = Rc::new(RefCell::new(Vec::new()));
-        let mut d = build_decoration(&theme_src, &ops, "标题", true);
+        let mut d = build_decoration(&theme_src, &ops, "标题", true, true);
         d.handler.set_scale(1.0);
         let mut pm = Pixmap::new(200, DECORATION_HEIGHT as u32).unwrap();
         d.handler.render(
@@ -4376,7 +4425,7 @@ mod tests {
         const W: i32 = 400;
         let theme_src = ThemeHandle::new(Rc::new(Theme::default()));
         let ops: HotkeyOpQueue = Rc::new(RefCell::new(Vec::new()));
-        let mut d = build_decoration(&theme_src, &ops, "标题", true);
+        let mut d = build_decoration(&theme_src, &ops, "标题", true, true);
         let h = d.handler.as_mut();
         h.set_scale(1.0);
         let mut pm = Pixmap::new(W as u32, DECORATION_HEIGHT as u32).unwrap();

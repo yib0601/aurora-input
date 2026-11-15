@@ -68,6 +68,8 @@ pub fn open(ctx: &mut EventCtx, app: &Rc<RefCell<AppState>>) {
         Window::new(TITLE, crate::DICT_W, crate::DICT_H)
             .single(SINGLE_KEY)
             .frameless(true)
+            // 与主设置窗一致：界面里不换鼠标光标形状。
+            .cursor_shapes(false)
             .centered(true)
             .min_size(crate::DICT_MIN_W, crate::DICT_MIN_H)
             // Ctrl+W 关窗：`App::on_shortcut` 只归主窗，子窗要自己接（见 `shortcuts::is_close_window`）。

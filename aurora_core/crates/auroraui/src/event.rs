@@ -1459,6 +1459,10 @@ pub struct WindowRequest {
     pub frameless: bool,
     /// 自绘标题栏的拖动区右键是否弹出窗口系统菜单（默认 true）。
     pub system_menu: bool,
+    /// 控件能否改鼠标光标形状（默认 true，见 [`WindowConfig::cursor_shapes`]）。
+    ///
+    /// [`WindowConfig::cursor_shapes`]: crate::platform::WindowConfig::cursor_shapes
+    pub cursor_shapes: bool,
     /// 最小客户区尺寸（逻辑 dp，0=不限制）。
     pub min_width: i32,
     pub min_height: i32,

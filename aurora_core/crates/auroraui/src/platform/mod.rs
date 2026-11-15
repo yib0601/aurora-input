@@ -668,6 +668,11 @@ pub struct WindowConfig {
     /// 自绘标题栏的拖动区右键是否弹出窗口系统菜单（默认 true）。
     /// 非 `frameless` 窗口上无意义——那时系统标题栏自己带原生菜单。
     pub system_menu: bool,
+    /// 控件能否改鼠标光标形状（默认 true，见 `App::cursor_shapes`）。
+    ///
+    /// 关掉后客户区光标恒为箭头：控件照常声明自己的形状（手型/I 形/拖拽箭头），宿主不再
+    /// 据此换系统光标。**窗口边缘的缩放光标不在此列**——那是系统的窗口装饰，与控件无关。
+    pub cursor_shapes: bool,
     /// 强制动效档位：None=随系统（见 [`reduced_motion`](Self::reduced_motion)）；Some=强制。
     pub motion: Option<crate::anim::MotionLevel>,
     /// 系统要求减弱动效（"显示动画"关 / "减弱动态效果"开）时落到的档位，默认
@@ -785,6 +790,7 @@ impl Default for WindowConfig {
             icon: None,
             position: None,
             skip_taskbar: false,
+            cursor_shapes: true,
             window_outline: WindowOutline::Auto,
             ime_interrupt: ImeInterrupt::Commit,
             ime_inline: false,

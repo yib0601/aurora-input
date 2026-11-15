@@ -78,6 +78,8 @@ pub fn run(params: AddWordParams) {
 
     let app_id = crate::single_instance_app_id(true);
     App::new("添加用户词库", 400, 360)
+        // 与主设置窗一致：界面里不换鼠标光标形状（见 `main` 里 `App::cursor_shapes`）。
+        .cursor_shapes(false)
         // 二次启动：重新解析参数并重填字段（复用同一小窗，不新起进程）。
         .single_instance(app_id, move |argv| {
             if let Some(p) = crate::cli::parse_add_word(&argv) {

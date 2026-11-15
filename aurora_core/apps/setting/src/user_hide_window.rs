@@ -30,6 +30,8 @@ pub fn open(ctx: &mut EventCtx, app: &Rc<RefCell<AppState>>) {
         Window::new("极光输入法 · 设置项精简", 560, 560)
             .single(SINGLE_KEY)
             .frameless(true)
+            // 与主设置窗一致：界面里不换鼠标光标形状。
+            .cursor_shapes(false)
             .centered(true)
             .min_size(480, 400)
             // Ctrl+W 关窗：`App::on_shortcut` 只归主窗，子窗要自己接。

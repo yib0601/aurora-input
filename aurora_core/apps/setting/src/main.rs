@@ -219,6 +219,8 @@ pub(crate) fn open_main_window(ctx: &mut EventCtx, app: &Rc<RefCell<state::AppSt
         Window::new("极光输入法设置", MAIN_W, MAIN_H)
             .single(MAIN_SINGLE_KEY)
             .frameless(true)
+            // 与 `App` 建的那份一致：界面里不换鼠标光标形状。
+            .cursor_shapes(false)
             .centered(true)
             .min_size(MAIN_MIN_W, MAIN_MIN_H)
             // 同 `main` 里那份：App 级定时器挂在首个主窗上、随它关掉了，重建的要自己挂。
@@ -432,6 +434,9 @@ fn main() {
             main_window_single_key(dict_as_main)
         })
         .frameless()
+        // 整套设置界面不让鼠标光标变样：链接/可点卡片给的手型、输入框的 I 形都不落到
+        // 系统光标上，客户区恒定箭头（子窗各自再声明一次，见各 `Window::new` 处）。
+        .cursor_shapes(false)
         .centered()
         .renderer(renderer)
         .min_size(win_min_w, win_min_h)
@@ -850,6 +855,12 @@ mod tests {
         assert!(
             res.open_windows[0].shortcut.is_some(),
             "重建的主窗没挂 on_shortcut"
+        );
+        // 重建这条路最容易漏掉与 `App` 那份对齐的修饰符——漏了就是「关掉再打开，鼠标又开始
+        // 变样」。与 `App::cursor_shapes(false)` 成对。
+        assert!(
+            !res.open_windows[0].cursor_shapes,
+            "重建的主窗丢了「界面里不换光标形状」"
         );
     }
 

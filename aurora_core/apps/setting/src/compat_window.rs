@@ -33,6 +33,8 @@ pub fn open(ctx: &mut EventCtx, app: &Rc<RefCell<AppState>>) {
         Window::new(TITLE, crate::COMPAT_W, crate::COMPAT_H)
             .single(SINGLE_KEY)
             .frameless(true)
+            // 与主设置窗一致：界面里不换鼠标光标形状。
+            .cursor_shapes(false)
             .centered(true)
             .min_size(crate::COMPAT_MIN_W, crate::COMPAT_MIN_H)
             // 回到本窗就刷新：右键菜单等外部途径改过 compat.toml 而本窗一直开着时，这是
